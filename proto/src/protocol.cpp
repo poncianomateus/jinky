@@ -1,0 +1,135 @@
+#include "tclproto/protocol.h"
+
+namespace tclproto {
+namespace {
+
+void put_u16(uint8_t* p, uint16_t v) {
+    p[0] = uint8_t(v);
+    p[1] = uint8_t(v >> 8);
+}
+void put_u32(uint8_t* p, uint32_t v) {
+    for (int i = 0; i < 4; ++i) p[i] = uint8_t(v >> (8 * i));
+}
+void put_u64(uint8_t* p, uint64_t v) {
+    for (int i = 0; i < 8; ++i) p[i] = uint8_t(v >> (8 * i));
+}
+uint16_t get_u16(const uint8_t* p) { return uint16_t(p[0] | (p[1] << 8)); }
+uint32_t get_u32(const uint8_t* p) {
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) v |= uint32_t(p[i]) << (8 * i);
+    return v;
+}
+uint64_t get_u64(const uint8_t* p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v |= uint64_t(p[i]) << (8 * i);
+    return v;
+}
+
+bool is_media(PacketType t) { return t == PacketType::Video || t == PacketType::Audio; }
+bool is_control(PacketType t) {
+    return t == PacketType::Hello || t == PacketType::RequestIdr || t == PacketType::Stats ||
+           t == PacketType::Bye || t == PacketType::LatencyReport;
+}
+
+// Upper bound on a single encoded frame; anything larger is treated as corrupt.
+constexpr uint32_t kMaxFrameSize = 16u * 1024 * 1024;
+
+}  // namespace
+
+// Layout: magic(4) version(1) type(1) flags(1) reserved(1) session(4) frame_id(4)
+//         frag_index(2) frag_count(2) frame_size(4) capture_time_us(8) = 32 bytes
+void MediaHeader::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(type);
+    p[6] = flags;
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, frame_id);
+    put_u16(p + 16, frag_index);
+    put_u16(p + 18, frag_count);
+    put_u32(p + 20, frame_size);
+    put_u64(p + 24, capture_time_us);
+}
+
+std::optional<MediaHeader> MediaHeader::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion) return std::nullopt;
+    MediaHeader h;
+    h.type = PacketType(p[5]);
+    if (!is_media(h.type)) return std::nullopt;
+    h.flags = p[6];
+    h.session_id = get_u32(p + 8);
+    h.frame_id = get_u32(p + 12);
+    h.frag_index = get_u16(p + 16);
+    h.frag_count = get_u16(p + 18);
+    h.frame_size = get_u32(p + 20);
+    h.capture_time_us = get_u64(p + 24);
+    if (h.frag_count == 0 || h.frag_index >= h.frag_count) return std::nullopt;
+    if (h.frame_size == 0 || h.frame_size > kMaxFrameSize) return std::nullopt;
+    // Fragment count must match what the sender would produce for this frame size.
+    const uint32_t expected = (h.frame_size + kMaxPayload - 1) / kMaxPayload;
+    if (h.frag_count != expected) return std::nullopt;
+    return h;
+}
+
+// Layout: magic(4) version(1) type(1) reserved(2) session(4) value(4) = 16 bytes
+void ControlMessage::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(type);
+    p[6] = 0;
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, value);
+}
+
+std::optional<ControlMessage> ControlMessage::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion) return std::nullopt;
+    ControlMessage m;
+    m.type = PacketType(p[5]);
+    if (!is_control(m.type)) return std::nullopt;
+    m.session_id = get_u32(p + 8);
+    m.value = get_u32(p + 12);
+    return m;
+}
+
+// Layout: magic(4) version(1) type(1) reserved(2) session(4) reserved(4) client_send_us(8) host_us(8)
+void TimeSync::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(type);
+    p[6] = 0;
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, 0);
+    put_u64(p + 16, client_send_us);
+    put_u64(p + 24, host_us);
+}
+
+std::optional<TimeSync> TimeSync::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion) return std::nullopt;
+    TimeSync t;
+    t.type = PacketType(p[5]);
+    if (t.type != PacketType::TimeRequest && t.type != PacketType::TimeResponse) return std::nullopt;
+    t.session_id = get_u32(p + 8);
+    t.client_send_us = get_u64(p + 16);
+    t.host_us = get_u64(p + 24);
+    return t;
+}
+
+std::optional<PacketType> peek_type(std::span<const uint8_t> in) {
+    if (in.size() < 6) return std::nullopt;
+    if (get_u32(in.data()) != kMagic || in[4] != kVersion) return std::nullopt;
+    return PacketType(in[5]);
+}
+
+}  // namespace tclproto

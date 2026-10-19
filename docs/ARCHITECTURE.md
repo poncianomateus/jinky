@@ -1,0 +1,157 @@
+# TclStream — Arquitetura
+
+> Status: Fase 0 (definição). Nada aqui foi testado em hardware real ainda.
+
+## 1. Objetivo
+
+Jogar jogos do PC Windows na TV, **somente na rede local de casa**, com:
+
+1. Imagem que **sempre aparece** — e, quando não aparece, o sistema diz exatamente onde falhou e tenta se recuperar.
+2. Latência baixa.
+3. Interface própria, bonita e navegável só pelo controle.
+
+Aparelhos-alvo:
+
+| Papel | Aparelho | Sistema |
+|---|---|---|
+| Transmissor (host) | PC Windows 11, NVIDIA GeForce RTX 5060 | Windows 10/11 x64 |
+| Receptor | TV TCL com Google TV | Android TV (versão a confirmar) |
+| Receptor | Amazon Fire TV Stick (modelo a confirmar) | Fire OS (baseado em Android) |
+
+Um **único APK** atende Google TV e Fire TV. Diferenças de hardware são resolvidas em tempo de execução pelo diagnóstico de decodificador (seção 6), não por builds separados.
+
+> ⚠️ Fire TV Sticks com **Vega OS** (ex.: Fire TV Stick 4K Select) não rodam APK Android. Confirmar o modelo.
+
+## 2. Decisão principal
+
+**Pilha própria, sem Sunshine/Moonlight como base.** Motivo: controle total de latência, funcionalidades, diagnóstico e licença.
+
+"Própria" não significa reinventar codecs. Usamos componentes de hardware/SO comprovados e escrevemos a integração e o protocolo:
+
+| Função | Componente usado | O que escrevemos |
+|---|---|---|
+| Captura de tela | DXGI Desktop Duplication (D3D11) | Gerência da captura, recuperação de perda de acesso |
+| Codificação | NVIDIA Video Codec SDK (NVENC) | Configuração de baixa latência, pedido de quadro-chave |
+| Transporte | UDP + sockets do SO | **Protocolo TclStream** (seção 4) |
+| Decodificação | Android MediaCodec (hardware) | Pipeline de baixa latência, detecção de travamento |
+| Áudio | WASAPI loopback + Opus (libopus) | Sincronia e buffer mínimo |
+| Controle | ViGEmBus (controle virtual Xbox 360) | Mapeamento e canal de entrada |
+| Descoberta | mDNS / DNS-SD | Anúncio e busca do host |
+
+Moonlight/Sunshine podem ser **lidos como referência de ideias**; nenhum código deles é copiado.
+
+## 3. Linguagens — "o melhor dos dois mundos"
+
+A peça central é uma **biblioteca C++ compartilhada** com o protocolo, compilada para Windows e para Android (via NDK). Os dois lados falam exatamente o mesmo protocolo porque é o mesmo código.
+
+```
+                  ┌────────────────────────────┐
+                  │  libtclproto (C++20)       │
+                  │  pacotes, FEC, sessão,     │
+                  │  estatísticas, log         │
+                  └──────┬──────────────┬──────┘
+                         │              │
+       ┌─────────────────┴───┐     ┌────┴────────────────────────┐
+       │ PC — TclStream Host │     │ TV — TclStream (APK)        │
+       │                     │     │                             │
+       │ Motor (C++20)       │     │ Núcleo nativo (C++/NDK)     │
+       │  captura, NVENC,    │     │  recepção UDP, remontagem,  │
+       │  áudio, entrada     │     │  AMediaCodec, áudio         │
+       │        ▲ IPC local  │     │        ▲ JNI                │
+       │ Interface (C# .NET  │     │ Interface (Kotlin +         │
+       │  8, WPF)            │     │  Jetpack Compose for TV)    │
+       └─────────────────────┘     └─────────────────────────────┘
+```
+
+- **C++ nos caminhos de vídeo/áudio/rede**: sem coletor de lixo, acesso direto a NVENC, DXGI, AMediaCodec. É onde a latência se decide.
+- **C# WPF na interface do PC**: produtiva, madura, permite visual premium. Conversa com o motor por *named pipe* local. Se a interface travar, o streaming não para.
+- **Kotlin + Compose for TV na interface da TV**: padrão atual do Android TV, ótimo suporte a foco/D-pad, funciona no Fire OS.
+
+## 4. Protocolo TclStream (rede local)
+
+Três canais separados:
+
+| Canal | Transporte | Uso |
+|---|---|---|
+| Controle | TCP + TLS 1.3 (certificados gerados no pareamento) | Pareamento, lista de jogos, iniciar/parar sessão, pedir quadro-chave, estatísticas, diagnóstico |
+| Vídeo/Áudio | UDP | Quadros H.264/HEVC fragmentados + FEC; pacotes Opus |
+| Entrada | UDP (com reenvio do estado completo) | Botões, analógicos, gatilhos |
+
+Pontos-chave do canal de vídeo:
+
+- Cada quadro tem `frame_id`, carimbo de tempo de captura e é fragmentado em pacotes de tamanho ≤ MTU (~1400 B).
+- **FEC Reed–Solomon** por quadro (percentual ajustável) recupera perdas pequenas sem reenvio.
+- Quadro irrecuperável → receptor descarta até o próximo quadro de referência e pede **quadro-chave** (ou *reference frame invalidation*) pelo canal de controle.
+- Receptor envia estatísticas (perda, jitter, tempo de decodificação) a cada ~500 ms; host ajusta bitrate.
+- Autenticação: só dispositivos pareados (PIN mostrado na TV, digitado/confirmado no PC) abrem sessão. Pacotes UDP carregam um identificador de sessão negociado no canal TLS.
+
+## 5. Máquina de estados da sessão (receptor)
+
+```
+IDLE → DISCOVERING_HOST → CONNECTING → AUTHENTICATING → STARTING_STREAM
+     → WAITING_FOR_VIDEO → STREAMING ⇄ RECOVERING → STOPPED | ERROR
+```
+
+Cada transição é disparada por um **evento real** (ex.: "primeiro quadro apresentado"), nunca por temporizador sozinho. Temporizadores só disparam falhas.
+
+## 6. Anti-tela-preta: marcos verificáveis
+
+Cada quadro passa por marcos medidos dos dois lados:
+
+| # | Marco | Lado | Como se prova |
+|---|---|---|---|
+| 1 | Captura funcionando | PC | DXGI entregou quadro novo |
+| 2 | Codificador ativo | PC | NVENC devolveu bitstream; codec/perfil conhecidos |
+| 3 | Enviado | PC | Contador de pacotes |
+| 4 | Recebido e remontado | TV | Quadro completo (ou recuperado via FEC) |
+| 5 | Decodificador criado | TV | `MediaCodec.configure/start` sem erro, codec de hardware confirmado |
+| 6 | Quadro decodificado | TV | Buffer de saída liberado |
+| 7 | **Quadro apresentado** | TV | `OnFrameRenderedListener` / *frame callback* da Surface |
+
+A tela de diagnóstico mostra o último marco atingido. Exemplo: "Recebendo vídeo, mas o decodificador da TV não produz imagem" → recria só o decodificador e pede quadro-chave.
+
+Diagnóstico de hardware na primeira execução: modelo, versão do Android/Fire OS, decodificadores de hardware, perfis/níveis H.264 e HEVC, resolução e FPS máximos anunciados, suporte a `KEY_LOW_LATENCY`. O perfil inicial é escolhido a partir disso.
+
+## 7. Perfil inicial
+
+1080p · 60 FPS · H.264 High · sem HDR · NVENC P1/ultra-low-latency · bitrate inicial conservador (~20 Mbit/s, a validar) · sem B-frames · GOP infinito com quadro-chave sob demanda.
+
+HEVC, 4K, 120 FPS e HDR só depois de 1080p60 estável na TCL **e** no Fire Stick.
+
+## 8. Estrutura do repositório
+
+```
+TclStream/
+  proto/            libtclproto (C++20, CMake) — compartilhada
+  host/
+    engine/         motor C++ (captura, NVENC, áudio, entrada)
+    app/            interface C# WPF
+  tv/               projeto Android (Kotlin + NDK, Gradle)
+  tools/            ferramentas de teste (ex.: simulador de perda)
+  docs/
+```
+
+## 9. Primeiro marco técnico (prova de vida)
+
+Antes de qualquer interface:
+
+> **O PC captura a tela, codifica em H.264 com NVENC e envia por UDP; um APK mínimo na TV recebe, decodifica e mostra a imagem — medindo cada marco da seção 6.**
+
+Só depois disso começam interface, pareamento, áudio e controle.
+
+## 10. Riscos conhecidos
+
+| Risco | Mitigação |
+|---|---|
+| Transporte de baixa latência é a parte mais difícil | Começar simples (LAN, FEC fixo), medir, só então refinar |
+| Decodificadores de TV/Fire Stick com comportamentos próprios | Diagnóstico de hardware + tabela de ajustes por aparelho |
+| ViGEmBus sem manutenção ativa | Funciona hoje; isolar atrás de interface para trocar depois |
+| Jogos em tela cheia exclusiva / telas protegidas (UAC) | Tratar perda de acesso da Desktop Duplication e recriar |
+| Wi-Fi da TV instável | Recomendar cabo/5 GHz; FEC e bitrate adaptativo |
+
+## 11. Ferramentas de desenvolvimento necessárias
+
+- Visual Studio 2022 (C++ desktop + .NET desktop) e CMake
+- NVIDIA Video Codec SDK (headers)
+- Android Studio (JDK, SDK, NDK, adb)
+- Depuração ADB habilitada na TCL e no Fire Stick

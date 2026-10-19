@@ -1,0 +1,17 @@
+# build
+build/
+out/
+*.user
+.vs/
+# android
+tv/.gradle/
+tv/**/build/
+tv/local.properties
+tv/.idea/
+*.apk
+# third party downloads
+third_party/_downloads/
+tv/app/.cxx/
+tv/.kotlin/
+# personal editor settings
+.vscode/
