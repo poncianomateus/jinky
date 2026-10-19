@@ -40,6 +40,9 @@ class NativeReceiver : AutoCloseable {
     /** pad | large << 8 | small << 16, or -1 when no vibration request is pending. */
     fun pollRumble(): Int = nativePollRumble(handle)
 
+    /** Address of the PC streaming to this TV, or null while still searching. */
+    fun hostAddress(): String? = nativeHostAddress(handle)
+
     fun status(): String = nativeStatus(handle)
 
     override fun close() {
@@ -70,6 +73,7 @@ class NativeReceiver : AutoCloseable {
             lx: Int, ly: Int, rx: Int, ry: Int,
         )
         @JvmStatic external fun nativePollRumble(handle: Long): Int
+        @JvmStatic external fun nativeHostAddress(handle: Long): String?
         @JvmStatic external fun nativeStatus(handle: Long): String
     }
 }

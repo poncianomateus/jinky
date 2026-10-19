@@ -16,6 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import com.tclstream.tv.StartScreen.Step as S
 
 /**
  * Proof-of-life screen: full-screen video plus a diagnostic overlay that shows which milestone
@@ -24,6 +25,8 @@ import android.widget.TextView
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
+    private lateinit var startScreen: StartScreen
+    private var searchStartMs = 0L
     private var receiver: NativeReceiver? = null
     private var pipeline: VideoPipeline? = null
     private var audio: AudioPlayer? = null
@@ -48,6 +51,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private val refresh = object : Runnable {
         override fun run() {
+            updateStartScreen()
             val text = buildOverlay()
             statusText.text = text
             // Same diagnostics in logcat every 5 s, for remote debugging over adb.
@@ -72,10 +76,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             typeface = android.graphics.Typeface.MONOSPACE
             val pad = (24 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
+            visibility = View.GONE  // technical panel: opened from the menu ("Mostrar desempenho")
         }
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
+            startScreen = StartScreen(this@MainActivity)
+            addView(startScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
@@ -109,6 +116,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
         r.setCodecSupport(codecs)
         startError = r.start(HOST_PORT)
+        searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
         audio = AudioPlayer(r).also { it.start() }
         gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.start() }
@@ -197,12 +205,52 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 setOnClickListener { action() }
             }, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             item("Continuar jogando") { hideMenu() }
-            item("Mostrar/ocultar estatísticas") {
+            item("Mostrar/ocultar desempenho") {
                 statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                 hideMenu()
             }
             item("Sair do Jinky") { finish() }
         }
+    }
+
+    /** Shows the Jinky start screen until the TV confirms a picture; explains each step meanwhile. */
+    private fun updateStartScreen() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val r = receiver
+        val p = pipeline
+        val host = r?.hostAddress()
+        val picture = p != null && p.lastPresentMs != 0L && now - p.lastPresentMs < 3000
+        if (picture) {
+            startScreen.setShown(false)
+            return
+        }
+        startScreen.setShown(true)
+        val model = when {
+            startError != null -> StartScreen.Model(
+                "Sem acesso à rede", "A TV não conseguiu usar a rede: $startError",
+                listOf("Rede da TV" to S.ACTIVE), warning = true)
+            host == null -> {
+                val long = now - searchStartMs > 15_000
+                StartScreen.Model(
+                    "Procurando seu PC",
+                    if (!long) "Abra o Jinky no computador. A TV e o PC precisam estar na mesma rede de casa."
+                    else "Ainda não encontramos o PC. Confira se o Jinky está aberto no computador (ícone perto do relógio) e se o Firewall do Windows permitiu o Jinky.",
+                    listOf("Procurando o PC na rede" to S.ACTIVE, "Recebendo o vídeo" to S.PENDING, "Mostrando a imagem" to S.PENDING),
+                    warning = long)
+            }
+            p != null && (p.stage == VideoPipeline.Stage.STALLED || p.stage == VideoPipeline.Stage.ERROR) -> StartScreen.Model(
+                "Recuperando a imagem", p.lastError ?: "A imagem parou. Reiniciando o vídeo automaticamente…",
+                listOf("PC encontrado" to S.DONE, "Recebendo o vídeo" to S.DONE, "Mostrando a imagem" to S.ACTIVE), warning = true)
+            else -> {
+                val receiving = (p?.framesQueued?.get() ?: 0L) > 0
+                StartScreen.Model(
+                    "Conectando ao seu PC", "PC encontrado em $host. Preparando a imagem…",
+                    listOf("PC encontrado" to S.DONE,
+                        "Recebendo o vídeo" to if (receiving) S.DONE else S.ACTIVE,
+                        "Mostrando a imagem" to if (receiving) S.ACTIVE else S.PENDING))
+            }
+        }
+        startScreen.show(model)
     }
 
     private fun showMenu() {

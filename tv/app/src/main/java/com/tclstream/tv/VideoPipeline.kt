@@ -146,7 +146,9 @@ class VideoPipeline(
         }
     }
 
-    @Volatile private var lastPresentMs = 0L
+    /** SystemClock.elapsedRealtime() of the last frame the TV confirmed on screen (0 = none yet). */
+    @Volatile var lastPresentMs = 0L
+        private set
     private var lastRollMs = 0L
 
     private fun onRendered(pts: Long, renderUs: Long) {

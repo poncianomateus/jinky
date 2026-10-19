@@ -102,6 +102,11 @@ JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativePollRumble(JNI
     return jint(r->pad_index | (r->large_motor << 8) | (r->small_motor << 16));
 }
 
+JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeHostAddress(JNIEnv* env, jclass, jlong h) {
+    const std::string a = self(h)->host_address();
+    return a.empty() ? nullptr : env->NewStringUTF(a.c_str());
+}
+
 JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStatus(JNIEnv* env, jclass, jlong h) {
     return env->NewStringUTF(self(h)->status().c_str());
 }

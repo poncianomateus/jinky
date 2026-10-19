@@ -353,6 +353,13 @@ int Receiver::read_frame(uint8_t* dst, size_t capacity, int timeout_ms, FrameMet
     return size;
 }
 
+std::string Receiver::host_address() const {
+    if (!host_known_) return {};
+    const uint32_t ip = host_ip_;
+    return std::to_string(ip >> 24) + '.' + std::to_string((ip >> 16) & 255) + '.' + std::to_string((ip >> 8) & 255) +
+           '.' + std::to_string(ip & 255);
+}
+
 std::string Receiver::status() const {
     std::ostringstream s;
     if (host_known_) {

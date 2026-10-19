@@ -61,6 +61,8 @@ public:
     std::optional<tclproto::RumbleMessage> poll_rumble();
 
     std::string status() const;
+    // "a.b.c.d" of the PC streaming to us, or "" while still searching.
+    std::string host_address() const;
     const std::string& error() const { return error_; }
 
 private:
