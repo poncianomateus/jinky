@@ -88,6 +88,36 @@ static void test_time_sync_roundtrip() {
     CHECK(!ControlMessage::read(buf).has_value());  // not mistaken for a control message
 }
 
+static void test_input_roundtrip() {
+    InputState in;
+    in.session_id = 9;
+    in.pad_index = 2;
+    in.connected = true;
+    in.seq = 123456;
+    in.buttons = kBtnA | kBtnDpadLeft | kBtnGuide;
+    in.left_trigger = 17;
+    in.right_trigger = 255;
+    in.lx = -32768;
+    in.ly = 32767;
+    in.rx = -1;
+    in.ry = 1000;
+    uint8_t buf[InputState::kSize];
+    in.write(buf);
+    auto r = InputState::read(buf);
+    CHECK(r && r->pad_index == 2 && r->connected && r->seq == 123456 && r->buttons == in.buttons);
+    CHECK(r->left_trigger == 17 && r->right_trigger == 255);
+    CHECK(r->lx == -32768 && r->ly == 32767 && r->rx == -1 && r->ry == 1000);
+    CHECK(peek_type(buf) == PacketType::Input);
+    buf[6] = 7;  // pad index out of range
+    CHECK(!InputState::read(buf).has_value());
+
+    RumbleMessage m{9, 1, 200, 30};
+    uint8_t rb[RumbleMessage::kSize];
+    m.write(rb);
+    auto rm = RumbleMessage::read(rb);
+    CHECK(rm && rm->pad_index == 1 && rm->large_motor == 200 && rm->small_motor == 30);
+}
+
 static void test_in_order_delivery() {
     std::vector<FrameAssembler::Frame> got;
     FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(std::move(f)); });
@@ -153,6 +183,7 @@ int main() {
     test_header_rejects_inconsistent();
     test_control_roundtrip();
     test_time_sync_roundtrip();
+    test_input_roundtrip();
     test_in_order_delivery();
     test_reordered_fragments_and_duplicates();
     test_waits_for_first_keyframe();

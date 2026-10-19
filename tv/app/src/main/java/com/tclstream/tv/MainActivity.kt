@@ -27,6 +27,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var receiver: NativeReceiver? = null
     private var pipeline: VideoPipeline? = null
     private var audio: AudioPlayer? = null
+    private var gamepads: GamepadInput? = null
     private var startError: String? = null
     private val hardwareReport by lazy { HardwareInfo.report() }
 
@@ -102,6 +103,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startError = r.start(HOST_PORT)
         receiver = r
         audio = AudioPlayer(r).also { it.start() }
+        gamepads = GamepadInput(this, r).also { it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
     }
@@ -112,6 +114,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         stopPipeline()
         audio?.stop()
         audio = null
+        gamepads?.stop()  // tells the PC to unplug the virtual pads
+        gamepads = null
         receiver?.stop()
         receiver?.close()
         receiver = null
@@ -139,6 +143,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         pipeline = null
     }
 
+    // Gamepad input goes to the PC; everything else (the TV remote) keeps working normally.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        gamepads?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
+
+    override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
+        gamepads?.onMotionEvent(event) == true || super.dispatchGenericMotionEvent(event)
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER ||
             keyCode == KeyEvent.KEYCODE_BUTTON_A
@@ -162,6 +173,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             appendLine("etapa: ${stageText(p.stage)}")
             appendLine("decodificador: ${p.decoderName}")
             appendLine(latencyText(p.latency.last))
+            gamepads?.let { appendLine("controles: ${it.summary}") }
             audio?.let { a ->
                 val out = if (a.outputLatencyMs.isNaN()) "?" else "%.0f".format(a.outputLatencyMs)
                 appendLine("áudio: saída da TV $out ms · falhas na saída ${a.deviceUnderruns}" + (a.error?.let { " · $it" } ?: ""))

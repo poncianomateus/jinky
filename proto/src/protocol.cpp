@@ -126,6 +126,74 @@ std::optional<TimeSync> TimeSync::read(std::span<const uint8_t> in) {
     return t;
 }
 
+// Layout: magic(4) version(1) type(1) pad(1) flags(1) session(4) seq(4) buttons(2) lt(1) rt(1)
+//         lx(2) ly(2) rx(2) ry(2) reserved(4) = 32 bytes
+void InputState::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::Input);
+    p[6] = pad_index;
+    p[7] = connected ? 1 : 0;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, seq);
+    put_u16(p + 16, buttons);
+    p[18] = left_trigger;
+    p[19] = right_trigger;
+    put_u16(p + 20, uint16_t(lx));
+    put_u16(p + 22, uint16_t(ly));
+    put_u16(p + 24, uint16_t(rx));
+    put_u16(p + 26, uint16_t(ry));
+    put_u32(p + 28, 0);
+}
+
+std::optional<InputState> InputState::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::Input)) return std::nullopt;
+    InputState s;
+    s.pad_index = p[6];
+    if (s.pad_index > 3) return std::nullopt;
+    s.connected = p[7] & 1;
+    s.session_id = get_u32(p + 8);
+    s.seq = get_u32(p + 12);
+    s.buttons = get_u16(p + 16);
+    s.left_trigger = p[18];
+    s.right_trigger = p[19];
+    s.lx = int16_t(get_u16(p + 20));
+    s.ly = int16_t(get_u16(p + 22));
+    s.rx = int16_t(get_u16(p + 24));
+    s.ry = int16_t(get_u16(p + 26));
+    return s;
+}
+
+// Layout: magic(4) version(1) type(1) pad(1) reserved(1) session(4) large(1) small(1) reserved(2)
+void RumbleMessage::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::Rumble);
+    p[6] = pad_index;
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    p[12] = large_motor;
+    p[13] = small_motor;
+    p[14] = p[15] = 0;
+}
+
+std::optional<RumbleMessage> RumbleMessage::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::Rumble)) return std::nullopt;
+    RumbleMessage m;
+    m.pad_index = p[6];
+    if (m.pad_index > 3) return std::nullopt;
+    m.session_id = get_u32(p + 8);
+    m.large_motor = p[12];
+    m.small_motor = p[13];
+    return m;
+}
+
 std::optional<PacketType> peek_type(std::span<const uint8_t> in) {
     if (in.size() < 6) return std::nullopt;
     if (get_u32(in.data()) != kMagic || in[4] != kVersion) return std::nullopt;

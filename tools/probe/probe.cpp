@@ -1,7 +1,12 @@
 // tclstream-probe — pretends to be a TV on the same PC: says Hello to the host, reassembles
 // the stream and checks the H.264 bitstream (first frame must be an IDR with SPS/PPS).
 // Usage: tclstream-probe [host-ip] [seconds] [out.h264]
+//        tclstream-probe --input-test   (sends a fake gamepad and checks it via XInput)
+#include <windows.h>
+#include <xinput.h>
+
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -29,7 +34,51 @@ uint32_t nal_types(const std::vector<uint8_t>& au) {
 
 }  // namespace
 
+// Sends "A + left stick right" as pad 0, then reads it back through XInput like a game would.
+int input_test() {
+    auto host = Endpoint::parse("127.0.0.1", kDefaultMediaPort);
+    UdpSocket sock;
+    if (!sock.open(0)) return 1;
+    uint8_t hello[ControlMessage::kSize];
+    ControlMessage{PacketType::Hello, 0, 0}.write(hello);
+    sock.send_to(*host, hello);
+    std::this_thread::sleep_for(300ms);
+
+    InputState in;
+    in.buttons = kBtnA;
+    in.lx = 20000;
+    in.right_trigger = 200;
+    bool seen = false;
+    for (int i = 0; i < 30 && !seen; ++i) {
+        in.seq++;
+        uint8_t buf[InputState::kSize];
+        in.write(buf);
+        sock.send_to(*host, buf);
+        sock.send_to(*host, hello);
+        std::this_thread::sleep_for(50ms);
+        for (DWORD u = 0; u < XUSER_MAX_COUNT; ++u) {
+            XINPUT_STATE xs{};
+            if (XInputGetState(u, &xs) == ERROR_SUCCESS && (xs.Gamepad.wButtons & XINPUT_GAMEPAD_A)) {
+                std::printf("XInput user %lu: buttons=0x%04x LX=%d RT=%d\n", u, xs.Gamepad.wButtons,
+                            xs.Gamepad.sThumbLX, xs.Gamepad.bRightTrigger);
+                seen = xs.Gamepad.sThumbLX == 20000 && xs.Gamepad.bRightTrigger == 200;
+            }
+        }
+    }
+    in.connected = false;
+    in.seq++;
+    uint8_t buf[InputState::kSize];
+    in.write(buf);
+    sock.send_to(*host, buf);
+    uint8_t bye[ControlMessage::kSize];
+    ControlMessage{PacketType::Bye, 0, 0}.write(bye);
+    sock.send_to(*host, bye);
+    std::puts(seen ? "INPUT TEST OK" : "INPUT TEST FAILED");
+    return seen ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--input-test") return input_test();
     const std::string host_ip = argc > 1 ? argv[1] : "127.0.0.1";
     const int seconds = argc > 2 ? std::atoi(argv[2]) : 5;
     FILE* out = argc > 3 ? std::fopen(argv[3], "wb") : nullptr;

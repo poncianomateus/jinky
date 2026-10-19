@@ -31,6 +31,12 @@ class NativeReceiver : AutoCloseable {
     /** Fills [dst] with [frames] stereo frames (silence if the buffer ran dry). */
     fun readAudio(dst: ShortArray, frames: Int) = nativeReadAudio(handle, dst, frames)
 
+    fun sendInput(pad: Int, connected: Boolean, seq: Int, buttons: Int, lt: Int, rt: Int, lx: Int, ly: Int, rx: Int, ry: Int) =
+        nativeSendInput(handle, pad, connected, seq, buttons, lt, rt, lx, ly, rx, ry)
+
+    /** pad | large << 8 | small << 16, or -1 when no vibration request is pending. */
+    fun pollRumble(): Int = nativePollRumble(handle)
+
     fun status(): String = nativeStatus(handle)
 
     override fun close() {
@@ -55,6 +61,11 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeReportLatency(handle: Long, us: Int)
         @JvmStatic external fun nativeClock(handle: Long, out: LongArray)
         @JvmStatic external fun nativeReadAudio(handle: Long, dst: ShortArray, frames: Int)
+        @JvmStatic external fun nativeSendInput(
+            handle: Long, pad: Int, connected: Boolean, seq: Int, buttons: Int, lt: Int, rt: Int,
+            lx: Int, ly: Int, rx: Int, ry: Int,
+        )
+        @JvmStatic external fun nativePollRumble(handle: Long): Int
         @JvmStatic external fun nativeStatus(handle: Long): String
     }
 }

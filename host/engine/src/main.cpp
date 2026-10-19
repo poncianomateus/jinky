@@ -18,6 +18,7 @@
 #include "audio_capture.h"
 #include "capture.h"
 #include "converter.h"
+#include "gamepad.h"
 #include "log.h"
 #include "nvenc_encoder.h"
 #include "test_pattern.h"
@@ -168,6 +169,18 @@ int main(int argc, char** argv) {
     };
     tcl::AudioCapture audio;
     uint32_t audio_seq = 0;
+
+    // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
+    tcl::GamepadHub gamepads;
+    const bool gamepads_ok = gamepads.init([&](uint8_t pad, uint8_t large_motor, uint8_t small_motor) {
+        const uint64_t p = audio_peer;
+        if (!p) return;
+        uint8_t msg[tclproto::RumbleMessage::kSize];
+        tclproto::RumbleMessage{audio_session, pad, large_motor, small_motor}.write(msg);
+        sock.send_to({uint32_t(p >> 16), uint16_t(p & 0xFFFF)}, msg);
+    });
+    if (gamepads_ok) TCL_INFO("gamepad", "ViGEmBus ready: TV controllers will appear as Xbox 360 pads");
+    else TCL_WARN("gamepad", "{}", gamepads.error());
     // In test-pattern mode the bar restarts every 180 frames; the beep marks that moment.
     const uint64_t pattern_epoch_us = now_us() + 500'000;
     if (opt.audio) {
@@ -208,6 +221,13 @@ int main(int argc, char** argv) {
         int n;
         while ((n = sock.recv_from(rx, from, 0)) > 0) {
             const std::span<const uint8_t> packet(rx, size_t(n));
+            if (tclproto::peek_type(packet) == PacketType::Input) {
+                if (auto in = tclproto::InputState::read(packet); in && peer && from == *peer) {
+                    last_peer_msg = steady_clock::now();
+                    gamepads.apply(*in);
+                }
+                continue;
+            }
             if (tclproto::peek_type(packet) == PacketType::TimeRequest) {
                 if (auto t = tclproto::TimeSync::read(packet)) {
                     t->type = PacketType::TimeResponse;
@@ -243,6 +263,7 @@ int main(int argc, char** argv) {
                     TCL_INFO("session", "receiver left");
                     peer.reset();
                     publish_peer();
+                    gamepads.unplug_all();
                 }
             }
         }
@@ -251,7 +272,10 @@ int main(int argc, char** argv) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
             peer.reset();
             publish_peer();
+            gamepads.unplug_all();
         }
+        // The TV repeats every pad's state every 50 ms; silence means the pad or app is gone.
+        gamepads.expire(3s);
 
         // --- capture ---
         auto wait = duration_cast<milliseconds>(next_frame - steady_clock::now()).count();

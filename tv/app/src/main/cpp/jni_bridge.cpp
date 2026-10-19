@@ -73,6 +73,30 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeReadAudio(JNIE
     env->ReleaseShortArrayElements(dst, p, 0);
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSendInput(
+    JNIEnv*, jclass, jlong h, jint pad, jboolean connected, jint seq, jint buttons, jint lt, jint rt, jint lx,
+    jint ly, jint rx, jint ry) {
+    tclproto::InputState s;
+    s.pad_index = uint8_t(pad);
+    s.connected = connected;
+    s.seq = uint32_t(seq);
+    s.buttons = uint16_t(buttons);
+    s.left_trigger = uint8_t(lt);
+    s.right_trigger = uint8_t(rt);
+    s.lx = int16_t(lx);
+    s.ly = int16_t(ly);
+    s.rx = int16_t(rx);
+    s.ry = int16_t(ry);
+    self(h)->send_input(s);
+}
+
+// Returns pad | large << 8 | small << 16, or -1 if nothing is pending.
+JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativePollRumble(JNIEnv*, jclass, jlong h) {
+    auto r = self(h)->poll_rumble();
+    if (!r) return -1;
+    return jint(r->pad_index | (r->large_motor << 8) | (r->small_motor << 16));
+}
+
 JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStatus(JNIEnv* env, jclass, jlong h) {
     return env->NewStringUTF(self(h)->status().c_str());
 }

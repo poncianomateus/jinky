@@ -110,6 +110,13 @@ void Receiver::net_loop() {
         const int n = sock_.recv_from(buf, from, 20);
         if (n <= 0) continue;
         const std::span<const uint8_t> packet(buf, size_t(n));
+        if (tclproto::peek_type(packet) == PacketType::Rumble) {
+            if (auto r = tclproto::RumbleMessage::read(packet); r && host_ && from == *host_) {
+                std::lock_guard lock(rumble_mu_);
+                if (rumble_.size() < 32) rumble_.push_back(*r);
+            }
+            continue;
+        }
         if (tclproto::peek_type(packet) == PacketType::TimeResponse) {
             if (auto t = tclproto::TimeSync::read(packet); t && host_ && from == *host_) on_time_response(*t);
             continue;
@@ -295,6 +302,24 @@ double Receiver::audio_buffer_ms() const {
     return audio_fill_ * 1000.0 / kAudioRate;
 }
 
+void Receiver::send_input(tclproto::InputState state) {
+    if (!host_known_) return;
+    const uint32_t ip = host_ip_;
+    state.session_id = session_id_;
+    uint8_t buf[tclproto::InputState::kSize];
+    state.write(buf);
+    sock_.send_to(tclproto::Endpoint{ip, host_port_}, buf);
+    inputs_sent_++;
+}
+
+std::optional<tclproto::RumbleMessage> Receiver::poll_rumble() {
+    std::lock_guard lock(rumble_mu_);
+    if (rumble_.empty()) return std::nullopt;
+    auto r = rumble_.front();
+    rumble_.pop_front();
+    return r;
+}
+
 void Receiver::request_keyframe() {
     std::lock_guard lock(mu_);
     // A fresh decoder can start from the newest queued keyframe; only ask the host if there is none.
@@ -339,6 +364,7 @@ std::string Receiver::status() const {
     s << "\náudio: pacotes " << audio_packets_ << "  perdidos " << audio_lost_ << "  buffer "
       << int(audio_buffer_ms()) << " ms (alvo " << audio_target_ms() << ")  faltas " << audio_underruns_ << "  cortado " << audio_trimmed_ms_
       << " ms  ajustes de relógio " << audio_adjustments_;
+    s << "\ncontrole: estados enviados " << inputs_sent_;
     s << "\npacotes: " << packets_ << "  quadros recebidos: " << frames_ok_ << "  perdidos: " << frames_lost_
       << "  descartados: " << frames_dropped_ << "  pedidos de keyframe: " << idr_requests_;
     return s.str();

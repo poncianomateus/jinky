@@ -1,0 +1,258 @@
+package com.tclstream.tv
+
+import android.content.Context
+import android.hardware.input.InputManager
+import android.os.Build
+import android.os.CombinedVibration
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.VibrationEffect
+import android.util.Log
+import android.view.InputDevice
+import android.view.KeyEvent
+import android.view.MotionEvent
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/**
+ * Turns the TV's Bluetooth/USB gamepads into Xbox-style states for the PC, and plays the PC's
+ * vibration requests on them. The TV remote is not a gamepad and is left alone.
+ *
+ * Each pad's full state is sent on every change and repeated every 50 ms, so a lost datagram
+ * never leaves a button "stuck" on the PC.
+ */
+class GamepadInput(private val context: Context, private val receiver: NativeReceiver) :
+    InputManager.InputDeviceListener {
+
+    private class Pad(val index: Int, val deviceId: Int, val name: String) {
+        var buttons = 0
+        var lt = 0
+        var rt = 0
+        var lx = 0
+        var ly = 0
+        var rx = 0
+        var ry = 0
+        var dpadFromHat = 0
+        var seq = 0
+        var rumbleActive = false
+    }
+
+    private val pads = HashMap<Int, Pad>()  // by InputDevice id
+    private val inputManager = context.getSystemService(Context.INPUT_SERVICE) as InputManager
+    private val thread = HandlerThread("tcl-input").apply { start() }
+    private val handler = Handler(thread.looper)
+    @Volatile var summary = "nenhum controle"; private set
+
+    private val tick = object : Runnable {
+        override fun run() {
+            synchronized(pads) { pads.values.forEach { send(it) } }
+            handler.postDelayed(this, REPEAT_MS)
+        }
+    }
+    private val rumblePoll = object : Runnable {
+        override fun run() {
+            while (true) {
+                val r = receiver.pollRumble()
+                if (r < 0) break
+                applyRumble(r and 0xFF, (r shr 8) and 0xFF, (r shr 16) and 0xFF)
+            }
+            handler.postDelayed(this, RUMBLE_POLL_MS)
+        }
+    }
+
+    fun start() {
+        inputManager.registerInputDeviceListener(this, handler)
+        for (id in inputManager.inputDeviceIds) onInputDeviceAdded(id)
+        handler.post(tick)
+        handler.post(rumblePoll)
+    }
+
+    fun stop() {
+        inputManager.unregisterInputDeviceListener(this)
+        handler.removeCallbacksAndMessages(null)
+        synchronized(pads) {
+            pads.values.forEach {
+                stopVibration(it)
+                receiver.sendInput(it.index, false, ++it.seq, 0, 0, 0, 0, 0, 0, 0)
+            }
+            pads.clear()
+        }
+        thread.quitSafely()
+    }
+
+    // --- device tracking ---
+
+    override fun onInputDeviceAdded(deviceId: Int) {
+        val dev = InputDevice.getDevice(deviceId) ?: return
+        if (!isGamepad(dev)) return
+        synchronized(pads) {
+            if (pads.containsKey(deviceId)) return
+            val used = pads.values.map { it.index }.toSet()
+            val index = (0 until MAX_PADS).firstOrNull { it !in used } ?: return
+            pads[deviceId] = Pad(index, deviceId, dev.name)
+            updateSummary()
+        }
+        Log.i(TAG, "gamepad connected: ${dev.name} (vendor ${dev.vendorId} product ${dev.productId}) axes=" +
+            dev.motionRanges.joinToString { MotionEvent.axisToString(it.axis) })
+    }
+
+    override fun onInputDeviceRemoved(deviceId: Int) {
+        synchronized(pads) {
+            val pad = pads.remove(deviceId) ?: return
+            receiver.sendInput(pad.index, false, ++pad.seq, 0, 0, 0, 0, 0, 0, 0)
+            updateSummary()
+            Log.i(TAG, "gamepad disconnected: ${pad.name}")
+        }
+    }
+
+    override fun onInputDeviceChanged(deviceId: Int) {}
+
+    private fun isGamepad(dev: InputDevice): Boolean {
+        val s = dev.sources
+        return !dev.isVirtual &&
+            ((s and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                (s and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
+    }
+
+    private fun updateSummary() {
+        summary = if (pads.isEmpty()) "nenhum controle"
+        else pads.values.sortedBy { it.index }.joinToString { "${it.index + 1}: ${it.name}" }
+    }
+
+    // --- events (main thread) ---
+
+    /** Returns true if the event came from a gamepad and was consumed. */
+    fun onKeyEvent(e: KeyEvent): Boolean {
+        val pad = synchronized(pads) { pads[e.deviceId] } ?: run {
+            // A gamepad we missed (e.g. connected before start); pick it up now.
+            onInputDeviceAdded(e.deviceId)
+            synchronized(pads) { pads[e.deviceId] }
+        } ?: return false
+        val bit = buttonFor(e.keyCode)
+        val down = e.action == KeyEvent.ACTION_DOWN
+        synchronized(pads) {  // the 50 ms repeat runs on another thread
+        when {
+            bit != 0 -> pad.buttons = if (down) pad.buttons or bit else pad.buttons and bit.inv()
+            // Digital-only triggers (no analog axis): full press.
+            e.keyCode == KeyEvent.KEYCODE_BUTTON_L2 -> if (!hasAnalogTriggers(e.device)) pad.lt = if (down) 255 else 0
+            e.keyCode == KeyEvent.KEYCODE_BUTTON_R2 -> if (!hasAnalogTriggers(e.device)) pad.rt = if (down) 255 else 0
+            else -> return true  // other gamepad keys: swallow so they never act as TV navigation
+        }
+        if (e.repeatCount == 0) send(pad)
+        }
+        return true
+    }
+
+    fun onMotionEvent(e: MotionEvent): Boolean {
+        if ((e.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
+        val pad = synchronized(pads) { pads[e.deviceId] } ?: return false
+        val dev = e.device ?: return false
+        synchronized(pads) { applyMotion(pad, e, dev) }
+        return true
+    }
+
+    private fun applyMotion(pad: Pad, e: MotionEvent, dev: InputDevice) {
+        pad.lx = stick(e, dev, MotionEvent.AXIS_X)
+        pad.ly = -stick(e, dev, MotionEvent.AXIS_Y)  // Android: down is +; XInput: up is +
+        pad.rx = stick(e, dev, MotionEvent.AXIS_Z)
+        pad.ry = -stick(e, dev, MotionEvent.AXIS_RZ)
+        if (hasAnalogTriggers(dev)) {
+            pad.lt = trigger(maxOf(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE)))
+            pad.rt = trigger(maxOf(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS)))
+        }
+        // Some pads report the D-pad as a hat axis instead of keys.
+        val hx = e.getAxisValue(MotionEvent.AXIS_HAT_X)
+        val hy = e.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        var hat = 0
+        if (hx < -0.5f) hat = hat or BTN_LEFT
+        if (hx > 0.5f) hat = hat or BTN_RIGHT
+        if (hy < -0.5f) hat = hat or BTN_UP
+        if (hy > 0.5f) hat = hat or BTN_DOWN
+        pad.buttons = (pad.buttons and pad.dpadFromHat.inv()) or hat
+        pad.dpadFromHat = hat
+        send(pad)
+    }
+
+    private fun send(p: Pad) {
+        receiver.sendInput(p.index, true, ++p.seq, p.buttons, p.lt, p.rt, p.lx, p.ly, p.rx, p.ry)
+    }
+
+    private fun stick(e: MotionEvent, dev: InputDevice, axis: Int): Int {
+        val range = dev.getMotionRange(axis, e.source) ?: return 0
+        val v = e.getAxisValue(axis)
+        if (abs(v) <= range.flat) return 0  // the pad's own reported dead zone
+        return (v * 32767f).roundToInt().coerceIn(-32768, 32767)
+    }
+
+    private fun trigger(v: Float) = (v * 255f).roundToInt().coerceIn(0, 255)
+
+    private fun hasAnalogTriggers(dev: InputDevice?): Boolean =
+        dev != null && (dev.getMotionRange(MotionEvent.AXIS_LTRIGGER) != null ||
+            dev.getMotionRange(MotionEvent.AXIS_BRAKE) != null)
+
+    // --- vibration ---
+
+    private fun applyRumble(index: Int, large: Int, small: Int) {
+        val pad = synchronized(pads) { pads.values.firstOrNull { it.index == index } } ?: return
+        if (large == 0 && small == 0) {
+            stopVibration(pad)
+            return
+        }
+        if (Build.VERSION.SDK_INT < 31) return  // per-motor gamepad vibration needs Android 12
+        val dev = InputDevice.getDevice(pad.deviceId) ?: return
+        val vm = dev.vibratorManager
+        val ids = vm.vibratorIds
+        if (ids.isEmpty()) return
+        // Games send motor levels and expect them to hold until changed; long one-shots, refreshed
+        // by every new request from the PC, approximate that.
+        val combo = CombinedVibration.startParallel()
+        fun effect(level: Int) = VibrationEffect.createOneShot(RUMBLE_HOLD_MS, level.coerceIn(1, 255))
+        if (ids.size >= 2) {
+            if (large > 0) combo.addVibrator(ids[0], effect(large))
+            if (small > 0) combo.addVibrator(ids[1], effect(small))
+        } else {
+            combo.addVibrator(ids[0], effect(maxOf(large, small)))
+        }
+        vm.vibrate(combo.combine())
+        pad.rumbleActive = true
+    }
+
+    private fun stopVibration(pad: Pad) {
+        if (!pad.rumbleActive || Build.VERSION.SDK_INT < 31) return
+        InputDevice.getDevice(pad.deviceId)?.vibratorManager?.cancel()
+        pad.rumbleActive = false
+    }
+
+    companion object {
+        private const val TAG = "TclStream"
+        private const val MAX_PADS = 4
+        private const val REPEAT_MS = 50L
+        private const val RUMBLE_POLL_MS = 10L
+        private const val RUMBLE_HOLD_MS = 2000L
+
+        // XInput button bits (must match tclproto::GamepadButtons)
+        private const val BTN_UP = 0x0001
+        private const val BTN_DOWN = 0x0002
+        private const val BTN_LEFT = 0x0004
+        private const val BTN_RIGHT = 0x0008
+
+        private fun buttonFor(keyCode: Int): Int = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> BTN_UP
+            KeyEvent.KEYCODE_DPAD_DOWN -> BTN_DOWN
+            KeyEvent.KEYCODE_DPAD_LEFT -> BTN_LEFT
+            KeyEvent.KEYCODE_DPAD_RIGHT -> BTN_RIGHT
+            KeyEvent.KEYCODE_BUTTON_START -> 0x0010
+            KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_BACK -> 0x0020
+            KeyEvent.KEYCODE_BUTTON_THUMBL -> 0x0040
+            KeyEvent.KEYCODE_BUTTON_THUMBR -> 0x0080
+            KeyEvent.KEYCODE_BUTTON_L1 -> 0x0100
+            KeyEvent.KEYCODE_BUTTON_R1 -> 0x0200
+            KeyEvent.KEYCODE_BUTTON_MODE -> 0x0400
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> 0x1000
+            KeyEvent.KEYCODE_BUTTON_B -> 0x2000
+            KeyEvent.KEYCODE_BUTTON_X -> 0x4000
+            KeyEvent.KEYCODE_BUTTON_Y -> 0x8000
+            else -> 0
+        }
+    }
+}

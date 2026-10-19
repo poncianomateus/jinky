@@ -30,6 +30,9 @@ enum class PacketType : uint8_t {
     // Clock synchronisation (both directions), see TimeSync
     TimeRequest = 20,
     TimeResponse = 21,
+    // Controllers
+    Input = 30,   // receiver -> host: full gamepad state (see InputState)
+    Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
 };
 
 enum PacketFlags : uint8_t {
@@ -81,6 +84,53 @@ struct TimeSync {
 
     void write(std::span<uint8_t> out) const;
     static std::optional<TimeSync> read(std::span<const uint8_t> in);
+};
+
+// Xbox 360 button bits (same values as XINPUT / XUSB, so the host can pass them straight through).
+enum GamepadButtons : uint16_t {
+    kBtnDpadUp = 0x0001,
+    kBtnDpadDown = 0x0002,
+    kBtnDpadLeft = 0x0004,
+    kBtnDpadRight = 0x0008,
+    kBtnStart = 0x0010,
+    kBtnBack = 0x0020,
+    kBtnLeftThumb = 0x0040,
+    kBtnRightThumb = 0x0080,
+    kBtnLeftShoulder = 0x0100,
+    kBtnRightShoulder = 0x0200,
+    kBtnGuide = 0x0400,
+    kBtnA = 0x1000,
+    kBtnB = 0x2000,
+    kBtnX = 0x4000,
+    kBtnY = 0x8000,
+};
+
+// Complete state of one controller. Sent on every change and repeated every 50 ms, so a lost
+// datagram is corrected by the next one; `seq` lets the host ignore reordered (older) states.
+struct InputState {
+    uint32_t session_id = 0;
+    uint8_t pad_index = 0;    // 0..3, which controller on the TV
+    bool connected = true;    // false = controller went away, unplug the virtual pad
+    uint32_t seq = 0;
+    uint16_t buttons = 0;     // GamepadButtons
+    uint8_t left_trigger = 0, right_trigger = 0;  // 0..255
+    int16_t lx = 0, ly = 0, rx = 0, ry = 0;       // -32768..32767, +y = up (XInput convention)
+
+    static constexpr size_t kSize = 32;
+
+    void write(std::span<uint8_t> out) const;
+    static std::optional<InputState> read(std::span<const uint8_t> in);
+};
+
+struct RumbleMessage {
+    uint32_t session_id = 0;
+    uint8_t pad_index = 0;
+    uint8_t large_motor = 0, small_motor = 0;  // 0..255
+
+    static constexpr size_t kSize = 16;
+
+    void write(std::span<uint8_t> out) const;
+    static std::optional<RumbleMessage> read(std::span<const uint8_t> in);
 };
 
 // Peeks at the packet type without fully parsing. nullopt if not a TclStream packet.

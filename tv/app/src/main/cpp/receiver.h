@@ -52,6 +52,11 @@ public:
     double audio_buffer_ms() const;
     int audio_target_ms() const;
 
+    // Sends a gamepad state to the host (any thread).
+    void send_input(tclproto::InputState state);
+    // Next pending vibration request from the host, if any (any thread).
+    std::optional<tclproto::RumbleMessage> poll_rumble();
+
     std::string status() const;
     const std::string& error() const { return error_; }
 
@@ -73,7 +78,7 @@ private:
     // Network thread only
     tclproto::FrameAssembler assembler_{[this](tclproto::FrameAssembler::Frame&& f) { on_frame(std::move(f)); }};
     std::optional<tclproto::Endpoint> host_;
-    uint32_t session_id_ = 0;
+    std::atomic<uint32_t> session_id_{0};
     bool have_session_ = false;
 
     // Shared with the decoder thread
@@ -102,6 +107,10 @@ private:
     int64_t last_frame_us_ = 0, gap_max_us_ = 0, last_jitter_log_ms_ = 0;
     uint64_t late_frames_ = 0, frames_in_window_ = 0;
     std::string error_;
+
+    std::mutex rumble_mu_;
+    std::deque<tclproto::RumbleMessage> rumble_;
+    std::atomic<uint64_t> inputs_sent_{0};
 
     // Audio jitter buffer: interleaved stereo int16 ring, shared with the audio thread.
     static constexpr size_t kAudioRate = 48000;
