@@ -89,6 +89,9 @@ private:
     std::atomic<uint32_t> host_ip_{0};
     std::atomic<uint64_t> packets_{0}, frames_ok_{0}, frames_lost_{0}, frames_dropped_{0}, idr_requests_{0};
     std::atomic<int64_t> last_packet_ms_{0};
+    // Arrival jitter of completed frames (network thread only)
+    int64_t last_frame_us_ = 0, gap_max_us_ = 0, last_jitter_log_ms_ = 0;
+    uint64_t late_frames_ = 0, frames_in_window_ = 0;
     std::string error_;
 };
 

@@ -1,4 +1,4 @@
-// Animated synthetic frames rendered on the GPU (moving bar over a cycling background), used to
+// Animated synthetic frames rendered on the GPU (slow moving bar over a drifting background), used to
 // test the full pipeline at the target frame rate without depending on what is on the desktop.
 #pragma once
 

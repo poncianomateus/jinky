@@ -2,6 +2,7 @@
 // Captures the desktop, encodes H.264 with NVENC and streams it over UDP to the first receiver
 // that says Hello. No pairing/encryption yet: LAN testing only (see docs/ARCHITECTURE.md §9).
 #include <windows.h>
+#include <avrt.h>
 #include <timeapi.h>
 
 #include <algorithm>
@@ -40,6 +41,22 @@ std::string utf8(const std::wstring& w) {
 BOOL WINAPI on_console_ctrl(DWORD) {
     g_quit = true;
     return TRUE;
+}
+
+// Sleeps until `t` with ~0.5 ms precision (Sleep() alone can overshoot by a full scheduler tick).
+void sleep_until_precise(steady_clock::time_point t) {
+    static HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                 TIMER_ALL_ACCESS);
+    const auto remaining = t - steady_clock::now();
+    if (remaining <= steady_clock::duration::zero()) return;
+    if (!timer) {
+        std::this_thread::sleep_until(t);
+        return;
+    }
+    LARGE_INTEGER due;
+    due.QuadPart = -duration_cast<nanoseconds>(remaining).count() / 100;  // relative, 100 ns units
+    SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0);
+    WaitForSingleObject(timer, INFINITE);
 }
 
 uint64_t now_us() { return duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count(); }
@@ -84,6 +101,11 @@ int main(int argc, char** argv) {
     if (!parse_args(argc, argv, opt)) return 2;
     SetConsoleCtrlHandler(on_console_ctrl, TRUE);
     timeBeginPeriod(1);
+    // Real-time-ish scheduling: a frame that waits for the CPU is a frame the TV shows late.
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    DWORD mmcss_task = 0;
+    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Capture", &mmcss_task);
+    if (!mmcss) TCL_WARN("main", "MMCSS registration failed ({})", GetLastError());
 
     // --- Milestone 1: capture ---
     tcl::DesktopCapture capture;
@@ -93,6 +115,11 @@ int main(int argc, char** argv) {
     }
     TCL_INFO("capture", "desktop {}x{} on GPU \"{}\"", capture.width(), capture.height(),
              utf8(capture.adapter_name()));
+    {
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
+        if (SUCCEEDED(capture.device()->QueryInterface(IID_PPV_ARGS(&dxgi))) && FAILED(dxgi->SetGPUThreadPriority(7)))
+            TCL_WARN("main", "could not raise GPU priority (needs admin); continuing at normal priority");
+    }
 
     tcl::Nv12Converter converter;
     if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(), opt.enc.width,
@@ -135,7 +162,8 @@ int main(int argc, char** argv) {
     steady_clock::time_point last_peer_msg, last_idr, last_encode, last_stats = steady_clock::now();
     steady_clock::time_point next_frame = steady_clock::now();
     const auto frame_interval = duration_cast<steady_clock::duration>(duration<double>(1.0 / opt.enc.fps));
-    uint64_t frames_sent = 0, bytes_sent = 0, encode_us_total = 0;
+    uint64_t frames_sent = 0, bytes_sent = 0, encode_us_total = 0, encode_us_max = 0;
+    uint64_t last_send_us = 0, send_gap_max_us = 0, late_sends = 0;  // send-interval jitter
     std::vector<uint8_t> bitstream;
     uint8_t rx[2048];
 
@@ -190,8 +218,8 @@ int main(int argc, char** argv) {
         // --- capture ---
         auto wait = duration_cast<milliseconds>(next_frame - steady_clock::now()).count();
         if (opt.test_pattern) {
-            // Fresh synthetic frame every slot: exercises the full 60 fps path and latency.
-            if (wait > 0) std::this_thread::sleep_for(milliseconds(wait));
+            // Exactly one fresh synthetic frame per slot: exercises the full 60 fps path and latency.
+            sleep_until_precise(next_frame);
             pattern.draw(pattern_frame++);
             if (converter.convert(pattern.texture())) {
                 have_content = dirty = true;
@@ -250,7 +278,9 @@ int main(int argc, char** argv) {
             TCL_ERROR("encoder", "{}", encoder.error());
             continue;
         }
-        encode_us_total += now_us() - t0;
+        const uint64_t encode_us = now_us() - t0;
+        encode_us_total += encode_us;
+        encode_us_max = std::max(encode_us_max, encode_us);
         last_encode = now;
         dirty = false;
         if (key) {
@@ -270,6 +300,16 @@ int main(int argc, char** argv) {
         });
         frames_sent++;
         bytes_sent += bitstream.size();
+        {
+            const uint64_t t = now_us();
+            if (last_send_us) {
+                const uint64_t gap = t - last_send_us;
+                send_gap_max_us = std::max(send_gap_max_us, gap);
+                // More than 1.5 frame intervals between sends = the receiver will miss a refresh.
+                if (gap * opt.enc.fps > 1'500'000) late_sends++;
+            }
+            last_send_us = t;
+        }
         if (!first_sent_logged) {
             TCL_INFO("session", "first frame sent ({}, {} bytes)", key ? "keyframe" : "P-frame", bitstream.size());
             first_sent_logged = true;
@@ -277,14 +317,17 @@ int main(int argc, char** argv) {
 
         if (now - last_stats >= 2s) {
             const double secs = duration<double>(now - last_stats).count();
-            TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s, avg encode {:.2f} ms", frames_sent / secs,
-                     bytes_sent * 8 / secs / 1e6, frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0);
-            frames_sent = bytes_sent = encode_us_total = 0;
+            TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s, encode avg {:.2f} max {:.2f} ms, send gap max {:.1f} ms, late sends {}",
+                     frames_sent / secs, bytes_sent * 8 / secs / 1e6,
+                     frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0, encode_us_max / 1000.0,
+                     send_gap_max_us / 1000.0, late_sends);
+            frames_sent = bytes_sent = encode_us_total = encode_us_max = send_gap_max_us = late_sends = 0;
             last_stats = now;
         }
     }
 
     TCL_INFO("main", "stopping");
+    if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     timeEndPeriod(1);
     return 0;
 }

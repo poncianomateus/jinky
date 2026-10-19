@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
+import android.view.Choreographer
 import android.view.Surface
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -15,18 +16,29 @@ import java.util.concurrent.atomic.AtomicLong
  * Feeds frames from [NativeReceiver] into a hardware MediaCodec rendering to [surface], and
  * verifies every step: decoder created, frames queued, frames decoded, frames presented.
  * If frames keep arriving but nothing comes out, the decoder is recreated (bounded retries).
+ *
+ * Two threads: the input thread feeds the decoder as frames arrive from the network; the output
+ * thread releases each decoded frame the moment it is ready. (A single loop would only collect
+ * frame N when frame N+1 arrives: a full frame of extra latency, and pairs of frames released
+ * together, one of which the display then drops.)
  */
 class VideoPipeline(
     private val receiver: NativeReceiver,
     private val surface: Surface,
     private val tuning: Tuning = Tuning(),
+    private val refreshRate: Float = 60f,
     private val width: Int = 1920,
     private val height: Int = 1080,
 ) {
-    /** Display-path options, switchable at launch for A/B latency tests on real TVs. */
+    /** Display-path options, switchable at launch for A/B tests on real TVs. */
     data class Tuning(
         val vendorLowLatency: Boolean = true,  // vendor-specific low-latency keys (e.g. Amlogic)
-        val explicitRenderTime: Boolean = true,  // releaseOutputBuffer(idx, now) instead of (idx, true)
+        // Give each frame its own display refresh: when two frames arrive within one refresh, the
+        // second is scheduled for the next one instead of replacing the first on screen.
+        val pacing: Boolean = true,
+        // Align each frame's display time to the middle of a real vsync interval (Choreographer),
+        // so a timestamp never lands on the boundary where two frames can share one refresh.
+        val vsyncAlign: Boolean = true,
     )
 
     enum class Stage { NO_DECODER, WAITING_FOR_VIDEO, DECODING, PRESENTING, STALLED, ERROR }
@@ -39,6 +51,7 @@ class VideoPipeline(
 
     val framesQueued = AtomicLong()
     val framesDecoded = AtomicLong()
+    val framesSkipped = AtomicLong()  // decoded but deliberately not shown (a newer one was ready)
     val framesPresented = AtomicLong()
 
     // MediaCodec needs monotonic presentation times, so we use the local queue time as PTS and
@@ -47,13 +60,33 @@ class VideoPipeline(
     private val clock = LongArray(3)
 
     @Volatile private var running = false
-    private var thread: Thread? = null
+    @Volatile private var codec: MediaCodec? = null
+    private val codecLock = Object()
+    private var inputThread: Thread? = null
+    private var outputThread: Thread? = null
     private val callbackThread = HandlerThread("tcl-render-cb").apply { start() }
     private val callbackHandler = Handler(callbackThread.looper)
 
+    // Latest vsync timestamp (System.nanoTime base), kept fresh by a Choreographer on its own thread.
+    @Volatile private var lastVsyncNs = 0L
+    private val vsyncThread = HandlerThread("tcl-vsync").apply { start() }
+    private val vsyncCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            lastVsyncNs = frameTimeNanos
+            if (running) Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
     fun start() {
         running = true
-        thread = Thread(::loop, "tcl-decoder").apply {
+        if (tuning.vsyncAlign) {
+            Handler(vsyncThread.looper).post { Choreographer.getInstance().postFrameCallback(vsyncCallback) }
+        }
+        inputThread = Thread(::inputLoop, "tcl-decoder-in").apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+        outputThread = Thread(::outputLoop, "tcl-decoder-out").apply {
             priority = Thread.MAX_PRIORITY
             start()
         }
@@ -61,9 +94,13 @@ class VideoPipeline(
 
     fun stop() {
         running = false
-        thread?.join(2000)
-        thread = null
+        inputThread?.join(2000)
+        outputThread?.join(2000)
+        inputThread = null
+        outputThread = null
+        releaseCodec()
         callbackThread.quitSafely()
+        vsyncThread.quitSafely()
     }
 
     private fun createDecoder(): MediaCodec? {
@@ -73,7 +110,7 @@ class VideoPipeline(
             return null
         }
         return try {
-            val codec = MediaCodec.createByCodecName(best.name)
+            val c = MediaCodec.createByCodecName(best.name)
             val format = MediaFormat.createVideoFormat(MIME, width, height).apply {
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_FRAME_BYTES)
                 if (Build.VERSION.SDK_INT >= 23) setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
@@ -82,20 +119,29 @@ class VideoPipeline(
                     setInteger("vdec-lowlatency", 1)
                 }
             }
-            codec.configure(format, surface, null, 0)
-            codec.setOnFrameRenderedListener({ _, pts, renderNanos ->
+            c.configure(format, surface, null, 0)
+            c.setOnFrameRenderedListener({ _, pts, renderNanos ->
                 val n = framesPresented.incrementAndGet()
                 lastPresentMs = SystemClock.elapsedRealtime()
                 receiver.reportPresented(n)
                 onRendered(pts, renderNanos / 1000)
             }, callbackHandler)
-            codec.start()
+            c.start()
             decoderName = best.name + if (best.lowLatency) " (baixa latência)" else ""
-            Log.i(TAG, "decoder created: ${best.name} lowLatency=${best.lowLatency}")
-            codec
+            Log.i(TAG, "decoder created: ${best.name} lowLatency=${best.lowLatency} tuning=$tuning refresh=$refreshRate")
+            c
         } catch (e: Exception) {
             fail("Falha ao criar o decodificador ${best.name}: ${e.message}")
             null
+        }
+    }
+
+    private fun releaseCodec() {
+        synchronized(codecLock) {
+            val c = codec ?: return
+            codec = null
+            try { c.stop() } catch (_: Exception) {}
+            try { c.release() } catch (_: Exception) {}
         }
     }
 
@@ -112,17 +158,16 @@ class VideoPipeline(
             lastRollMs = now
             latency.roll()?.let { s ->
                 if (!s.totalAvgMs.isNaN()) receiver.reportLatency((s.totalAvgMs * 1000).toInt())
-                Log.i(TAG, "latency total avg=%.1f min=%.1f max=%.1f ms (n=%d) local decode+display=%.1f ms | queued=%d decoded=%d presented=%d"
+                Log.i(TAG, "latency total avg=%.1f min=%.1f max=%.1f ms (n=%d) local decode+display=%.1f ms | queued=%d decoded=%d skipped=%d presented=%d"
                     .format(s.totalAvgMs, s.totalMinMs, s.totalMaxMs, s.samples, s.localAvgMs,
-                        framesQueued.get(), framesDecoded.get(), framesPresented.get()))
+                        framesQueued.get(), framesDecoded.get(), framesSkipped.get(), framesPresented.get()))
             }
         }
     }
 
-    private fun loop() {
-        val info = MediaCodec.BufferInfo()
+    /** Creates the decoder, feeds it, and watches for stalls. Owns decoder lifetime. */
+    private fun inputLoop() {
         val meta = LongArray(3)
-        var codec: MediaCodec? = null
         var pendingInput = -1
         var decoderStartMs = 0L
         var lastFeedMs = 0L
@@ -130,28 +175,23 @@ class VideoPipeline(
         var lastProgressCount = 0L
         val recoveryTimes = ArrayDeque<Long>()
 
-        fun release() {
-            try { codec?.stop() } catch (_: Exception) {}
-            try { codec?.release() } catch (_: Exception) {}
-            codec = null
-            pendingInput = -1
-        }
-
         while (running) {
             val now = SystemClock.elapsedRealtime()
-            if (codec == null) {
-                codec = createDecoder()
-                if (codec == null) {
+            var c = codec
+            if (c == null) {
+                c = createDecoder()
+                if (c == null) {
                     SystemClock.sleep(2000)
                     continue
                 }
+                pendingInput = -1
+                codec = c
                 receiver.requestKeyframe()
                 decoderStartMs = now
                 lastProgressMs = now
                 lastProgressCount = framesDecoded.get() + framesPresented.get()
                 stage = Stage.WAITING_FOR_VIDEO
             }
-            val c = codec!!
             try {
                 if (pendingInput < 0) pendingInput = c.dequeueInputBuffer(5_000)
                 if (pendingInput >= 0) {
@@ -171,23 +211,10 @@ class VideoPipeline(
                         Log.w(TAG, "frame of ${-n} bytes exceeds decoder input buffer (${buf.capacity()})")
                     }
                 }
-                while (true) {
-                    val out = c.dequeueOutputBuffer(info, 0)
-                    if (out >= 0) {
-                        // render = true: show immediately, no presentation-time scheduling.
-                        if (tuning.explicitRenderTime) c.releaseOutputBuffer(out, System.nanoTime())
-                        else c.releaseOutputBuffer(out, true)
-                        framesDecoded.incrementAndGet()
-                    } else if (out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        Log.i(TAG, "output format: ${c.outputFormat}")
-                    } else {
-                        break
-                    }
-                }
             } catch (e: Exception) {
-                Log.e(TAG, "decoder error", e)
+                Log.e(TAG, "decoder input error", e)
                 lastError = "Erro no decodificador: ${e.message ?: e.javaClass.simpleName}"
-                release()
+                releaseCodec()
                 recoveries++
                 continue
             }
@@ -207,11 +234,11 @@ class VideoPipeline(
             if (fedRecently && now - lastProgressMs > STALL_MS && now - decoderStartMs > STALL_MS) {
                 stage = Stage.STALLED
                 lastError = "Vídeo chegando mas o decodificador não produz imagem — recriando decodificador"
-                Log.w(TAG, lastError!!)
+                Log.w(TAG, "$lastError (queued=${framesQueued.get()} decoded=${framesDecoded.get()} presented=${framesPresented.get()})")
                 while (recoveryTimes.isNotEmpty() && now - recoveryTimes.first() > 60_000) recoveryTimes.removeFirst()
                 recoveryTimes.addLast(now)
                 recoveries++
-                release()
+                releaseCodec()
                 if (recoveryTimes.size > MAX_RECOVERIES_PER_MINUTE) {
                     fail("O decodificador da TV travou ${recoveryTimes.size} vezes em 1 minuto")
                     SystemClock.sleep(10_000)  // back off instead of looping forever
@@ -219,7 +246,58 @@ class VideoPipeline(
                 }
             }
         }
-        release()
+    }
+
+    /** Releases decoded frames to the display as soon as they are ready. */
+    private fun outputLoop() {
+        val info = MediaCodec.BufferInfo()
+        val periodNs = (1_000_000_000.0 / refreshRate).toLong()
+        var lastTargetNs = 0L
+        while (running) {
+            synchronized(codecLock) {
+                val c = codec ?: return@synchronized
+                try {
+                    var out = c.dequeueOutputBuffer(info, 4_000)
+                    if (out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        Log.i(TAG, "output format: ${c.outputFormat}")
+                        return@synchronized
+                    }
+                    if (out < 0) return@synchronized
+                    framesDecoded.incrementAndGet()
+                    // If newer frames are already decoded, show only the newest: never build a backlog.
+                    while (true) {
+                        val newer = c.dequeueOutputBuffer(info, 0)
+                        if (newer < 0) break
+                        framesDecoded.incrementAndGet()
+                        framesSkipped.incrementAndGet()
+                        c.releaseOutputBuffer(out, false)
+                        out = newer
+                    }
+                    val now = System.nanoTime()
+                    var target = now
+                    val vsync = lastVsyncNs
+                    if (tuning.vsyncAlign && vsync != 0L && now - vsync < 4 * periodNs) {
+                        // Earliest refresh we can still make, then one refresh per frame.
+                        val ahead = (now - vsync + periodNs - 1) / periodNs
+                        var slot = vsync + ahead * periodNs
+                        if (slot < lastTargetNs + periodNs / 2) slot = lastTargetNs + periodNs
+                        if (slot - now > 2 * periodNs) slot = vsync + ahead * periodNs  // don't build latency
+                        lastTargetNs = slot
+                        // Ask for "half a refresh before that vsync": unambiguous which refresh it is.
+                        target = maxOf(now, slot - periodNs / 2)
+                    } else if (tuning.pacing) {
+                        // One frame per refresh; if pacing would push us >1 refresh behind, reset to now.
+                        target = maxOf(now, lastTargetNs + periodNs)
+                        if (target - now > periodNs) target = now
+                        lastTargetNs = target
+                    }
+                    c.releaseOutputBuffer(out, target)
+                } catch (e: IllegalStateException) {
+                    // Decoder being recreated by the input thread; it handles recovery.
+                }
+            }
+            if (codec == null) SystemClock.sleep(5)
+        }
     }
 
     private fun fail(msg: String) {

@@ -25,6 +25,7 @@ public:
 
 private:
     ComPtr<ID3D11Device> device_;
+    ComPtr<ID3D11DeviceContext> context_;
     ComPtr<ID3D11VideoDevice> vdevice_;
     ComPtr<ID3D11VideoContext> vcontext_;
     ComPtr<ID3D11VideoProcessorEnumerator> enumerator_;

@@ -20,24 +20,19 @@ bool TestPattern::init(ID3D11Device* device, ID3D11DeviceContext* context, UINT 
 }
 
 void TestPattern::draw(uint64_t frame) {
-    const float t = float(frame % 240) / 240.0f;
-    const float bg[4] = {0.05f + 0.1f * t, 0.08f, 0.15f + 0.2f * (1.0f - t), 1.0f};
+    // Dark background with a slow colour drift, so every frame still differs from the previous one.
+    const float t = float(frame % 600) / 600.0f;
+    const float bg[4] = {0.04f + 0.04f * t, 0.06f, 0.12f + 0.04f * (1.0f - t), 1.0f};
     context_->ClearView(rtv_.Get(), bg, nullptr, 0);
 
-    // A white bar sweeping left to right once per second at 60 fps; easy to judge smoothness by eye.
-    const LONG bar_w = LONG(width_ / 16);
-    const LONG x = LONG((frame % 60) * (width_ - UINT(bar_w)) / 59);
+    // A white bar sweeping left to right every 3 s (moves ~10 px per frame at 1080p60). Slow enough
+    // to judge smoothness by eye: any stutter means frames were dropped or shown twice.
+    constexpr uint64_t kSweepFrames = 180;
+    const LONG bar_w = LONG(width_ / 24);
+    const LONG x = LONG((frame % kSweepFrames) * (width_ - UINT(bar_w)) / (kSweepFrames - 1));
     const D3D11_RECT bar{x, 0, x + bar_w, LONG(height_)};
     const float white[4] = {1, 1, 1, 1};
     context_->ClearView(rtv_.Get(), white, &bar, 1);
-
-    // A row of 8 blocks showing the frame counter in binary: lets you spot dropped/repeated frames.
-    const LONG block = LONG(height_ / 18);
-    for (int bit = 0; bit < 8; ++bit) {
-        const D3D11_RECT r{block * (1 + 2 * bit), block, block * (2 + 2 * bit), block * 2};
-        const float on[4] = {1.0f, 0.75f, 0.1f, 1}, off[4] = {0.15f, 0.15f, 0.15f, 1};
-        context_->ClearView(rtv_.Get(), (frame >> bit) & 1 ? on : off, &r, 1);
-    }
 }
 
 }  // namespace tcl

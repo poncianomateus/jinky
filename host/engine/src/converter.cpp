@@ -8,6 +8,7 @@ namespace tcl {
 bool Nv12Converter::init(ID3D11Device* device, ID3D11DeviceContext* context, UINT src_w, UINT src_h,
                          UINT dst_w, UINT dst_h) {
     device_ = device;
+    context_ = context;
     src_w_ = src_w;
     src_h_ = src_h;
     if (FAILED(device->QueryInterface(IID_PPV_ARGS(&vdevice_))) ||
@@ -91,6 +92,9 @@ bool Nv12Converter::convert(ID3D11Texture2D* src) {
         error_ = std::format("VideoProcessorBlt failed 0x{:08X}", unsigned(hr));
         return false;
     }
+    // Submit now. Otherwise the driver may hold the command buffer for tens of ms, and NVENC,
+    // which waits for this conversion, stalls with it (measured: 40+ ms encode spikes).
+    context_->Flush();
     return true;
 }
 

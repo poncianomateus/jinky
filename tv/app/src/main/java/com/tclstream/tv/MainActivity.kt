@@ -30,11 +30,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val hardwareReport by lazy { HardwareInfo.report() }
 
     // Test switches: adb shell am start -n com.tclstream.tv/.MainActivity --ez vendor_ll false
-    //   --ez render_now true --ei display_hz 120 --ez surface_rate true
+    //   --ez pacing false --ei display_hz 120 --ez surface_rate true
     private val tuning by lazy {
         VideoPipeline.Tuning(
             vendorLowLatency = intent.getBooleanExtra("vendor_ll", true),
-            explicitRenderTime = intent.getBooleanExtra("render_now", true),
+            pacing = intent.getBooleanExtra("pacing", true),
+            vsyncAlign = intent.getBooleanExtra("vsync", true),
         )
     }
     private val displayHz by lazy { intent.getIntExtra("display_hz", 0) }
@@ -81,7 +82,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Asks for a display mode at [hz] with the current resolution, if the TV offers one. */
     private fun selectRefreshRate(hz: Int) {
-        val display = windowManager.defaultDisplay
+        @Suppress("DEPRECATION") val display = windowManager.defaultDisplay
         val current = display.mode
         val mode = display.supportedModes
             .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
@@ -121,7 +122,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (surfaceRate && Build.VERSION.SDK_INT >= 30) {
             holder.surface.setFrameRate(60f, android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
         }
-        pipeline = VideoPipeline(r, holder.surface, tuning).also { it.start() }
+        @Suppress("DEPRECATION") val hz = windowManager.defaultDisplay.refreshRate
+        pipeline = VideoPipeline(r, holder.surface, tuning, hz).also { it.start() }
     }
 
     private fun stopPipeline() {
@@ -154,7 +156,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             appendLine(latencyText(p.latency.last))
             appendLine(
                 "quadros  enviados ao decodificador: ${p.framesQueued.get()}  " +
-                    "decodificados: ${p.framesDecoded.get()}  exibidos: ${p.framesPresented.get()}"
+                    "decodificados: ${p.framesDecoded.get()}  pulados (atrasados): ${p.framesSkipped.get()}  " +
+                    "exibidos: ${p.framesPresented.get()}"
             )
             if (p.recoveries > 0) appendLine("recuperações: ${p.recoveries}")
             p.lastError?.let { appendLine("último erro: $it") }

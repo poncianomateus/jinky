@@ -2,6 +2,7 @@
 
 #include <android/log.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <iterator>
@@ -146,6 +147,23 @@ void Receiver::net_loop() {
 
 void Receiver::on_frame(tclproto::FrameAssembler::Frame&& f) {
     frames_ok_++;
+    {
+        const int64_t t = now_us();
+        if (last_frame_us_) {
+            const int64_t gap = t - last_frame_us_;
+            gap_max_us_ = std::max(gap_max_us_, gap);
+            if (gap > 25'000) late_frames_++;  // > 1.5 frames at 60 fps: a refresh will be missed
+        }
+        last_frame_us_ = t;
+        frames_in_window_++;
+        if (t / 1000 - last_jitter_log_ms_ >= 2000) {
+            LOGI("arrival: %llu frames in window, %llu late (>25 ms gap), max gap %.1f ms",
+                 (unsigned long long)frames_in_window_, (unsigned long long)late_frames_, gap_max_us_ / 1000.0);
+            last_jitter_log_ms_ = t / 1000;
+            gap_max_us_ = 0;
+            late_frames_ = frames_in_window_ = 0;
+        }
+    }
     {
         std::lock_guard lock(mu_);
         if (f.keyframe) {
