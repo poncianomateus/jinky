@@ -42,6 +42,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vendorLowLatency = intent.getBooleanExtra("vendor_ll", true),
             pacing = intent.getBooleanExtra("pacing", true),
             vsyncAlign = intent.getBooleanExtra("vsync", true),
+            appendAud = intent.getBooleanExtra("aud", false),
+            extraFormat = intent.getStringExtra("fmt") ?: "",
         )
     }
     private val displayHz by lazy { intent.getIntExtra("display_hz", 0) }
@@ -271,6 +273,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // The Fire TV remote has a Menu (☰) key; it opens the Jinky menu like Back does.
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER ||
             keyCode == KeyEvent.KEYCODE_BUTTON_A
         ) {

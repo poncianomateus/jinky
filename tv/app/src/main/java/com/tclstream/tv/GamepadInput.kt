@@ -267,7 +267,17 @@ class GamepadInput(
             stopVibration(pad)
             return
         }
-        if (Build.VERSION.SDK_INT < 31) return  // per-motor gamepad vibration needs Android 12
+        if (Build.VERSION.SDK_INT < 31) {
+            // Android 9-11 (Fire OS 7/8): one vibrator per pad, amplitude only.
+            @Suppress("DEPRECATION")
+            val v = InputDevice.getDevice(pad.deviceId)?.vibrator ?: return
+            if (!v.hasVibrator()) return
+            val level = maxOf(large, small).coerceIn(1, 255)
+            v.vibrate(if (v.hasAmplitudeControl()) VibrationEffect.createOneShot(RUMBLE_HOLD_MS, level)
+                      else VibrationEffect.createOneShot(RUMBLE_HOLD_MS, VibrationEffect.DEFAULT_AMPLITUDE))
+            pad.rumbleActive = true
+            return
+        }
         val dev = InputDevice.getDevice(pad.deviceId) ?: return
         val vm = dev.vibratorManager
         val ids = vm.vibratorIds
@@ -287,8 +297,9 @@ class GamepadInput(
     }
 
     private fun stopVibration(pad: Pad) {
-        if (!pad.rumbleActive || Build.VERSION.SDK_INT < 31) return
-        InputDevice.getDevice(pad.deviceId)?.vibratorManager?.cancel()
+        if (!pad.rumbleActive) return
+        if (Build.VERSION.SDK_INT >= 31) InputDevice.getDevice(pad.deviceId)?.vibratorManager?.cancel()
+        else @Suppress("DEPRECATION") InputDevice.getDevice(pad.deviceId)?.vibrator?.cancel()
         pad.rumbleActive = false
     }
 

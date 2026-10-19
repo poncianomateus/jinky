@@ -20,6 +20,9 @@ struct EncoderConfig {
     uint32_t width = 1920;
     uint32_t height = 1080;
     uint32_t fps = 60;
+    // Reference frames in the decoder's buffer (DPB). 1 = the stream tells decoders they never need
+    // to hold frames back (MediaTek on the Fire TV otherwise keeps 3 queued). 0 = driver default.
+    uint32_t max_ref_frames = 1;
     uint32_t bitrate_kbps = 40000;  // measured on the TCL over Wi-Fi: 0 loss up to 50 Mbit/s
 };
 

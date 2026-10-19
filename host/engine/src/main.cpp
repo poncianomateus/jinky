@@ -99,6 +99,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--codec" && (v = next())) o.codec = v;
+        else if (a == "--refs" && (v = next())) o.enc.max_ref_frames = uint32_t(std::atoi(v));
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
         else if (a == "--size" && (v = next())) {

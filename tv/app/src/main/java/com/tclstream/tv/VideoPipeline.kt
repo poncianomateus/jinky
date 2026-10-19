@@ -39,6 +39,11 @@ class VideoPipeline(
         // Align each frame's display time to the middle of a real vsync interval (Choreographer),
         // so a timestamp never lands on the boundary where two frames can share one refresh.
         val vsyncAlign: Boolean = true,
+        // Append an access-unit delimiter after each frame: decoders that only finish frame N when
+        // they see frame N+1 begin (MediaTek on Fire TV) can then output it immediately.
+        val appendAud: Boolean = false,
+        // Extra integer MediaFormat keys for experiments, "key=value,key2=value2".
+        val extraFormat: String = "",
     )
 
     enum class Stage { NO_DECODER, WAITING_FOR_VIDEO, DECODING, PRESENTING, STALLED, ERROR }
@@ -116,8 +121,16 @@ class VideoPipeline(
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_FRAME_BYTES)
                 if (Build.VERSION.SDK_INT >= 23) setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
                 if (Build.VERSION.SDK_INT >= 30 && best.lowLatency) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                if (tuning.vendorLowLatency && best.name.lowercase().contains("amlogic")) {
+                // Undocumented but honoured by Amlogic (TCL) and MediaTek (Fire TV Stick) decoders:
+                // output each frame as soon as it is decoded instead of holding one back.
+                // Measured: TCL -3 ms; Fire TV Stick 3rd gen 89 -> 72 ms (queued == decoded).
+                val n = best.name.lowercase()
+                if (tuning.vendorLowLatency && (n.contains("amlogic") || n.contains("mtk"))) {
                     setInteger("vdec-lowlatency", 1)
+                }
+                for (kv in tuning.extraFormat.split(',').filter { it.contains('=') }) {
+                    val (k, v) = kv.split('=', limit = 2)
+                    v.trim().toIntOrNull()?.let { setInteger(k.trim(), it) }
                 }
             }
             c.configure(format, surface, null, 0)
@@ -233,11 +246,17 @@ class VideoPipeline(
                         staging.position(0)
                         staging.limit(pendingSize)
                         buf.put(staging)
+                        var size = pendingSize
+                        if (tuning.appendAud && buf.remaining() >= AUD_HEVC.size) {
+                            val aud = if (mime == MIME_HEVC) AUD_HEVC else AUD_AVC
+                            buf.put(aud)
+                            size += aud.size
+                        }
                         // System.nanoTime() is CLOCK_MONOTONIC, the same clock the native side uses.
                         val pts = System.nanoTime() / 1000
                         captureTimeByPts[pts] = pendingCapture
                         if (captureTimeByPts.size > 256) captureTimeByPts.clear()  // frames never rendered
-                        c.queueInputBuffer(idx, 0, pendingSize, pts, 0)
+                        c.queueInputBuffer(idx, 0, size, pts, 0)
                         pendingSize = 0
                         framesQueued.incrementAndGet()
                         lastFeedMs = now
@@ -344,6 +363,8 @@ class VideoPipeline(
         private const val TAG = "Jinky"
         const val MIME_AVC = "video/avc"
         const val MIME_HEVC = "video/hevc"
+        private val AUD_AVC = byteArrayOf(0, 0, 0, 1, 0x09, 0xF0.toByte())
+        private val AUD_HEVC = byteArrayOf(0, 0, 0, 1, 0x46, 0x01, 0x50)
         private const val FLAG_KEYFRAME = 1L
         private const val FLAG_HEVC = 2L
         private const val MAX_FRAME_BYTES = 4 * 1024 * 1024

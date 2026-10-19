@@ -95,6 +95,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
         h.repeatSPSPPS = 1;  // VPS/SPS/PPS with every IDR: a decoder can join at any keyframe
         h.level = NV_ENC_LEVEL_AUTOSELECT;
         h.chromaFormatIDC = 1;
+        h.maxNumRefFramesInDPB = cfg.max_ref_frames;
         h.hevcVUIParameters = vui;
     } else {
         auto& h = enc.encodeCodecConfig.h264Config;
@@ -102,6 +103,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
         h.repeatSPSPPS = 1;
         h.level = NV_ENC_LEVEL_AUTOSELECT;
         h.chromaFormatIDC = 1;
+        h.maxNumRefFrames = cfg.max_ref_frames;
         h.h264VUIParameters = vui;
     }
 
