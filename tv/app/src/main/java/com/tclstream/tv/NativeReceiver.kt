@@ -28,6 +28,9 @@ class NativeReceiver : AutoCloseable {
     /** Fills [out] with [synced (0/1), hostMinusLocalUs, rttUs]. */
     fun clock(out: LongArray) = nativeClock(handle, out)
 
+    /** Fills [dst] with [frames] stereo frames (silence if the buffer ran dry). */
+    fun readAudio(dst: ShortArray, frames: Int) = nativeReadAudio(handle, dst, frames)
+
     fun status(): String = nativeStatus(handle)
 
     override fun close() {
@@ -51,6 +54,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeReportPresented(handle: Long, count: Long)
         @JvmStatic external fun nativeReportLatency(handle: Long, us: Int)
         @JvmStatic external fun nativeClock(handle: Long, out: LongArray)
+        @JvmStatic external fun nativeReadAudio(handle: Long, dst: ShortArray, frames: Int)
         @JvmStatic external fun nativeStatus(handle: Long): String
     }
 }

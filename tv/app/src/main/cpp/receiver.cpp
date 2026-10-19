@@ -115,7 +115,7 @@ void Receiver::net_loop() {
             continue;
         }
         auto h = tclproto::MediaHeader::read(std::span<const uint8_t>(buf, size_t(n)));
-        if (!h || h->type != PacketType::Video) continue;
+        if (!h) continue;
         if (host_ && from != *host_) continue;  // only one host per session
 
         if (!host_) {
@@ -129,8 +129,20 @@ void Receiver::net_loop() {
             session_id_ = h->session_id;
             have_session_ = true;
             assembler_.reset();
-            std::lock_guard lock(mu_);
-            queue_.clear();
+            {
+                std::lock_guard lock(mu_);
+                queue_.clear();
+            }
+            std::lock_guard lock(audio_mu_);
+            audio_fill_ = 0;
+            audio_priming_ = true;
+            have_audio_seq_ = false;
+        }
+        if (h->type == PacketType::Audio) {
+            on_audio(*h, std::span<const uint8_t>(buf + tclproto::MediaHeader::kSize,
+                                                  size_t(n) - tclproto::MediaHeader::kSize));
+            last_packet_ms_ = now_ms();
+            continue;
         }
         packets_++;
         last_packet_ms_ = now_ms();
@@ -188,6 +200,101 @@ void Receiver::on_frame(tclproto::FrameAssembler::Frame&& f) {
     cv_.notify_one();
 }
 
+void Receiver::on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t> payload) {
+    if (h.frag_count != 1 || payload.size() % 4 != 0) return;  // audio chunks are single datagrams
+    audio_packets_++;
+    std::lock_guard lock(audio_mu_);
+    if (have_audio_seq_) {
+        if (!tclproto::seq_newer(h.frame_id, last_audio_seq_)) return;  // late or duplicate: too late to play
+        const uint32_t missing = h.frame_id - last_audio_seq_ - 1;
+        if (missing > 0) {
+            audio_lost_ += missing;
+            // Keep the timeline for short gaps by inserting silence; long gaps just resume.
+            const size_t silence = std::min<size_t>(missing, 4) * (payload.size() / 4);
+            for (size_t i = 0; i < silence && audio_fill_ < kAudioRingFrames; ++i) {
+                const size_t w = (audio_read_ + audio_fill_) % kAudioRingFrames;
+                audio_ring_[w * 2] = audio_ring_[w * 2 + 1] = 0;
+                audio_fill_++;
+            }
+        }
+    }
+    have_audio_seq_ = true;
+    last_audio_seq_ = h.frame_id;
+
+    const size_t frames = payload.size() / 4;
+    const auto* src = payload.data();
+    for (size_t i = 0; i < frames; ++i) {
+        if (audio_fill_ >= kAudioRingFrames) break;  // reader stalled; drop the overflow
+        const size_t w = (audio_read_ + audio_fill_) % kAudioRingFrames;
+        audio_ring_[w * 2] = int16_t(src[i * 4] | (src[i * 4 + 1] << 8));
+        audio_ring_[w * 2 + 1] = int16_t(src[i * 4 + 2] | (src[i * 4 + 3] << 8));
+        audio_fill_++;
+    }
+    // Sender and TV audio clocks drift and bursts pile up: never let latency creep upward.
+    if (audio_fill_ > audio_max_frames()) {
+        const size_t trim = audio_fill_ - audio_target_;
+        audio_read_ = (audio_read_ + trim) % kAudioRingFrames;
+        audio_fill_ -= trim;
+        audio_trimmed_ms_ += trim * 1000 / kAudioRate;
+    }
+}
+
+void Receiver::read_audio(int16_t* dst, size_t frames) {
+    std::lock_guard lock(audio_mu_);
+    const int64_t now = now_ms();
+    if (now - audio_last_underrun_ms_ > 10'000 && now - audio_last_shrink_ms_ > 10'000 &&
+        audio_target_ > kAudioMinTarget) {
+        audio_target_ -= kAudioRate * 5 / 1000;  // network has been calm: try a bit less latency
+        audio_last_shrink_ms_ = now;
+    }
+    if (audio_priming_ && audio_fill_ >= audio_target_) audio_priming_ = false;
+    if (!audio_priming_ && audio_fill_ < frames) {
+        // Ran dry (network hiccup or host silent): play silence and rebuild the cushion.
+        audio_priming_ = true;
+        audio_level_avg_ = double(audio_target_);
+        if (have_audio_seq_) {
+            audio_underruns_++;
+            audio_last_underrun_ms_ = now;
+            audio_target_ = std::min(audio_target_ + kAudioRate * 10 / 1000, kAudioMaxTarget);
+            LOGW("audio underrun (packets so far %llu); jitter target now %zu ms",
+                 (unsigned long long)audio_packets_.load(), audio_target_ * 1000 / kAudioRate);
+        }
+    }
+    if (audio_priming_) {
+        std::fill(dst, dst + frames * 2, int16_t(0));
+        return;
+    }
+    // Clock drift compensation: PC and TV audio clocks differ slightly, so the buffer slowly
+    // drains or fills. Keep it at the target by consuming one frame more or less per chunk
+    // (about 0.4%, inaudible), stretching the chunk with linear interpolation.
+    audio_level_avg_ = audio_level_avg_ * 0.98 + double(audio_fill_) * 0.02;
+    size_t consume = frames;
+    if (audio_level_avg_ < audio_target_ * 0.7) consume = frames - 1;  // TV faster: stretch
+    else if (audio_level_avg_ > audio_target_ * 1.4 && audio_fill_ > frames + 1) consume = frames + 1;  // shrink
+    if (consume != frames) audio_adjustments_++;
+    for (size_t i = 0; i < frames; ++i) {
+        const double pos = double(i) * double(consume - 1) / double(frames - 1);
+        const size_t i0 = size_t(pos);
+        const size_t i1 = std::min(i0 + 1, consume - 1);
+        const double f = pos - double(i0);
+        const size_t r0 = (audio_read_ + i0) % kAudioRingFrames, r1 = (audio_read_ + i1) % kAudioRingFrames;
+        for (int ch = 0; ch < 2; ++ch)
+            dst[i * 2 + ch] = int16_t(audio_ring_[r0 * 2 + ch] * (1 - f) + audio_ring_[r1 * 2 + ch] * f);
+    }
+    audio_read_ = (audio_read_ + consume) % kAudioRingFrames;
+    audio_fill_ -= consume;
+}
+
+int Receiver::audio_target_ms() const {
+    std::lock_guard lock(audio_mu_);
+    return int(audio_target_ * 1000 / kAudioRate);
+}
+
+double Receiver::audio_buffer_ms() const {
+    std::lock_guard lock(audio_mu_);
+    return audio_fill_ * 1000.0 / kAudioRate;
+}
+
 void Receiver::request_keyframe() {
     std::lock_guard lock(mu_);
     // A fresh decoder can start from the newest queued keyframe; only ask the host if there is none.
@@ -229,6 +336,9 @@ std::string Receiver::status() const {
     } else {
         s << "PC: procurando na rede...";
     }
+    s << "\náudio: pacotes " << audio_packets_ << "  perdidos " << audio_lost_ << "  buffer "
+      << int(audio_buffer_ms()) << " ms (alvo " << audio_target_ms() << ")  faltas " << audio_underruns_ << "  cortado " << audio_trimmed_ms_
+      << " ms  ajustes de relógio " << audio_adjustments_;
     s << "\npacotes: " << packets_ << "  quadros recebidos: " << frames_ok_ << "  perdidos: " << frames_lost_
       << "  descartados: " << frames_dropped_ << "  pedidos de keyframe: " << idr_requests_;
     return s.str();

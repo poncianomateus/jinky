@@ -26,6 +26,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statusText: TextView
     private var receiver: NativeReceiver? = null
     private var pipeline: VideoPipeline? = null
+    private var audio: AudioPlayer? = null
     private var startError: String? = null
     private val hardwareReport by lazy { HardwareInfo.report() }
 
@@ -41,10 +42,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val displayHz by lazy { intent.getIntExtra("display_hz", 0) }
     private val surfaceRate by lazy { intent.getBooleanExtra("surface_rate", false) }
     private val ui = Handler(Looper.getMainLooper())
+    private var ticks = 0
 
     private val refresh = object : Runnable {
         override fun run() {
-            statusText.text = buildOverlay()
+            val text = buildOverlay()
+            statusText.text = text
+            // Same diagnostics in logcat every 5 s, for remote debugging over adb.
+            if (++ticks % 10 == 0) Log.i(TAG, "status: " + text.lines().filter { it.startsWith("áudio") }.joinToString(" | "))
             ui.postDelayed(this, 500)
         }
     }
@@ -96,6 +101,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val r = NativeReceiver()
         startError = r.start(HOST_PORT)
         receiver = r
+        audio = AudioPlayer(r).also { it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
     }
@@ -104,6 +110,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // TV going to standby / user leaving: release decoder and network, start clean on resume.
         ui.removeCallbacks(refresh)
         stopPipeline()
+        audio?.stop()
+        audio = null
         receiver?.stop()
         receiver?.close()
         receiver = null
@@ -154,6 +162,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             appendLine("etapa: ${stageText(p.stage)}")
             appendLine("decodificador: ${p.decoderName}")
             appendLine(latencyText(p.latency.last))
+            audio?.let { a ->
+                val out = if (a.outputLatencyMs.isNaN()) "?" else "%.0f".format(a.outputLatencyMs)
+                appendLine("áudio: saída da TV $out ms · falhas na saída ${a.deviceUnderruns}" + (a.error?.let { " · $it" } ?: ""))
+            }
             appendLine(
                 "quadros  enviados ao decodificador: ${p.framesQueued.get()}  " +
                     "decodificados: ${p.framesDecoded.get()}  pulados (atrasados): ${p.framesSkipped.get()}  " +

@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio_capture.h"
 #include "capture.h"
 #include "converter.h"
 #include "log.h"
@@ -65,6 +66,7 @@ struct Options {
     uint16_t port = tclproto::kDefaultMediaPort;
     int output = 0;
     bool test_pattern = false;
+    bool audio = true;
     tcl::EncoderConfig enc;
 };
 
@@ -76,6 +78,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         if (a == "--port" && (v = next())) o.port = uint16_t(std::atoi(v));
         else if (a == "--output" && (v = next())) o.output = std::atoi(v);
         else if (a == "--test-pattern") o.test_pattern = true;
+        else if (a == "--no-audio") o.audio = false;
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
         else if (a == "--size" && (v = next())) {
@@ -87,7 +90,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else {
             std::fprintf(stderr,
                          "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 20000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern]\n");
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--no-audio]\n");
             return false;
         }
     }
@@ -155,6 +158,38 @@ int main(int argc, char** argv) {
 
     std::optional<tclproto::Endpoint> peer;
     uint32_t session_id = std::random_device{}();
+
+    // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
+    std::atomic<uint64_t> audio_peer{0};
+    std::atomic<uint32_t> audio_session{0};
+    auto publish_peer = [&] {
+        audio_session = session_id;
+        audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
+    };
+    tcl::AudioCapture audio;
+    uint32_t audio_seq = 0;
+    // In test-pattern mode the bar restarts every 180 frames; the beep marks that moment.
+    const uint64_t pattern_epoch_us = now_us() + 500'000;
+    if (opt.audio) {
+        auto send_audio = [&](const int16_t* samples, uint64_t time_us) {
+            const uint64_t p = audio_peer;
+            if (!p) return;
+            tclproto::MediaHeader h;
+            h.type = PacketType::Audio;
+            h.session_id = audio_session;
+            h.frame_id = audio_seq++;
+            h.capture_time_us = time_us;
+            const tclproto::Endpoint to{uint32_t(p >> 16), uint16_t(p & 0xFFFF)};
+            const auto* bytes = reinterpret_cast<const uint8_t*>(samples);
+            tclproto::fragment_frame(h, {bytes, tcl::AudioCapture::kChunkFrames * tcl::AudioCapture::kChannels * 2},
+                                     [&](std::span<const uint8_t> d) { sock.send_to(to, d); });
+        };
+        const bool ok = opt.test_pattern
+                            ? audio.start_test_tone(send_audio, pattern_epoch_us, 180'000'000 / opt.enc.fps)
+                            : audio.start(send_audio);
+        if (ok) TCL_INFO("audio", "active: {}", audio.description());
+        else TCL_WARN("audio", "disabled: {}", audio.error());
+    }
     uint32_t frame_id = 0;
     bool idr_pending = true;
     uint64_t content_time_us = 0;  // when the content currently in the NV12 texture was presented on the PC
@@ -192,6 +227,7 @@ int main(int argc, char** argv) {
                     session_id++;
                     idr_pending = true;
                     first_sent_logged = false;
+                    publish_peer();
                 }
                 last_peer_msg = steady_clock::now();
             } else if (peer && from == *peer) {
@@ -206,6 +242,7 @@ int main(int argc, char** argv) {
                 } else if (msg->type == PacketType::Bye) {
                     TCL_INFO("session", "receiver left");
                     peer.reset();
+                    publish_peer();
                 }
             }
         }
@@ -213,6 +250,7 @@ int main(int argc, char** argv) {
         if (peer && steady_clock::now() - last_peer_msg > 5s) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
             peer.reset();
+            publish_peer();
         }
 
         // --- capture ---
@@ -220,7 +258,10 @@ int main(int argc, char** argv) {
         if (opt.test_pattern) {
             // Exactly one fresh synthetic frame per slot: exercises the full 60 fps path and latency.
             sleep_until_precise(next_frame);
-            pattern.draw(pattern_frame++);
+            // Frame index from wall time, so the bar stays locked to the beep even if a slot is missed.
+            const uint64_t t = now_us();
+            pattern_frame = t > pattern_epoch_us ? (t - pattern_epoch_us) * opt.enc.fps / 1'000'000 : 0;
+            pattern.draw(pattern_frame);
             if (converter.convert(pattern.texture())) {
                 have_content = dirty = true;
                 content_time_us = now_us();
@@ -327,6 +368,7 @@ int main(int argc, char** argv) {
     }
 
     TCL_INFO("main", "stopping");
+    audio.stop();
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     timeEndPeriod(1);
     return 0;

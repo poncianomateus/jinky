@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "tclproto/framing.h"
 #include "tclproto/udp.h"
@@ -44,12 +45,20 @@ public:
     int64_t rtt_us() const { return rtt_us_; }
     bool clock_synced() const { return clock_synced_; }
 
+    // Fills `frames` stereo frames of 48 kHz PCM. Always fills the whole buffer (silence on underrun),
+    // so the caller can write it straight to the audio device, which then paces the calls.
+    void read_audio(int16_t* dst, size_t frames);
+    // Current buffered audio in milliseconds (for diagnostics).
+    double audio_buffer_ms() const;
+    int audio_target_ms() const;
+
     std::string status() const;
     const std::string& error() const { return error_; }
 
 private:
     void net_loop();
     void on_frame(tclproto::FrameAssembler::Frame&& f);
+    void on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t> payload);
     void send_control(tclproto::PacketType type, uint32_t value);
     void send_time_request();
     void on_time_response(const tclproto::TimeSync& t);
@@ -93,6 +102,26 @@ private:
     int64_t last_frame_us_ = 0, gap_max_us_ = 0, last_jitter_log_ms_ = 0;
     uint64_t late_frames_ = 0, frames_in_window_ = 0;
     std::string error_;
+
+    // Audio jitter buffer: interleaved stereo int16 ring, shared with the audio thread.
+    static constexpr size_t kAudioRate = 48000;
+    static constexpr size_t kAudioRingFrames = kAudioRate / 2;        // 500 ms capacity
+    // Adaptive target: grows 10 ms on every underrun, shrinks 5 ms after 10 s without one.
+    static constexpr size_t kAudioMinTarget = kAudioRate * 20 / 1000;
+    static constexpr size_t kAudioMaxTarget = kAudioRate * 100 / 1000;
+    static constexpr size_t kAudioStartTarget = kAudioRate * 30 / 1000;
+    size_t audio_target_ = kAudioStartTarget;
+    int64_t audio_last_underrun_ms_ = 0, audio_last_shrink_ms_ = 0;
+    size_t audio_max_frames() const { return audio_target_ + kAudioRate * 60 / 1000; }  // above: trim
+    mutable std::mutex audio_mu_;
+    std::vector<int16_t> audio_ring_ = std::vector<int16_t>(kAudioRingFrames * 2);
+    size_t audio_read_ = 0, audio_fill_ = 0;  // in frames
+    bool audio_priming_ = true;
+    bool have_audio_seq_ = false;
+    uint32_t last_audio_seq_ = 0;
+    double audio_level_avg_ = kAudioStartTarget;  // smoothed fill level, for drift compensation
+    std::atomic<uint64_t> audio_packets_{0}, audio_lost_{0}, audio_underruns_{0}, audio_trimmed_ms_{0},
+        audio_adjustments_{0};
 };
 
 }  // namespace tcltv

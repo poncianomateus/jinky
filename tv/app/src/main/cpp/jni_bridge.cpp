@@ -66,6 +66,13 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeClock(JNIEnv* 
     env->SetLongArrayRegion(out, 0, 3, v);
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeReadAudio(JNIEnv* env, jclass, jlong h,
+                                                                            jshortArray dst, jint frames) {
+    jshort* p = env->GetShortArrayElements(dst, nullptr);
+    self(h)->read_audio(reinterpret_cast<int16_t*>(p), size_t(frames));
+    env->ReleaseShortArrayElements(dst, p, 0);
+}
+
 JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStatus(JNIEnv* env, jclass, jlong h) {
     return env->NewStringUTF(self(h)->status().c_str());
 }
