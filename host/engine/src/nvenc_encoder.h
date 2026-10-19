@@ -17,7 +17,7 @@ struct EncoderConfig {
     uint32_t width = 1920;
     uint32_t height = 1080;
     uint32_t fps = 60;
-    uint32_t bitrate_kbps = 20000;
+    uint32_t bitrate_kbps = 30000;  // measured on the TCL over Wi-Fi: 0 loss up to 50 Mbit/s
 };
 
 class NvencEncoder {

@@ -7,6 +7,7 @@ add_executable(tclstream-host
     src/main.cpp
     src/audio_capture.cpp
     src/capture.cpp
+    src/cursor.cpp
     src/converter.cpp
     src/nvenc_encoder.cpp
     src/test_pattern.cpp
@@ -16,7 +17,7 @@ add_executable(tclstream-host
 target_compile_features(tclstream-host PRIVATE cxx_std_20)
 target_compile_definitions(tclstream-host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_include_directories(tclstream-host PRIVATE ../../third_party/nvenc ../../third_party/vigemclient/include)
-target_link_libraries(tclstream-host PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi)
+target_link_libraries(tclstream-host PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler)
 if(MSVC)
     target_compile_options(tclstream-host PRIVATE /W4 /permissive- /utf-8)
     # Third-party code is compiled as-is; don't hold it to our warning level.

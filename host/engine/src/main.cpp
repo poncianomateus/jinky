@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <optional>
@@ -32,6 +33,7 @@ using tclproto::PacketType;
 namespace {
 
 std::atomic<bool> g_quit{false};
+HANDLE g_cleanup_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
 std::string utf8(const std::wstring& w) {
     const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), int(w.size()), nullptr, 0, nullptr, nullptr);
@@ -40,8 +42,12 @@ std::string utf8(const std::wstring& w) {
     return s;
 }
 
-BOOL WINAPI on_console_ctrl(DWORD) {
+BOOL WINAPI on_console_ctrl(DWORD type) {
     g_quit = true;
+    // Closing the window (or logoff/shutdown) terminates the process as soon as this returns;
+    // wait for main() to clean up first (give the PC its sound back, unplug virtual pads).
+    if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT)
+        WaitForSingleObject(g_cleanup_done, 4000);
     return TRUE;
 }
 
@@ -67,7 +73,9 @@ struct Options {
     uint16_t port = tclproto::kDefaultMediaPort;
     int output = 0;
     bool test_pattern = false;
+    bool stress = false;
     bool audio = true;
+    bool mute_pc = false;
     tcl::EncoderConfig enc;
 };
 
@@ -79,7 +87,9 @@ bool parse_args(int argc, char** argv, Options& o) {
         if (a == "--port" && (v = next())) o.port = uint16_t(std::atoi(v));
         else if (a == "--output" && (v = next())) o.output = std::atoi(v);
         else if (a == "--test-pattern") o.test_pattern = true;
+        else if (a == "--stress") o.test_pattern = o.stress = true;
         else if (a == "--no-audio") o.audio = false;
+        else if (a == "--mute-pc") o.mute_pc = true;
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
         else if (a == "--size" && (v = next())) {
@@ -90,8 +100,8 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.enc.height = uint32_t(std::atoi(size.substr(x + 1).c_str()));
         } else {
             std::fprintf(stderr,
-                         "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 20000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--no-audio]\n");
+                         "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 30000]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc]\n");
             return false;
         }
     }
@@ -103,6 +113,8 @@ bool parse_args(int argc, char** argv, Options& o) {
 int main(int argc, char** argv) {
     Options opt;
     if (!parse_args(argc, argv, opt)) return 2;
+    // If a previous run was killed while the PC was muted for streaming, give the sound back.
+    if (tcl::AudioCapture::restore_if_left_muted()) TCL_INFO("audio", "PC sound restored (left muted by a previous run)");
     SetConsoleCtrlHandler(on_console_ctrl, TRUE);
     timeBeginPeriod(1);
     // Real-time-ish scheduling: a frame that waits for the CPU is a frame the TV shows late.
@@ -125,6 +137,7 @@ int main(int argc, char** argv) {
             TCL_WARN("main", "could not raise GPU priority (needs admin); continuing at normal priority");
     }
 
+    tcl::FrameCompositor compositor;  // desktop + mouse cursor
     tcl::Nv12Converter converter;
     if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(), opt.enc.width,
                         opt.enc.height)) {
@@ -158,6 +171,7 @@ int main(int argc, char** argv) {
     TCL_INFO("net", "waiting for a receiver on UDP port {} (Ctrl+C to stop)", opt.port);
 
     std::optional<tclproto::Endpoint> peer;
+    bool busy_logged = false;
     uint32_t session_id = std::random_device{}();
 
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
@@ -166,6 +180,13 @@ int main(int argc, char** argv) {
     auto publish_peer = [&] {
         audio_session = session_id;
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
+        // Silence the PC's speakers while a TV is watching; give them back when it leaves.
+        if (opt.mute_pc && opt.audio && !opt.test_pattern) {
+            if (!tcl::AudioCapture::set_pc_muted(peer.has_value()))
+                TCL_WARN("audio", "could not change PC mute state");
+            else
+                TCL_INFO("audio", "PC speakers {}", peer ? "muted (sound goes to the TV)" : "restored");
+        }
     };
     tcl::AudioCapture audio;
     uint32_t audio_seq = 0;
@@ -241,7 +262,16 @@ int main(int argc, char** argv) {
             auto msg = tclproto::ControlMessage::read(std::span<const uint8_t>(rx, size_t(n)));
             if (!msg) continue;
             if (msg->type == PacketType::Hello) {
+                if (peer && *peer != from && steady_clock::now() - last_peer_msg < 5s) {
+                    // Another device while one is streaming: keep the current one. It takes over
+                    // only after the current receiver leaves or goes silent.
+                    if (!busy_logged) TCL_WARN("session", "{} wants to connect, but {} is streaming; ignoring",
+                                               from.to_string(), peer->to_string());
+                    busy_logged = true;
+                    continue;
+                }
                 if (!peer || *peer != from) {
+                    busy_logged = false;
                     TCL_INFO("session", "receiver connected: {}", from.to_string());
                     peer = from;
                     session_id++;
@@ -285,7 +315,7 @@ int main(int argc, char** argv) {
             // Frame index from wall time, so the bar stays locked to the beep even if a slot is missed.
             const uint64_t t = now_us();
             pattern_frame = t > pattern_epoch_us ? (t - pattern_epoch_us) * opt.enc.fps / 1'000'000 : 0;
-            pattern.draw(pattern_frame);
+            pattern.draw(pattern_frame, opt.stress);
             if (converter.convert(pattern.texture())) {
                 have_content = dirty = true;
                 content_time_us = now_us();
@@ -294,15 +324,30 @@ int main(int argc, char** argv) {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> desktop;
         switch (opt.test_pattern ? tcl::DesktopCapture::Result::Timeout : capture.acquire(int(std::clamp<long long>(wait, 0, 100)), desktop)) {
         case tcl::DesktopCapture::Result::NewFrame:
-            if (!converter.convert(desktop.Get())) TCL_ERROR("convert", "{}", converter.error());
+            // Keep a copy so the duplication frame can be released at once and the cursor can be
+            // redrawn later when only the mouse moves.
+            if (!compositor.set_desktop(capture.device(), capture.context(), desktop.Get())) {
+                TCL_ERROR("capture", "could not copy desktop frame");
+                capture.release();
+                break;
+            }
+            capture.release();
+            if (!converter.convert(compositor.compose(capture.context(), capture.cursor())))
+                TCL_ERROR("convert", "{}", converter.error());
             else {
                 have_content = dirty = true;
                 content_time_us = capture.present_time_us();
             }
-            capture.release();
             if (!first_frame_logged) {
                 TCL_INFO("capture", "first desktop frame captured");
                 first_frame_logged = true;
+            }
+            break;
+        case tcl::DesktopCapture::Result::CursorMoved:
+            capture.release();
+            if (compositor.has_desktop() && converter.convert(compositor.compose(capture.context(), capture.cursor()))) {
+                have_content = dirty = true;
+                content_time_us = now_us();
             }
             break;
         case tcl::DesktopCapture::Result::Timeout:
@@ -387,12 +432,20 @@ int main(int argc, char** argv) {
                      frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0, encode_us_max / 1000.0,
                      send_gap_max_us / 1000.0, late_sends);
             frames_sent = bytes_sent = encode_us_total = encode_us_max = send_gap_max_us = late_sends = 0;
+            if (opt.audio && peer) {
+                const double db = audio.take_peak_dbfs();
+                if (std::isinf(db)) TCL_INFO("stats", "audio peak: silence");
+                else TCL_INFO("stats", "audio peak: {:.1f} dBFS", db);
+            }
             last_stats = now;
         }
     }
 
     TCL_INFO("main", "stopping");
     audio.stop();
+    if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit
+    gamepads.unplug_all();
+    SetEvent(g_cleanup_done);
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     timeEndPeriod(1);
     return 0;

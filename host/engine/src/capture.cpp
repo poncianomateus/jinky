@@ -64,6 +64,9 @@ bool DesktopCapture::init(int output_index) {
     ComPtr<ID3D10Multithread> mt;
     if (SUCCEEDED(context_.As(&mt))) mt->SetMultithreadProtected(TRUE);
 
+    if (!cursor_.init(device_.Get(), context_.Get()))
+        TCL_WARN("capture", "mouse cursor will not be shown: {}", cursor_.error());
+
     if (FAILED(chosen.output.As(&output_))) {
         error_ = "IDXGIOutput1 not supported";
         return false;
@@ -104,9 +107,10 @@ DesktopCapture::Result DesktopCapture::acquire(int timeout_ms, ComPtr<ID3D11Text
         return Result::Error;
     }
     holding_frame_ = true;
+    const bool cursor_changed = cursor_.update(dup_.Get(), info);
 
     // LastPresentTime == 0 means only the mouse moved; the image itself did not change.
-    if (info.LastPresentTime.QuadPart == 0) return Result::Timeout;
+    if (info.LastPresentTime.QuadPart == 0) return cursor_changed ? Result::CursorMoved : Result::Timeout;
 
     // LastPresentTime is a QueryPerformanceCounter value; MSVC's steady_clock uses the same counter.
     static const int64_t qpc_freq = [] {

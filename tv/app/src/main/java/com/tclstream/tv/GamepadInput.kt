@@ -21,8 +21,22 @@ import kotlin.math.roundToInt
  * Each pad's full state is sent on every change and repeated every 50 ms, so a lost datagram
  * never leaves a button "stuck" on the PC.
  */
-class GamepadInput(private val context: Context, private val receiver: NativeReceiver) :
-    InputManager.InputDeviceListener {
+class GamepadInput(
+    private val context: Context,
+    private val receiver: NativeReceiver,
+    /** Called on the input thread when a pad holds View + Menu for a second. */
+    private val onMenuCombo: () -> Unit,
+) : InputManager.InputDeviceListener {
+
+    /**
+     * While the TV menu is open, gamepad events drive the menu (Android focus navigation) and the PC
+     * sees all pads released, so the game doesn't receive stray input.
+     */
+    @Volatile var menuOpen = false
+        set(value) {
+            field = value
+            if (value) synchronized(pads) { pads.values.forEach { it.release(); send(it) } }
+        }
 
     private class Pad(val index: Int, val deviceId: Int, val name: String) {
         var buttons = 0
@@ -35,6 +49,11 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
         var dpadFromHat = 0
         var seq = 0
         var rumbleActive = false
+        var comboSinceMs = 0L
+
+        fun release() {
+            buttons = 0; lt = 0; rt = 0; lx = 0; ly = 0; rx = 0; ry = 0; dpadFromHat = 0
+        }
     }
 
     private val pads = HashMap<Int, Pad>()  // by InputDevice id
@@ -45,7 +64,22 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
 
     private val tick = object : Runnable {
         override fun run() {
-            synchronized(pads) { pads.values.forEach { send(it) } }
+            val now = android.os.SystemClock.uptimeMillis()
+            synchronized(pads) {
+                pads.values.forEach {
+                    send(it)
+                    // View + Menu held for a second opens the TV menu.
+                    if (!menuOpen && (it.buttons and COMBO) == COMBO) {
+                        if (it.comboSinceMs == 0L) it.comboSinceMs = now
+                        else if (now - it.comboSinceMs >= COMBO_HOLD_MS) {
+                            it.comboSinceMs = 0L
+                            onMenuCombo()
+                        }
+                    } else {
+                        it.comboSinceMs = 0L
+                    }
+                }
+            }
             handler.postDelayed(this, REPEAT_MS)
         }
     }
@@ -109,9 +143,14 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
 
     private fun isGamepad(dev: InputDevice): Boolean {
         val s = dev.sources
-        return !dev.isVirtual &&
-            ((s and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
-                (s and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
+        val claimsGamepad = (s and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+            (s and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+        if (dev.isVirtual || !claimsGamepad) return false
+        // Some TVs expose helper devices that claim to be gamepads (the TCL has Google's
+        // "virtual-search", vendor 0x18D1, which even reports an A button). Real controllers report
+        // at least one axis (sticks, triggers or a hat D-pad); requiring one keeps such devices
+        // from taking player 1.
+        return dev.motionRanges.isNotEmpty()
     }
 
     private fun updateSummary() {
@@ -123,6 +162,8 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
 
     /** Returns true if the event came from a gamepad and was consumed. */
     fun onKeyEvent(e: KeyEvent): Boolean {
+        // In the menu: let Android handle it (A -> select, B -> back, D-pad/stick -> focus).
+        if (menuOpen) return false
         val pad = synchronized(pads) { pads[e.deviceId] } ?: run {
             // A gamepad we missed (e.g. connected before start); pick it up now.
             onInputDeviceAdded(e.deviceId)
@@ -144,6 +185,7 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
     }
 
     fun onMotionEvent(e: MotionEvent): Boolean {
+        if (menuOpen) return false
         if ((e.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         val pad = synchronized(pads) { pads[e.deviceId] } ?: return false
         val dev = e.device ?: return false
@@ -229,6 +271,8 @@ class GamepadInput(private val context: Context, private val receiver: NativeRec
         private const val REPEAT_MS = 50L
         private const val RUMBLE_POLL_MS = 10L
         private const val RUMBLE_HOLD_MS = 2000L
+        private const val COMBO = 0x0010 or 0x0020  // Menu (Start) + View (Back)
+        private const val COMBO_HOLD_MS = 1000L
 
         // XInput button bits (must match tclproto::GamepadButtons)
         private const val BTN_UP = 0x0001

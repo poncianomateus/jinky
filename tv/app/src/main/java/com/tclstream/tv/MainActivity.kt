@@ -28,6 +28,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var pipeline: VideoPipeline? = null
     private var audio: AudioPlayer? = null
     private var gamepads: GamepadInput? = null
+    private lateinit var menu: android.widget.LinearLayout
     private var startError: String? = null
     private val hardwareReport by lazy { HardwareInfo.report() }
 
@@ -80,6 +81,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
             statusParams.setMargins(margin, margin, margin, margin)
             addView(statusText, statusParams)
+            menu = buildMenu()
+            addView(menu, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         })
         Log.i(TAG, "hardware:\n$hardwareReport")
         Log.i(TAG, "tuning: $tuning displayHz=$displayHz surfaceRate=$surfaceRate")
@@ -103,7 +106,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startError = r.start(HOST_PORT)
         receiver = r
         audio = AudioPlayer(r).also { it.start() }
-        gamepads = GamepadInput(this, r).also { it.start() }
+        gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
     }
@@ -150,6 +153,70 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         gamepads?.onMotionEvent(event) == true || super.dispatchGenericMotionEvent(event)
 
+    // --- in-stream menu: View + Menu held on the controller, or Back on the TV remote ---
+
+    private fun buildMenu(): android.widget.LinearLayout {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        return android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(dp(32), dp(24), dp(32), dp(24))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xF00B0F17.toInt())
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), 0x402F7BFF)
+            }
+            addView(TextView(context).apply {
+                text = "TclStream"
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                setPadding(0, 0, 0, dp(16))
+            })
+            fun item(label: String, action: () -> Unit) = addView(android.widget.Button(context).apply {
+                text = label
+                isAllCaps = false
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextColor(Color.WHITE)
+                minWidth = dp(320)
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    val focused = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(0xFF2F7BFF.toInt()); cornerRadius = dp(10).toFloat()
+                    }
+                    val normal = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(0x22FFFFFF); cornerRadius = dp(10).toFloat()
+                    }
+                    addState(intArrayOf(android.R.attr.state_focused), focused)
+                    addState(intArrayOf(), normal)
+                }
+                setOnClickListener { action() }
+            }, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            item("Continuar jogando") { hideMenu() }
+            item("Mostrar/ocultar estatísticas") {
+                statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                hideMenu()
+            }
+            item("Sair do TclStream") { finish() }
+        }
+    }
+
+    private fun showMenu() {
+        if (menu.visibility == View.VISIBLE) return
+        gamepads?.menuOpen = true
+        menu.visibility = View.VISIBLE
+        menu.getChildAt(1).requestFocus()
+    }
+
+    private fun hideMenu() {
+        menu.visibility = View.GONE
+        gamepads?.menuOpen = false
+    }
+
+    @Deprecated("Back opens/closes the menu instead of leaving")
+    override fun onBackPressed() {
+        if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER ||
             keyCode == KeyEvent.KEYCODE_BUTTON_A
@@ -161,7 +228,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun buildOverlay(): String = buildString {
-        appendLine("TclStream — teste de transmissão (OK oculta este painel)")
+        appendLine("TclStream — estatísticas (OK oculta · Voltar ou View+Menu no controle abre o menu)")
         appendLine()
         startError?.let { appendLine("ERRO de rede: $it") }
         receiver?.let { appendLine(it.status()) }

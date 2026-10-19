@@ -29,6 +29,15 @@ public:
     void stop();
     const std::string& error() const { return error_; }
     const std::string& description() const { return description_; }
+    // Peak level of the audio captured since the last call, in dBFS (-inf when silent).
+    double take_peak_dbfs();
+
+    // Mutes/unmutes the PC's default output device (the stream keeps the sound). Restores the
+    // user's original mute state on unmute. Returns false if the device can't be controlled.
+    static bool set_pc_muted(bool muted);
+    // A marker file records "TclStream muted the PC"; if the process died before unmuting, the
+    // next run calls this to unmute. Returns true if it restored the sound.
+    static bool restore_if_left_muted();
 
 private:
     void run();
@@ -38,6 +47,7 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<int> init_state_{0};  // 0 pending, 1 ok, -1 failed
+    std::atomic<int> peak_{0};        // max |sample| since last take_peak_dbfs()
     std::string error_, description_;
 };
 

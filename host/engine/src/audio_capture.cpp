@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <avrt.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
@@ -52,6 +53,62 @@ float read_sample(const BYTE* p, SampleType t) {
 }  // namespace
 
 AudioCapture::~AudioCapture() { stop(); }
+
+double AudioCapture::take_peak_dbfs() {
+    const int p = peak_.exchange(0);
+    return p > 0 ? 20.0 * std::log10(p / 32767.0) : -INFINITY;
+}
+
+namespace {
+
+ComPtr<IAudioEndpointVolume> default_endpoint_volume() {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    ComPtr<IMMDevice> device;
+    ComPtr<IAudioEndpointVolume> volume;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))) ||
+        FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) ||
+        FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, &volume)))
+        return nullptr;
+    return volume;
+}
+
+// %LOCALAPPDATA%\TclStream\pc-muted.flag exists while TclStream holds the PC muted.
+std::wstring mute_marker_path() {
+    wchar_t base[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    std::wstring dir = std::wstring(base) + L"\\TclStream";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir + L"\\pc-muted.flag";
+}
+
+}  // namespace
+
+bool AudioCapture::set_pc_muted(bool muted) {
+    auto volume = default_endpoint_volume();
+    if (!volume) return false;
+    const std::wstring marker = mute_marker_path();
+    if (muted) {
+        BOOL was = FALSE;
+        volume->GetMute(&was);
+        if (was) return true;  // the user had it muted already: not ours to restore later
+        if (FAILED(volume->SetMute(TRUE, nullptr))) return false;
+        if (!marker.empty()) CloseHandle(CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr));
+        return true;
+    }
+    // Only undo a mute we did ourselves.
+    if (marker.empty() || GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return true;
+    const bool ok = SUCCEEDED(volume->SetMute(FALSE, nullptr));
+    if (ok) DeleteFileW(marker.c_str());
+    return ok;
+}
+
+bool AudioCapture::restore_if_left_muted() {
+    const std::wstring marker = mute_marker_path();
+    if (marker.empty() || GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    return set_pc_muted(false);
+}
 
 bool AudioCapture::start(ChunkCallback on_chunk) {
     on_chunk_ = std::move(on_chunk);
@@ -218,6 +275,9 @@ void AudioCapture::run() {
             while (staging.size() - used >= chunk_values) {
                 for (size_t i = 0; i < chunk_values; ++i)
                     chunk[i] = int16_t(std::lround(std::clamp(staging[used + i], -1.0f, 1.0f) * 32767.0f));
+                int peak = 0;
+                for (int16_t v : chunk) peak = std::max(peak, std::abs(int(v)));
+                if (peak > peak_) peak_ = peak;
                 on_chunk_(chunk.data(), now_us());
                 used += chunk_values;
             }

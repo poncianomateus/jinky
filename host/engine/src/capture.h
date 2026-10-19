@@ -7,13 +7,16 @@
 
 #include <string>
 
+#include "cursor.h"
+
 namespace tcl {
 
 using Microsoft::WRL::ComPtr;
 
 class DesktopCapture {
 public:
-    enum class Result { NewFrame, Timeout, AccessLost, Error };
+    // CursorMoved: the desktop image is unchanged but the mouse cursor moved or changed shape.
+    enum class Result { NewFrame, CursorMoved, Timeout, AccessLost, Error };
 
     // Picks the first adapter that has a desktop output attached (preferring NVIDIA) and
     // creates a D3D11 device on it. The same device must be used for conversion and NVENC.
@@ -32,6 +35,7 @@ public:
     UINT width() const { return width_; }
     UINT height() const { return height_; }
     const std::wstring& adapter_name() const { return adapter_name_; }
+    CursorOverlay& cursor() { return cursor_; }
     // When Windows presented the last acquired frame, in steady_clock microseconds.
     uint64_t present_time_us() const { return present_time_us_; }
     const std::string& error() const { return error_; }
@@ -44,6 +48,7 @@ private:
     ComPtr<IDXGIOutput1> output_;
     ComPtr<IDXGIOutputDuplication> dup_;
     bool holding_frame_ = false;
+    CursorOverlay cursor_;
     uint64_t present_time_us_ = 0;
     UINT width_ = 0, height_ = 0;
     std::wstring adapter_name_;

@@ -199,6 +199,9 @@ class VideoPipeline(
                     buf.clear()
                     val n = receiver.readFrame(buf, 10, meta)
                     if (n > 0) {
+                        // Video resumes after a pause (host restarted, Wi-Fi gap): restart the stall
+                        // clock, or the pause itself would look like a decoder that stopped producing.
+                        if (now - lastFeedMs > STALL_MS) lastProgressMs = now
                         // System.nanoTime() is CLOCK_MONOTONIC, the same clock the native side uses.
                         val pts = System.nanoTime() / 1000
                         captureTimeByPts[pts] = meta[2]
