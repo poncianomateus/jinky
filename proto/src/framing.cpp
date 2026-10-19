@@ -90,7 +90,7 @@ void FrameAssembler::complete(uint32_t frame_id) {
     if (key) waiting_for_keyframe_ = false;
 
     stats_.frames_delivered++;
-    on_frame_(Frame{frame_id, key, p.header.capture_time_us, std::move(p.data)});
+    on_frame_(Frame{frame_id, key, p.header.is_hevc(), p.header.capture_time_us, std::move(p.data)});
 }
 
 void FrameAssembler::abandon_older_than(uint32_t frame_id) {

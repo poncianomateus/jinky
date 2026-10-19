@@ -76,6 +76,7 @@ struct Options {
     bool stress = false;
     bool audio = true;
     bool mute_pc = false;
+    std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
     tcl::EncoderConfig enc;
 };
 
@@ -90,6 +91,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--stress") o.test_pattern = o.stress = true;
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--mute-pc") o.mute_pc = true;
+        else if (a == "--codec" && (v = next())) o.codec = v;
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
         else if (a == "--size" && (v = next())) {
@@ -100,8 +102,9 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.enc.height = uint32_t(std::atoi(size.substr(x + 1).c_str()));
         } else {
             std::fprintf(stderr,
-                         "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 30000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc]\n");
+                         "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 40000]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc]\n"
+                         "                      [--codec auto|hevc|h264]\n");
             return false;
         }
     }
@@ -273,6 +276,19 @@ int main(int argc, char** argv) {
                 if (!peer || *peer != from) {
                     busy_logged = false;
                     TCL_INFO("session", "receiver connected: {}", from.to_string());
+                    // Pick the codec for this TV (Hello.value lists what it decodes in hardware).
+                    const bool tv_hevc = msg->value & tclproto::kCodecHevc;
+                    const auto want = (opt.codec == "hevc" || (opt.codec == "auto" && tv_hevc)) ? tcl::VideoCodec::HEVC
+                                                                                                : tcl::VideoCodec::H264;
+                    if (want != opt.enc.codec) {
+                        opt.enc.codec = want;
+                        encoder.close();
+                        if (!encoder.open(capture.device(), converter.output(), opt.enc)) {
+                            TCL_ERROR("encoder", "{}", encoder.error());
+                            return 1;
+                        }
+                    }
+                    TCL_INFO("encoder", "active: {}", encoder.description());
                     peer = from;
                     session_id++;
                     idr_pending = true;
@@ -400,7 +416,8 @@ int main(int argc, char** argv) {
 
         tclproto::MediaHeader h;
         h.type = PacketType::Video;
-        h.flags = key ? tclproto::kFlagKeyframe : 0;
+        h.flags = uint8_t((key ? tclproto::kFlagKeyframe : 0) |
+                          (opt.enc.codec == tcl::VideoCodec::HEVC ? tclproto::kFlagHevc : 0));
         h.session_id = session_id;
         h.frame_id = frame_id++;
         // 0 = repeated old content (heartbeat/keyframe), so the receiver must not count it as latency.

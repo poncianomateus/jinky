@@ -103,6 +103,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         val r = NativeReceiver()
+        // Tell the PC which codecs this TV decodes in hardware at 1080p60 (it prefers HEVC).
+        var codecs = 0
+        if (HardwareInfo.bestDecoder(VideoPipeline.MIME_AVC) != null) codecs = codecs or 1
+        if (HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
+        r.setCodecSupport(codecs)
         startError = r.start(HOST_PORT)
         receiver = r
         audio = AudioPlayer(r).also { it.start() }

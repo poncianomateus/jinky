@@ -22,6 +22,7 @@ public:
     struct FrameMeta {
         uint32_t frame_id = 0;
         bool keyframe = false;
+        bool hevc = false;
         uint64_t capture_time_us = 0;
     };
 
@@ -37,6 +38,8 @@ public:
     // Decoder lost sync (error, stall, recreation): next frames are useless until a keyframe.
     void request_keyframe();
     void report_presented(uint64_t count) { presented_ = count; }
+    // Codecs this device decodes in hardware (tclproto::CodecSupport), announced in every Hello.
+    void set_codec_support(uint32_t mask) { codec_support_ = mask; }
     // Average capture-to-display latency measured by the decoder side, forwarded to the host log.
     void report_latency_us(uint32_t us) { latency_us_ = us; }
 
@@ -88,6 +91,7 @@ private:
     // Set when the decoder needs a keyframe: P-frames are dropped until one arrives.
     std::atomic<bool> await_keyframe_{false};
     std::atomic<uint64_t> presented_{0};
+    std::atomic<uint32_t> codec_support_{tclproto::kCodecH264};
     std::atomic<uint32_t> latency_us_{0};
 
     // Clock sync: keep the sample with the lowest round trip among the recent ones (least jitter).

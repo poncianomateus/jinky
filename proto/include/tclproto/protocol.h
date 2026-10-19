@@ -37,6 +37,13 @@ enum class PacketType : uint8_t {
 
 enum PacketFlags : uint8_t {
     kFlagKeyframe = 1 << 0,
+    kFlagHevc = 1 << 1,  // video frame is H.265/HEVC (otherwise H.264)
+};
+
+// Hello.value: video codecs the receiver can decode in hardware (bit mask).
+enum CodecSupport : uint32_t {
+    kCodecH264 = 1 << 0,
+    kCodecHevc = 1 << 1,
 };
 
 // Header that precedes every media fragment.
@@ -53,6 +60,7 @@ struct MediaHeader {
     static constexpr size_t kSize = 32;
 
     bool is_keyframe() const { return flags & kFlagKeyframe; }
+    bool is_hevc() const { return flags & kFlagHevc; }
 
     // Writes kSize bytes into out (out.size() must be >= kSize).
     void write(std::span<uint8_t> out) const;

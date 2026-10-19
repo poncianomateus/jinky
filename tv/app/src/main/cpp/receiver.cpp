@@ -79,7 +79,7 @@ void Receiver::net_loop() {
         const int64_t now = now_ms();
         // Hello doubles as discovery (broadcast until the host answers) and keepalive.
         if (now - last_hello >= 1000) {
-            send_control(PacketType::Hello, 0);
+            send_control(PacketType::Hello, codec_support_);
             last_hello = now;
         }
         if (host_ && now - last_stats >= 1000) {
@@ -347,7 +347,7 @@ int Receiver::read_frame(uint8_t* dst, size_t capacity, int timeout_ms, FrameMet
         return -size;
     }
     std::memcpy(dst, f.data.data(), f.data.size());
-    meta = {f.frame_id, f.keyframe, f.capture_time_us};
+    meta = {f.frame_id, f.keyframe, f.hevc, f.capture_time_us};
     const int size = int(f.data.size());
     queue_.pop_front();
     return size;

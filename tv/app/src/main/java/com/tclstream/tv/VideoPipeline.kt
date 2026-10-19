@@ -103,15 +103,16 @@ class VideoPipeline(
         vsyncThread.quitSafely()
     }
 
-    private fun createDecoder(): MediaCodec? {
-        val best = HardwareInfo.bestDecoder(MIME)
+    private fun createDecoder(mime: String): MediaCodec? {
+        val best = HardwareInfo.bestDecoder(mime)
+        val codecName = if (mime == MIME_HEVC) "HEVC" else "H.264"
         if (best == null) {
-            fail("Esta TV não tem decodificador H.264 por hardware")
+            fail("Esta TV não tem decodificador $codecName por hardware")
             return null
         }
         return try {
             val c = MediaCodec.createByCodecName(best.name)
-            val format = MediaFormat.createVideoFormat(MIME, width, height).apply {
+            val format = MediaFormat.createVideoFormat(mime, width, height).apply {
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_FRAME_BYTES)
                 if (Build.VERSION.SDK_INT >= 23) setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
                 if (Build.VERSION.SDK_INT >= 30 && best.lowLatency) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
@@ -127,8 +128,8 @@ class VideoPipeline(
                 onRendered(pts, renderNanos / 1000)
             }, callbackHandler)
             c.start()
-            decoderName = best.name + if (best.lowLatency) " (baixa latência)" else ""
-            Log.i(TAG, "decoder created: ${best.name} lowLatency=${best.lowLatency} tuning=$tuning refresh=$refreshRate")
+            decoderName = "$codecName · ${best.name}" + if (best.lowLatency) " (baixa latência)" else ""
+            Log.i(TAG, "decoder created: ${best.name} ($mime) lowLatency=${best.lowLatency} tuning=$tuning refresh=$refreshRate")
             c
         } catch (e: Exception) {
             fail("Falha ao criar o decodificador ${best.name}: ${e.message}")
@@ -165,10 +166,18 @@ class VideoPipeline(
         }
     }
 
-    /** Creates the decoder, feeds it, and watches for stalls. Owns decoder lifetime. */
+    /**
+     * Reads frames, (re)creates the decoder for each frame's codec, feeds it, and watches for
+     * stalls. Owns decoder lifetime. Frames are read into a staging buffer first so the codec is
+     * known before a decoder exists (the PC picks H.264 or HEVC per session).
+     */
     private fun inputLoop() {
         val meta = LongArray(3)
-        var pendingInput = -1
+        val staging = java.nio.ByteBuffer.allocateDirect(MAX_FRAME_BYTES)
+        var pendingSize = 0
+        var pendingFlags = 0L
+        var pendingCapture = 0L
+        var codecMime = ""
         var decoderStartMs = 0L
         var lastFeedMs = 0L
         var lastProgressMs = 0L
@@ -177,47 +186,66 @@ class VideoPipeline(
 
         while (running) {
             val now = SystemClock.elapsedRealtime()
-            var c = codec
-            if (c == null) {
-                c = createDecoder()
-                if (c == null) {
-                    SystemClock.sleep(2000)
-                    continue
-                }
-                pendingInput = -1
-                codec = c
-                receiver.requestKeyframe()
-                decoderStartMs = now
-                lastProgressMs = now
-                lastProgressCount = framesDecoded.get() + framesPresented.get()
-                stage = Stage.WAITING_FOR_VIDEO
-            }
             try {
-                if (pendingInput < 0) pendingInput = c.dequeueInputBuffer(5_000)
-                if (pendingInput >= 0) {
-                    val buf = c.getInputBuffer(pendingInput)!!
-                    buf.clear()
-                    val n = receiver.readFrame(buf, 10, meta)
+                if (pendingSize == 0) {
+                    staging.clear()
+                    val n = receiver.readFrame(staging, 10, meta)
+                    if (n < 0) Log.w(TAG, "frame of ${-n} bytes exceeds the input buffer")
                     if (n > 0) {
+                        pendingSize = n
+                        pendingFlags = meta[1]
+                        pendingCapture = meta[2]
                         // Video resumes after a pause (host restarted, Wi-Fi gap): restart the stall
                         // clock, or the pause itself would look like a decoder that stopped producing.
                         if (now - lastFeedMs > STALL_MS) lastProgressMs = now
+                    }
+                }
+                if (pendingSize > 0) {
+                    val mime = if (pendingFlags and FLAG_HEVC != 0L) MIME_HEVC else MIME_AVC
+                    var c = codec
+                    if (c == null || mime != codecMime) {
+                        releaseCodec()
+                        c = createDecoder(mime)
+                        if (c == null) {
+                            pendingSize = 0
+                            SystemClock.sleep(2000)
+                            continue
+                        }
+                        codec = c
+                        codecMime = mime
+                        decoderStartMs = now
+                        lastProgressMs = now
+                        lastProgressCount = framesDecoded.get() + framesPresented.get()
+                        stage = Stage.WAITING_FOR_VIDEO
+                        if (pendingFlags and FLAG_KEYFRAME == 0L) {
+                            // A fresh decoder must start on a keyframe.
+                            pendingSize = 0
+                            receiver.requestKeyframe()
+                            continue
+                        }
+                    }
+                    val idx = c.dequeueInputBuffer(5_000)
+                    if (idx >= 0) {
+                        val buf = c.getInputBuffer(idx)!!
+                        buf.clear()
+                        staging.position(0)
+                        staging.limit(pendingSize)
+                        buf.put(staging)
                         // System.nanoTime() is CLOCK_MONOTONIC, the same clock the native side uses.
                         val pts = System.nanoTime() / 1000
-                        captureTimeByPts[pts] = meta[2]
+                        captureTimeByPts[pts] = pendingCapture
                         if (captureTimeByPts.size > 256) captureTimeByPts.clear()  // frames never rendered
-                        c.queueInputBuffer(pendingInput, 0, n, pts, 0)
-                        pendingInput = -1
+                        c.queueInputBuffer(idx, 0, pendingSize, pts, 0)
+                        pendingSize = 0
                         framesQueued.incrementAndGet()
                         lastFeedMs = now
-                    } else if (n < 0) {
-                        Log.w(TAG, "frame of ${-n} bytes exceeds decoder input buffer (${buf.capacity()})")
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "decoder input error", e)
                 lastError = "Erro no decodificador: ${e.message ?: e.javaClass.simpleName}"
                 releaseCodec()
+                pendingSize = 0
                 recoveries++
                 continue
             }
@@ -234,7 +262,7 @@ class VideoPipeline(
 
             // Stall: video keeps arriving, nothing comes out. Recreate only the decoder.
             val fedRecently = now - lastFeedMs < 1000
-            if (fedRecently && now - lastProgressMs > STALL_MS && now - decoderStartMs > STALL_MS) {
+            if (codec != null && fedRecently && now - lastProgressMs > STALL_MS && now - decoderStartMs > STALL_MS) {
                 stage = Stage.STALLED
                 lastError = "Vídeo chegando mas o decodificador não produz imagem — recriando decodificador"
                 Log.w(TAG, "$lastError (queued=${framesQueued.get()} decoded=${framesDecoded.get()} presented=${framesPresented.get()})")
@@ -242,6 +270,7 @@ class VideoPipeline(
                 recoveryTimes.addLast(now)
                 recoveries++
                 releaseCodec()
+                receiver.requestKeyframe()
                 if (recoveryTimes.size > MAX_RECOVERIES_PER_MINUTE) {
                     fail("O decodificador da TV travou ${recoveryTimes.size} vezes em 1 minuto")
                     SystemClock.sleep(10_000)  // back off instead of looping forever
@@ -311,7 +340,10 @@ class VideoPipeline(
 
     companion object {
         private const val TAG = "TclStream"
-        private const val MIME = "video/avc"
+        const val MIME_AVC = "video/avc"
+        const val MIME_HEVC = "video/hevc"
+        private const val FLAG_KEYFRAME = 1L
+        private const val FLAG_HEVC = 2L
         private const val MAX_FRAME_BYTES = 4 * 1024 * 1024
         private const val STALL_MS = 3000L
         private const val MAX_RECOVERIES_PER_MINUTE = 3

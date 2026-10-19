@@ -50,6 +50,10 @@ class GamepadInput(
         var seq = 0
         var rumbleActive = false
         var comboSinceMs = 0L
+        // View/Menu are held back briefly so the View+Menu menu shortcut never reaches the PC.
+        var viewDownAt = 0L
+        var menuDownAt = 0L
+        var comboActive = false
 
         fun release() {
             buttons = 0; lt = 0; rt = 0; lx = 0; ly = 0; rx = 0; ry = 0; dpadFromHat = 0
@@ -172,6 +176,15 @@ class GamepadInput(
         val bit = buttonFor(e.keyCode)
         val down = e.action == KeyEvent.ACTION_DOWN
         synchronized(pads) {  // the 50 ms repeat runs on another thread
+        val now = android.os.SystemClock.uptimeMillis()
+        if (bit and COMBO != 0 && e.repeatCount == 0) {
+            if (down) {
+                if (bit == BTN_VIEW) pad.viewDownAt = now else pad.menuDownAt = now
+            } else if (!pad.comboActive && now - (if (bit == BTN_VIEW) pad.viewDownAt else pad.menuDownAt) < HOLDBACK_MS) {
+                // A quick tap released before it was forwarded: deliver it as a short press.
+                send(pad, extra = bit)
+            }
+        }
         when {
             bit != 0 -> pad.buttons = if (down) pad.buttons or bit else pad.buttons and bit.inv()
             // Digital-only triggers (no analog axis): full press.
@@ -215,8 +228,22 @@ class GamepadInput(
         send(pad)
     }
 
-    private fun send(p: Pad) {
-        receiver.sendInput(p.index, true, ++p.seq, p.buttons, p.lt, p.rt, p.lx, p.ly, p.rx, p.ry)
+    private fun send(p: Pad, extra: Int = 0) {
+        receiver.sendInput(p.index, true, ++p.seq, outgoingButtons(p) or extra, p.lt, p.rt, p.lx, p.ly, p.rx, p.ry)
+    }
+
+    /** Buttons as the PC should see them: View/Menu only after [HOLDBACK_MS], never as a pair. */
+    private fun outgoingButtons(p: Pad): Int {
+        val held = p.buttons and COMBO
+        if (held == COMBO) p.comboActive = true
+        if (held == 0) p.comboActive = false
+        var out = p.buttons and COMBO.inv()
+        if (!p.comboActive) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (held and BTN_VIEW != 0 && now - p.viewDownAt >= HOLDBACK_MS) out = out or BTN_VIEW
+            if (held and BTN_MENU != 0 && now - p.menuDownAt >= HOLDBACK_MS) out = out or BTN_MENU
+        }
+        return out
     }
 
     private fun stick(e: MotionEvent, dev: InputDevice, axis: Int): Int {
@@ -271,7 +298,10 @@ class GamepadInput(
         private const val REPEAT_MS = 50L
         private const val RUMBLE_POLL_MS = 10L
         private const val RUMBLE_HOLD_MS = 2000L
-        private const val COMBO = 0x0010 or 0x0020  // Menu (Start) + View (Back)
+        private const val BTN_MENU = 0x0010  // Start
+        private const val BTN_VIEW = 0x0020  // Back
+        private const val COMBO = BTN_MENU or BTN_VIEW
+        private const val HOLDBACK_MS = 100L
         private const val COMBO_HOLD_MS = 1000L
 
         // XInput button bits (must match tclproto::GamepadButtons)

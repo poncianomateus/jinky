@@ -11,10 +11,13 @@ class NativeReceiver : AutoCloseable {
 
     fun stop() = nativeStop(handle)
 
+    /** Codecs decodable in hardware: bit0 H.264, bit1 HEVC. Sent to the PC in every Hello. */
+    fun setCodecSupport(mask: Int) = nativeSetCodecSupport(handle, mask)
+
     /**
      * Copies the next decodable frame into [dst] (must be a direct buffer).
      * Returns its size, 0 on timeout, or a negative size if it did not fit (frame dropped).
-     * [meta] receives [frameId, isKeyframe (0/1), captureTimeUs].
+     * [meta] receives [frameId, flags (bit0 keyframe, bit1 HEVC), captureTimeUs].
      */
     fun readFrame(dst: ByteBuffer, timeoutMs: Int, meta: LongArray): Int =
         nativeReadFrame(handle, dst, timeoutMs, meta)
@@ -55,6 +58,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeStart(handle: Long, port: Int): String?
         @JvmStatic external fun nativeStop(handle: Long)
+        @JvmStatic external fun nativeSetCodecSupport(handle: Long, mask: Int)
         @JvmStatic external fun nativeReadFrame(handle: Long, dst: ByteBuffer, timeoutMs: Int, meta: LongArray): Int
         @JvmStatic external fun nativeRequestKeyframe(handle: Long)
         @JvmStatic external fun nativeReportPresented(handle: Long, count: Long)

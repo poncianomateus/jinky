@@ -52,16 +52,21 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     session.apiVersion = NVENCAPI_VERSION;
     if (!check(api_.nvEncOpenEncodeSessionEx(&session, &encoder_), "nvEncOpenEncodeSessionEx")) return false;
 
+    const bool hevc = cfg.codec == VideoCodec::HEVC;
+    const GUID codec_guid = hevc ? NV_ENC_CODEC_HEVC_GUID : NV_ENC_CODEC_H264_GUID;
+    // P4 instead of P1: noticeably cleaner detail (foliage, fine edges) for ~1 ms more on an RTX 50.
+    const GUID preset_guid = NV_ENC_PRESET_P4_GUID;
+
     NV_ENC_PRESET_CONFIG preset{};
     preset.version = NV_ENC_PRESET_CONFIG_VER;
     preset.presetCfg.version = NV_ENC_CONFIG_VER;
-    if (!check(api_.nvEncGetEncodePresetConfigEx(encoder_, NV_ENC_CODEC_H264_GUID, NV_ENC_PRESET_P1_GUID,
+    if (!check(api_.nvEncGetEncodePresetConfigEx(encoder_, codec_guid, preset_guid,
                                                  NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset),
                "nvEncGetEncodePresetConfigEx"))
         return false;
 
     NV_ENC_CONFIG enc = preset.presetCfg;
-    enc.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
+    enc.profileGUID = hevc ? NV_ENC_HEVC_PROFILE_MAIN_GUID : NV_ENC_H264_PROFILE_HIGH_GUID;
     enc.gopLength = NVENC_INFINITE_GOPLENGTH;
     enc.frameIntervalP = 1;  // IPPP, no B-frames
     enc.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
@@ -71,12 +76,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     enc.rcParams.vbvBufferSize = cfg.bitrate_kbps * 1000 / cfg.fps;
     enc.rcParams.vbvInitialDelay = enc.rcParams.vbvBufferSize;
 
-    auto& h264 = enc.encodeCodecConfig.h264Config;
-    h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;
-    h264.repeatSPSPPS = 1;  // a decoder can join at any IDR
-    h264.level = NV_ENC_LEVEL_AUTOSELECT;
-    h264.chromaFormatIDC = 1;
-    auto& vui = h264.h264VUIParameters;
+    // Both codecs share the VUI layout; fill it once and copy it where it belongs.
+    NV_ENC_CONFIG_H264_VUI_PARAMETERS vui{};
     vui.videoSignalTypePresentFlag = 1;
     vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
     vui.videoFullRangeFlag = 0;  // matches the converter's 16-235 output
@@ -88,10 +89,26 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     // TV decoders hold several frames in the DPB "just in case", adding 50+ ms of latency.
     vui.bitstreamRestrictionFlag = 1;
 
+    if (hevc) {
+        auto& h = enc.encodeCodecConfig.hevcConfig;
+        h.idrPeriod = NVENC_INFINITE_GOPLENGTH;
+        h.repeatSPSPPS = 1;  // VPS/SPS/PPS with every IDR: a decoder can join at any keyframe
+        h.level = NV_ENC_LEVEL_AUTOSELECT;
+        h.chromaFormatIDC = 1;
+        h.hevcVUIParameters = vui;
+    } else {
+        auto& h = enc.encodeCodecConfig.h264Config;
+        h.idrPeriod = NVENC_INFINITE_GOPLENGTH;
+        h.repeatSPSPPS = 1;
+        h.level = NV_ENC_LEVEL_AUTOSELECT;
+        h.chromaFormatIDC = 1;
+        h.h264VUIParameters = vui;
+    }
+
     NV_ENC_INITIALIZE_PARAMS init{};
     init.version = NV_ENC_INITIALIZE_PARAMS_VER;
-    init.encodeGUID = NV_ENC_CODEC_H264_GUID;
-    init.presetGUID = NV_ENC_PRESET_P1_GUID;
+    init.encodeGUID = codec_guid;
+    init.presetGUID = preset_guid;
     init.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
     init.encodeWidth = init.darWidth = init.maxEncodeWidth = cfg.width;
     init.encodeHeight = init.darHeight = init.maxEncodeHeight = cfg.height;
@@ -154,7 +171,8 @@ bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_
 }
 
 std::string NvencEncoder::description() const {
-    return std::format("NVENC H.264 High {}x{}@{} CBR {} kbit/s, P1 ultra-low-latency", cfg_.width, cfg_.height,
+    return std::format("NVENC {} {}x{}@{} CBR {} kbit/s, P4 ultra-low-latency",
+                       cfg_.codec == VideoCodec::HEVC ? "HEVC Main" : "H.264 High", cfg_.width, cfg_.height,
                        cfg_.fps, cfg_.bitrate_kbps);
 }
 

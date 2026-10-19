@@ -27,6 +27,7 @@ public:
     struct Frame {
         uint32_t frame_id = 0;
         bool keyframe = false;
+        bool hevc = false;
         uint64_t capture_time_us = 0;
         std::vector<uint8_t> data;
     };

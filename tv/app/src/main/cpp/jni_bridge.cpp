@@ -25,11 +25,16 @@ JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStart(JNIEn
     return env->NewStringUTF(self(h)->error().c_str());
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetCodecSupport(JNIEnv*, jclass, jlong h,
+                                                                                    jint mask) {
+    self(h)->set_codec_support(uint32_t(mask));
+}
+
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStop(JNIEnv*, jclass, jlong h) {
     self(h)->stop();
 }
 
-// meta: [frameId, isKeyframe(0/1), captureTimeUs]
+// meta: [frameId, flags (bit0 keyframe, bit1 HEVC), captureTimeUs]
 JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativeReadFrame(JNIEnv* env, jclass, jlong h,
                                                                             jobject buffer, jint timeout_ms,
                                                                             jlongArray meta) {
@@ -39,7 +44,7 @@ JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativeReadFrame(JNIE
     Receiver::FrameMeta m;
     const int n = self(h)->read_frame(dst, size_t(cap), timeout_ms, m);
     if (n > 0) {
-        jlong out[3] = {jlong(m.frame_id), m.keyframe ? 1 : 0, jlong(m.capture_time_us)};
+        jlong out[3] = {jlong(m.frame_id), (m.keyframe ? 1 : 0) | (m.hevc ? 2 : 0), jlong(m.capture_time_us)};
         env->SetLongArrayRegion(meta, 0, 3, out);
     }
     return n;
