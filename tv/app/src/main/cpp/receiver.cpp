@@ -8,8 +8,8 @@
 #include <iterator>
 #include <sstream>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "TclStream", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "TclStream", __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "Jinky", __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "Jinky", __VA_ARGS__)
 
 using namespace std::chrono;
 using tclproto::PacketType;

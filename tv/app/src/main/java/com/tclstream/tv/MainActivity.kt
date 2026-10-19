@@ -19,7 +19,7 @@ import android.widget.TextView
 
 /**
  * Proof-of-life screen: full-screen video plus a diagnostic overlay that shows which milestone
- * the stream has reached. OK toggles the overlay, Back exits. Not the final TclStream UI.
+ * the stream has reached. OK toggles the overlay, Back opens the menu. Not the final Jinky UI.
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
@@ -173,7 +173,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 setStroke(dp(1), 0x402F7BFF)
             }
             addView(TextView(context).apply {
-                text = "TclStream"
+                text = "Jinky"
                 setTextColor(Color.WHITE)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
                 setPadding(0, 0, 0, dp(16))
@@ -201,7 +201,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                 hideMenu()
             }
-            item("Sair do TclStream") { finish() }
+            item("Sair do Jinky") { finish() }
         }
     }
 
@@ -233,7 +233,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun buildOverlay(): String = buildString {
-        appendLine("TclStream — estatísticas (OK oculta · Voltar ou View+Menu no controle abre o menu)")
+        appendLine("Jinky — estatísticas (OK oculta · Voltar ou View+Menu no controle abre o menu)")
         appendLine()
         startError?.let { appendLine("ERRO de rede: $it") }
         receiver?.let { appendLine(it.status()) }
@@ -283,7 +283,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     companion object {
-        private const val TAG = "TclStream"
+        private const val TAG = "Jinky"
         private const val HOST_PORT = 47100
     }
 }

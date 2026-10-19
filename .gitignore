@@ -15,3 +15,5 @@ tv/app/.cxx/
 tv/.kotlin/
 # personal editor settings
 .vscode/
+host/app/bin/
+host/app/obj/

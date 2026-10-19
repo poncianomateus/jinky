@@ -7,11 +7,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.tclstream.tv"
+        applicationId = "com.jinky.tv"
         minSdk = 25 // Fire OS 6 (Fire TV Stick 4K 1st gen) and newer
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-poc"
+        versionCode = 2
+        versionName = "0.2.0"
 
         ndk {
             // TCL 55P7K and Fire TV Sticks run ARM; x86_64 is only for the emulator.

@@ -73,12 +73,12 @@ ComPtr<IAudioEndpointVolume> default_endpoint_volume() {
     return volume;
 }
 
-// %LOCALAPPDATA%\TclStream\pc-muted.flag exists while TclStream holds the PC muted.
+// %LOCALAPPDATA%\Jinky\pc-muted.flag exists while Jinky holds the PC muted.
 std::wstring mute_marker_path() {
     wchar_t base[MAX_PATH];
     const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return {};
-    std::wstring dir = std::wstring(base) + L"\\TclStream";
+    std::wstring dir = std::wstring(base) + L"\\Jinky";
     CreateDirectoryW(dir.c_str(), nullptr);
     return dir + L"\\pc-muted.flag";
 }

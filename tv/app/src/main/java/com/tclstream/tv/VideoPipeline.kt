@@ -339,7 +339,7 @@ class VideoPipeline(
     }
 
     companion object {
-        private const val TAG = "TclStream"
+        private const val TAG = "Jinky"
         const val MIME_AVC = "video/avc"
         const val MIME_HEVC = "video/hevc"
         private const val FLAG_KEYFRAME = 1L

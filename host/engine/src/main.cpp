@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <iostream>
 #include <chrono>
 #include <cstdlib>
 #include <optional>
@@ -78,6 +79,7 @@ struct Options {
     bool audio = true;
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
+    bool stdin_control = false;  // "quit" on stdin (or stdin closing) stops the engine cleanly
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
     tcl::EncoderConfig enc;
 };
@@ -94,6 +96,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--mute-pc") o.mute_pc = true;
         else if (a == "--console") o.console = true;
+        else if (a == "--events") tcl::events_enabled() = true;
+        else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--codec" && (v = next())) o.codec = v;
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
@@ -105,7 +109,7 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.enc.height = uint32_t(std::atoi(size.substr(x + 1).c_str()));
         } else {
             std::fprintf(stderr,
-                         "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 40000]\n"
+                         "usage: jinky-engine [--port 47100] [--output 0] [--bitrate 40000]\n"
                          "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console]\n"
                          "                      [--codec auto|hevc|h264]\n");
             return false;
@@ -124,6 +128,15 @@ int main(int argc, char** argv) {
         TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
     if (tcl::AudioCapture::restore_if_left_muted()) TCL_INFO("audio", "PC sound restored (left muted by a previous run)");
     SetConsoleCtrlHandler(on_console_ctrl, TRUE);
+    if (opt.stdin_control) {
+        // The desktop app runs the engine without a console; it stops it by writing "quit" or by
+        // closing the pipe, so cleanup (display, sound, virtual pads) always runs.
+        std::thread([] {
+            std::string line;
+            while (std::getline(std::cin, line) && line != "quit") {}
+            g_quit = true;
+        }).detach();
+    }
     timeBeginPeriod(1);
     // Real-time-ish scheduling: a frame that waits for the CPU is a frame the TV shows late.
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
@@ -170,6 +183,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     TCL_INFO("encoder", "active: {}", encoder.description());
+    tcl::emit_event("ready", "\"gpu\":" + tcl::json_str(utf8(capture.adapter_name())) + ",\"desktop\":\"" +
+                                 std::to_string(capture.width()) + "x" + std::to_string(capture.height()) + "\"");
 
     tclproto::UdpSocket sock;
     if (!sock.open(opt.port)) {
@@ -214,6 +229,7 @@ int main(int argc, char** argv) {
         tclproto::RumbleMessage{audio_session, pad, large_motor, small_motor}.write(msg);
         sock.send_to({uint32_t(p >> 16), uint16_t(p & 0xFFFF)}, msg);
     });
+    tcl::emit_event("gamepads", std::string("\"available\":") + (gamepads_ok ? "true" : "false"));
     if (gamepads_ok) TCL_INFO("gamepad", "ViGEmBus ready: TV controllers will appear as Xbox 360 pads");
     else TCL_WARN("gamepad", "{}", gamepads.error());
     // In test-pattern mode the bar restarts every 180 frames; the beep marks that moment.
@@ -287,6 +303,7 @@ int main(int argc, char** argv) {
                 if (!peer || *peer != from) {
                     busy_logged = false;
                     TCL_INFO("session", "receiver connected: {}", from.to_string());
+                    tcl::emit_event("connected", "\"tv\":" + tcl::json_str(from.to_string()));
                     // Pick the codec for this TV (Hello.value lists what it decodes in hardware).
                     const bool tv_hevc = msg->value & tclproto::kCodecHevc;
                     const auto want = (opt.codec == "hevc" || (opt.codec == "auto" && tv_hevc)) ? tcl::VideoCodec::HEVC
@@ -300,6 +317,8 @@ int main(int argc, char** argv) {
                         }
                     }
                     TCL_INFO("encoder", "active: {}", encoder.description());
+                    tcl::emit_event("codec", "\"codec\":" + tcl::json_str(opt.enc.codec == tcl::VideoCodec::HEVC ? "HEVC" : "H.264") +
+                                                 ",\"bitrate_kbps\":" + std::to_string(opt.enc.bitrate_kbps));
                     peer = from;
                     session_id++;
                     idr_pending = true;
@@ -316,8 +335,10 @@ int main(int argc, char** argv) {
                     TCL_INFO("receiver", "frames presented so far: {}", msg->value);
                 } else if (msg->type == PacketType::LatencyReport) {
                     TCL_INFO("receiver", "capture-to-display latency: {:.1f} ms", msg->value / 1000.0);
+                    tcl::emit_event("latency", std::format("\"ms\":{:.1f}", msg->value / 1000.0));
                 } else if (msg->type == PacketType::Bye) {
                     TCL_INFO("session", "receiver left");
+                    tcl::emit_event("disconnected", "\"reason\":\"left\"");
                     peer.reset();
                     publish_peer();
                     gamepads.unplug_all();
@@ -327,6 +348,7 @@ int main(int argc, char** argv) {
         if (n < 0) TCL_WARN("net", "{}", sock.error());
         if (peer && steady_clock::now() - last_peer_msg > 5s) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
+            tcl::emit_event("disconnected", "\"reason\":\"silent\"");
             peer.reset();
             publish_peer();
             gamepads.unplug_all();
@@ -455,6 +477,9 @@ int main(int argc, char** argv) {
 
         if (now - last_stats >= 2s) {
             const double secs = duration<double>(now - last_stats).count();
+            tcl::emit_event("stats", std::format("\"fps\":{:.1f},\"mbps\":{:.1f},\"encode_ms\":{:.2f}", frames_sent / secs,
+                                                 bytes_sent * 8 / secs / 1e6,
+                                                 frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0));
             TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s, encode avg {:.2f} max {:.2f} ms, send gap max {:.1f} ms, late sends {}",
                      frames_sent / secs, bytes_sent * 8 / secs / 1e6,
                      frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0, encode_us_max / 1000.0,
@@ -470,6 +495,7 @@ int main(int argc, char** argv) {
     }
 
     TCL_INFO("main", "stopping");
+    tcl::emit_event("stopping");
     audio.stop();
     console.leave();
     if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit

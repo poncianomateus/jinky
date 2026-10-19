@@ -109,7 +109,7 @@ class AudioPlayer(private val receiver: NativeReceiver) {
     }
 
     companion object {
-        private const val TAG = "TclStream"
+        private const val TAG = "Jinky"
         private const val RATE = 48_000
         private const val CHUNK_FRAMES = 240  // 5 ms
         private const val WARMUP_NS = 1_500_000_000L

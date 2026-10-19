@@ -35,7 +35,7 @@ public:
     // Mutes/unmutes the PC's default output device (the stream keeps the sound). Restores the
     // user's original mute state on unmute. Returns false if the device can't be controlled.
     static bool set_pc_muted(bool muted);
-    // A marker file records "TclStream muted the PC"; if the process died before unmuting, the
+    // A marker file records "Jinky muted the PC"; if the process died before unmuting, the
     // next run calls this to unmute. Returns true if it restored the sound.
     static bool restore_if_left_muted();
 

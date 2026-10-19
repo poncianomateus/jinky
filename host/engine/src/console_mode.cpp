@@ -19,12 +19,12 @@ std::string narrow(const std::wstring& w) {
     return s;
 }
 
-// %LOCALAPPDATA%\TclStream\console.flag holds the display name while console mode is on.
+// %LOCALAPPDATA%\Jinky\console.flag holds the display name while console mode is on.
 std::wstring marker_path() {
     wchar_t base[MAX_PATH];
     const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return {};
-    std::wstring dir = std::wstring(base) + L"\\TclStream";
+    std::wstring dir = std::wstring(base) + L"\\Jinky";
     CreateDirectoryW(dir.c_str(), nullptr);
     return dir + L"\\console.flag";
 }
@@ -84,6 +84,7 @@ void ConsoleMode::enter(const std::wstring& display) {
     if (!AudioCapture::set_pc_muted(true)) TCL_WARN("console", "could not mute the PC");
     open_url(L"steam://open/bigpicture");
     TCL_INFO("console", "console mode on: Steam Big Picture, 60 Hz, PC muted");
+    emit_event("console", "\"on\":true");
 }
 
 void ConsoleMode::leave() {
@@ -94,6 +95,7 @@ void ConsoleMode::leave() {
     AudioCapture::set_pc_muted(false);
     if (const auto marker = marker_path(); !marker.empty()) DeleteFileW(marker.c_str());
     TCL_INFO("console", "console mode off: display and sound restored");
+    emit_event("console", "\"on\":false");
 }
 
 bool ConsoleMode::restore_if_left() {

@@ -54,7 +54,10 @@ void GamepadHub::apply(const tclproto::InputState& s) {
     auto client = static_cast<PVIGEM_CLIENT>(client_);
 
     if (!s.connected) {
-        if (pad.target) TCL_INFO("gamepad", "pad {} disconnected on the TV", s.pad_index);
+        if (pad.target) {
+            TCL_INFO("gamepad", "pad {} disconnected on the TV", s.pad_index);
+            emit_event("pad", std::format("\"index\":{},\"on\":false", s.pad_index));
+        }
         unplug(s.pad_index);
         return;
     }
@@ -72,6 +75,7 @@ void GamepadHub::apply(const tclproto::InputState& s) {
         vigem_target_x360_register_notification(client, target, x360_notification, this);
         pad.target = target;
         TCL_INFO("gamepad", "virtual Xbox 360 pad {} plugged in", s.pad_index);
+        emit_event("pad", std::format("\"index\":{},\"on\":true", s.pad_index));
     }
     pad.last_seq = s.seq;
     pad.last_update = std::chrono::steady_clock::now();
@@ -93,6 +97,7 @@ void GamepadHub::expire(std::chrono::steady_clock::duration timeout) {
     for (int i = 0; i < kMaxPads; ++i) {
         if (pads_[i].target && now - pads_[i].last_update > timeout) {
             TCL_WARN("gamepad", "pad {} silent, unplugging it", i);
+            emit_event("pad", std::format("\"index\":{},\"on\":false", i));
             unplug(i);
         }
     }

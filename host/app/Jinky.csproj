@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- NotifyIcon (tray) lives in Windows Forms. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Jinky</AssemblyName>
+    <RootNamespace>Jinky</RootNamespace>
+    <ApplicationIcon>Assets\jinky.ico</ApplicationIcon>
+    <Version>0.2.0</Version>
+    <Product>Jinky</Product>
+    <Description>Jinky — jogue os jogos do PC na TV</Description>
+    <!-- Everything the user runs ends up in build\app next to the engine. -->
+    <OutputPath>..\..\build\app\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms is only used for the tray icon; keep its names out of the global usings (WPF clash). -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\mark-256.png" />
+    <Content Include="Assets\jinky.ico" Link="jinky.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The C++ streaming engine (built by host/engine) ships next to Jinky.exe. -->
+    <None Include="..\..\build\host\Release\jinky-engine.exe" Link="jinky-engine.exe"
+          CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\host\Release\jinky-engine.exe')" />
+  </ItemGroup>
+
+</Project>

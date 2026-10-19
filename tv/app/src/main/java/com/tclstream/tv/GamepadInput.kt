@@ -293,7 +293,7 @@ class GamepadInput(
     }
 
     companion object {
-        private const val TAG = "TclStream"
+        private const val TAG = "Jinky"
         private const val MAX_PADS = 4
         private const val REPEAT_MS = 50L
         private const val RUMBLE_POLL_MS = 10L
