@@ -67,6 +67,9 @@ bool DesktopCapture::init(int output_index) {
     if (!cursor_.init(device_.Get(), context_.Get()))
         TCL_WARN("capture", "mouse cursor will not be shown: {}", cursor_.error());
 
+    DXGI_OUTPUT_DESC out_desc;
+    if (SUCCEEDED(chosen.output->GetDesc(&out_desc))) display_name_ = out_desc.DeviceName;
+
     if (FAILED(chosen.output.As(&output_))) {
         error_ = "IDXGIOutput1 not supported";
         return false;

@@ -7,6 +7,7 @@ add_executable(tclstream-host
     src/main.cpp
     src/audio_capture.cpp
     src/capture.cpp
+    src/console_mode.cpp
     src/cursor.cpp
     src/converter.cpp
     src/nvenc_encoder.cpp

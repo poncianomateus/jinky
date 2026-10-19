@@ -18,6 +18,7 @@
 
 #include "audio_capture.h"
 #include "capture.h"
+#include "console_mode.h"
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
@@ -76,6 +77,7 @@ struct Options {
     bool stress = false;
     bool audio = true;
     bool mute_pc = false;
+    bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
     tcl::EncoderConfig enc;
 };
@@ -91,6 +93,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--stress") o.test_pattern = o.stress = true;
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--mute-pc") o.mute_pc = true;
+        else if (a == "--console") o.console = true;
         else if (a == "--codec" && (v = next())) o.codec = v;
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
@@ -103,7 +106,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else {
             std::fprintf(stderr,
                          "usage: tclstream-host [--port 47100] [--output 0] [--bitrate 40000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console]\n"
                          "                      [--codec auto|hevc|h264]\n");
             return false;
         }
@@ -117,6 +120,8 @@ int main(int argc, char** argv) {
     Options opt;
     if (!parse_args(argc, argv, opt)) return 2;
     // If a previous run was killed while the PC was muted for streaming, give the sound back.
+    if (tcl::ConsoleMode::restore_if_left())
+        TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
     if (tcl::AudioCapture::restore_if_left_muted()) TCL_INFO("audio", "PC sound restored (left muted by a previous run)");
     SetConsoleCtrlHandler(on_console_ctrl, TRUE);
     timeBeginPeriod(1);
@@ -180,9 +185,15 @@ int main(int argc, char** argv) {
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
     std::atomic<uint64_t> audio_peer{0};
     std::atomic<uint32_t> audio_session{0};
+    tcl::ConsoleMode console;
     auto publish_peer = [&] {
         audio_session = session_id;
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
+        if (opt.console && !opt.test_pattern) {
+            if (peer) console.enter(capture.display_name());
+            else console.leave();
+            return;
+        }
         // Silence the PC's speakers while a TV is watching; give them back when it leaves.
         if (opt.mute_pc && opt.audio && !opt.test_pattern) {
             if (!tcl::AudioCapture::set_pc_muted(peer.has_value()))
@@ -460,6 +471,7 @@ int main(int argc, char** argv) {
 
     TCL_INFO("main", "stopping");
     audio.stop();
+    console.leave();
     if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit
     gamepads.unplug_all();
     SetEvent(g_cleanup_done);

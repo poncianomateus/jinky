@@ -35,6 +35,8 @@ public:
     UINT width() const { return width_; }
     UINT height() const { return height_; }
     const std::wstring& adapter_name() const { return adapter_name_; }
+    // GDI name of the captured monitor, e.g. \\.\DISPLAY1 (for display mode changes).
+    const std::wstring& display_name() const { return display_name_; }
     CursorOverlay& cursor() { return cursor_; }
     // When Windows presented the last acquired frame, in steady_clock microseconds.
     uint64_t present_time_us() const { return present_time_us_; }
@@ -51,7 +53,7 @@ private:
     CursorOverlay cursor_;
     uint64_t present_time_us_ = 0;
     UINT width_ = 0, height_ = 0;
-    std::wstring adapter_name_;
+    std::wstring adapter_name_, display_name_;
     std::string error_;
 };
 
