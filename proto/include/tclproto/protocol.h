@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,6 +34,9 @@ enum class PacketType : uint8_t {
     SessionEnd = 16,  // the PC ended the session (Big Picture closed): the TV app should close
     // Receiver -> host
     DeviceName = 17,  // the TV's user-visible name ("Sala", "TCL 55P7K"), see NameMessage
+    // Home screen discovery (no session): TV broadcasts Discover, each PC answers with HostInfo.
+    Discover = 18,
+    HostInfo = 19,
     // Clock synchronisation (both directions), see TimeSync
     TimeRequest = 20,
     TimeResponse = 21,
@@ -61,6 +65,25 @@ enum CodecSupport : uint32_t {
 // Hello.value flag: the user just opened Jinky on this TV (or pressed "play here"), so it should
 // take the session over from whichever TV has it. Without it, a second TV never steals a session.
 inline constexpr uint32_t kHelloTakeover = 1u << 8;
+// Hello.value flag: "Área de trabalho" — just show the PC's screen; no console mode (no Big
+// Picture, no 60 Hz switch).
+inline constexpr uint32_t kHelloDesktop = 1u << 9;
+
+// A PC's answer to Discover. Layout: magic(4) version(1) type(1) state(1) name_len(1) host_id(8)
+// mac(6) busy_len(1) reserved(1) name busy_with = 24 + name + busy_with bytes.
+struct HostInfo {
+    enum State : uint8_t { kIdle = 0, kBusy = 1 };
+    uint64_t host_id = 0;
+    State state = kIdle;
+    std::array<uint8_t, 6> mac{};  // of the PC's network adapter facing the TV, for Wake-on-LAN
+    std::string name;              // the PC's name
+    std::string busy_with;         // name of the TV playing, when busy
+
+    static constexpr size_t kHeader = 24;
+    static constexpr size_t kMaxText = 64;
+    size_t write(std::span<uint8_t> out) const;  // returns bytes written
+    static std::optional<HostInfo> read(std::span<const uint8_t> in);
+};
 
 // A TV's display name. Layout: magic(4) version(1) type(1) length(1) reserved(1) session(4) name(length)
 struct NameMessage {

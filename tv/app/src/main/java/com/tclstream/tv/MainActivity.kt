@@ -26,6 +26,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
     private lateinit var startScreen: StartScreen
+    private lateinit var homeScreen: HomeScreen
+    private val hostCache by lazy { HostCache(this) }
+    private var wakingUntil = 0L
     private var searchStartMs = 0L
     private val pairingStore by lazy { PairingStore(this) }
     private var pairing: PairingSession? = null
@@ -56,7 +59,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private val refresh = object : Runnable {
         override fun run() {
-            updateStartScreen()
+            if (receiver?.inSession() == true) {
+                homeScreen.visibility = View.GONE
+                updateStartScreen()
+            } else {
+                updateHome()
+            }
+            updateUiInput()
             val text = buildOverlay()
             statusText.text = text
             // Same diagnostics in logcat every 5 s, for remote debugging over adb.
@@ -88,6 +97,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
             startScreen = StartScreen(this@MainActivity)
             addView(startScreen, FrameLayout.LayoutParams(-1, -1))
+            homeScreen = HomeScreen(this@MainActivity,
+                onPlay = { host, desktop ->
+                    receiver?.connect(host.ip, desktop)
+                    homeScreen.visibility = View.GONE
+                    startScreen.setShown(true)
+                },
+                onWake = { host ->
+                    host.mac?.let { HostCache.wake(it, host.ip) }
+                    wakingUntil = android.os.SystemClock.elapsedRealtime() + 60_000
+                })
+            addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
@@ -235,12 +255,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 setOnClickListener { action() }
             }, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             item("Continuar jogando") { hideMenu() }
+            item("Voltar ao início") {
+                // Ends the session (the PC goes back to normal) and shows the home screen.
+                receiver?.disconnect()
+                hideMenu()
+            }
             item("Mostrar/ocultar desempenho") {
                 statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                 hideMenu()
             }
             item("Sair do Jinky") { finish() }
         }
+    }
+
+    /** Home screen: the PC this TV knows, live from discovery, else from the cache (to wake it). */
+    private fun updateHome() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        startScreen.setShown(false)
+        homeScreen.visibility = View.VISIBLE
+        val online = receiver?.hosts().orEmpty().lines().mapNotNull { line ->
+            val p = line.split('|')
+            if (p.size < 7) return@mapNotNull null
+            val id = java.lang.Long.parseUnsignedLong(p[0], 16)
+            val age = p[4].toLongOrNull() ?: Long.MAX_VALUE
+            hostCache.remember(id, p[5], p[1], p[3])
+            if (age > 6000) return@mapNotNull null  // not answering any more
+            HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
+                HostCache.parseMac(p[3]))
+        }
+        val host = online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
+            ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+        if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
+        homeScreen.show(host, searching = true, waking = now < wakingUntil)
+    }
+
+    /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
+    private fun updateUiInput() {
+        val ui = homeScreen.visibility == View.VISIBLE || menu.visibility == View.VISIBLE
+        if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
 
     /** Shows the Jinky start screen until the TV confirms a picture; explains each step meanwhile. */
@@ -339,12 +391,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun hideMenu() {
         menu.visibility = View.GONE
-        gamepads?.menuOpen = false
+        updateUiInput()
     }
 
     @Deprecated("Back opens/closes the menu instead of leaving")
     override fun onBackPressed() {
-        if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
+        // On the home screen Back leaves the app; while playing it opens/closes the menu.
+        if (homeScreen.visibility == View.VISIBLE) finish()
+        else if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {

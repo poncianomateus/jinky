@@ -125,6 +125,26 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(
     if (s) env->ReleaseStringUTFChars(name, s);
 }
 
+// --- home screen ---
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeConnect(JNIEnv* env, jclass, jlong h, jstring ip,
+                                                                         jboolean desktop) {
+    const char* s = env->GetStringUTFChars(ip, nullptr);
+    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, desktop);
+    if (s) env->ReleaseStringUTFChars(ip, s);
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeDisconnect(JNIEnv*, jclass, jlong h) {
+    self(h)->disconnect();
+}
+
+JNIEXPORT jboolean JNICALL Java_com_tclstream_tv_NativeReceiver_nativeInSession(JNIEnv*, jclass, jlong h) {
+    return self(h)->in_session();
+}
+
+JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeHosts(JNIEnv* env, jclass, jlong h) {
+    return env->NewStringUTF(self(h)->hosts().c_str());
+}
+
 // --- pairing ---
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetIdentity(JNIEnv*, jclass, jlong h, jlong id) {
     self(h)->set_identity(uint64_t(id));

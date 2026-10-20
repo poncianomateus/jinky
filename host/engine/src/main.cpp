@@ -26,6 +26,7 @@
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
+#include "netinfo.h"
 #include "nvenc_encoder.h"
 #include "pairing.h"
 #include "tclproto/auth.h"
@@ -208,6 +209,7 @@ int main(int argc, char** argv) {
     TCL_INFO("net", "waiting for a receiver on UDP port {} (Ctrl+C to stop)", opt.port);
 
     std::optional<tclproto::Endpoint> peer;
+    bool peer_desktop = false;  // the TV chose "Área de trabalho": no console mode for this session
     std::string peer_name;
     bool busy_logged = false;
     steady_clock::time_point last_displaced_sent{}, last_bp_check{};
@@ -245,6 +247,8 @@ int main(int argc, char** argv) {
         tclproto::PublicKey tv_public{};
     };
     std::optional<PendingPair> pending;
+    std::map<uint64_t, steady_clock::time_point> discover_replies;
+    const std::string pc_name = tcl::computer_name();
     auto send_auth_required = [&](const tclproto::Endpoint& to) {
         auto& n = nonces[addr_key(to)];
         if (n.value == 0) n.value = tcl::random_u64() | 1;
@@ -276,8 +280,14 @@ int main(int argc, char** argv) {
         audio_session = session_id;
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
         if (opt.console && !opt.test_pattern) {
-            if (peer) console.enter(capture.display_name());
-            else console.leave();
+            if (peer && !peer_desktop) {
+                console.enter(capture.display_name());
+                return;
+            }
+            console.leave();  // no-op unless a console session just ended
+            // "Área de trabalho": the PC stays as it is; only its sound moves to the TV.
+            if (opt.audio && !tcl::AudioCapture::set_pc_muted(peer.has_value()))
+                TCL_WARN("audio", "could not change PC mute state");
             return;
         }
         // Silence the PC's speakers while a TV is watching; give them back when it leaves.
@@ -442,6 +452,22 @@ int main(int argc, char** argv) {
                 pending = std::move(p);
                 continue;
             }
+            if (tclproto::peek_type(packet) == PacketType::Discover) {
+                // A TV's home screen looking for PCs: say who we are and whether we are free.
+                auto& replied = discover_replies[addr_key(from)];
+                if (steady_clock::now() - replied < 300ms) continue;
+                replied = steady_clock::now();
+                tclproto::HostInfo hi;
+                hi.host_id = paired.host_id();
+                const bool busy = peer && *peer != from && steady_clock::now() - last_peer_msg < 5s;
+                hi.state = busy ? tclproto::HostInfo::kBusy : tclproto::HostInfo::kIdle;
+                hi.mac = tcl::mac_toward(from.ip);
+                hi.name = pc_name;
+                if (busy) hi.busy_with = peer_name.empty() ? peer->to_string() : peer_name;
+                uint8_t reply[tclproto::HostInfo::kHeader + 2 * tclproto::HostInfo::kMaxText];
+                sock.send_to(from, std::span<const uint8_t>(reply, hi.write(reply)));
+                continue;
+            }
             std::optional<tclproto::ControlMessage> msg;
             std::optional<tclproto::PairKey> hello_key;
             uint64_t hello_device = 0;
@@ -515,6 +541,8 @@ int main(int argc, char** argv) {
                     tcl::emit_event("codec", "\"codec\":" + tcl::json_str(opt.enc.codec == tcl::VideoCodec::HEVC ? "HEVC" : "H.264") +
                                                  ",\"bitrate_kbps\":" + std::to_string(opt.enc.bitrate_kbps));
                     peer = from;
+                    peer_desktop = msg->value & tclproto::kHelloDesktop;
+                    if (peer_desktop) TCL_INFO("session", "desktop mode: showing the PC as it is (no console mode)");
                     peer_name.clear();
                     peer_key = hello_key.value_or(tclproto::PairKey{});
                     peer_device = hello_device;

@@ -11,6 +11,15 @@ class NativeReceiver : AutoCloseable {
 
     fun stop() = nativeStop(handle)
 
+    // --- home screen ---
+    /** Starts a session with the PC at [ip]: console mode, or just its screen when [desktop]. */
+    fun connect(ip: String, desktop: Boolean) = nativeConnect(handle, ip, desktop)
+    /** Ends the session and goes back to discovering PCs. */
+    fun disconnect() = nativeDisconnect(handle)
+    fun inSession(): Boolean = nativeInSession(handle)
+    /** PCs seen recently: lines "hostId|ip|state|mac|ageMs|name|busyWith". */
+    fun hosts(): String = nativeHosts(handle)
+
     /** Codecs decodable in hardware: bit0 H.264, bit1 HEVC. Sent to the PC in every Hello. */
     fun setCodecSupport(mask: Int) = nativeSetCodecSupport(handle, mask)
 
@@ -84,6 +93,10 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeStart(handle: Long, port: Int): String?
         @JvmStatic external fun nativeStop(handle: Long)
+        @JvmStatic external fun nativeConnect(handle: Long, ip: String, desktop: Boolean)
+        @JvmStatic external fun nativeDisconnect(handle: Long)
+        @JvmStatic external fun nativeInSession(handle: Long): Boolean
+        @JvmStatic external fun nativeHosts(handle: Long): String
         @JvmStatic external fun nativeSetCodecSupport(handle: Long, mask: Int)
         @JvmStatic external fun nativeReadFrame(handle: Long, dst: ByteBuffer, timeoutMs: Int, meta: LongArray): Int
         @JvmStatic external fun nativeRequestKeyframe(handle: Long)

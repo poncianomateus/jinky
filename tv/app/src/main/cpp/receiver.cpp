@@ -34,7 +34,7 @@ bool Receiver::start(uint16_t host_port) {
     }
     running_ = true;
     state_ = kActive;
-    takeover_until_ms_ = now_ms() + 4000;
+    session_wanted_ = false;  // home screen until the user picks "Jogar" or "Área de trabalho"
     thread_ = std::thread(&Receiver::net_loop, this);
     return true;
 }
@@ -44,6 +44,67 @@ void Receiver::stop() {
     cv_.notify_all();
     if (thread_.joinable()) thread_.join();
     sock_.close();
+}
+
+void Receiver::connect(uint32_t ip, bool desktop) {
+    connect_desktop_ = desktop;
+    connect_ip_ = ip;
+}
+
+void Receiver::disconnect() { disconnect_requested_ = true; }
+
+std::string Receiver::hosts() const {
+    std::lock_guard lock(hosts_mu_);
+    std::string out;
+    const int64_t now = now_ms();
+    char buf[64];
+    for (const auto& [id, h] : hosts_) {
+        std::snprintf(buf, sizeof buf, "%016llx|%u.%u.%u.%u|%d|", (unsigned long long)id, h.ip >> 24, (h.ip >> 16) & 255,
+                      (h.ip >> 8) & 255, h.ip & 255, int(h.info.state));
+        out += buf;
+        for (uint8_t b : h.info.mac) {
+            std::snprintf(buf, sizeof buf, "%02x", b);
+            out += buf;
+        }
+        out += "|" + std::to_string(now - h.seen_ms) + "|" + h.info.name + "|" + h.info.busy_with + "\n";
+    }
+    return out;
+}
+
+void Receiver::on_host_info(const tclproto::HostInfo& info, const tclproto::Endpoint& from) {
+    std::lock_guard lock(hosts_mu_);
+    auto& h = hosts_[info.host_id];
+    h.info = info;
+    h.ip = from.ip;
+    h.seen_ms = now_ms();
+}
+
+void Receiver::apply_connect_requests() {
+    if (disconnect_requested_.exchange(false)) {
+        if (host_ && session_wanted_) send_control(PacketType::Bye, 0);
+        session_wanted_ = false;
+        host_.reset();
+        host_known_ = false;
+        have_session_ = false;
+        state_ = kActive;
+        takeover_until_ms_ = 0;
+        clock_synced_ = false;
+        sample_count_ = sample_next_ = 0;
+        std::lock_guard lock(mu_);
+        queue_.clear();
+    }
+    if (const uint32_t ip = connect_ip_.exchange(0)) {
+        host_ = tclproto::Endpoint{ip, host_port_};
+        host_known_ = true;
+        host_ip_ = ip;
+        last_packet_ms_ = now_ms();
+        desktop_ = connect_desktop_.load();
+        session_wanted_ = true;
+        state_ = kActive;
+        takeover_until_ms_ = now_ms() + 4000;  // the user chose to play here: take it from any other TV
+        std::lock_guard lock(auth_mu_);
+        auth_required_ = false;  // the PC will challenge us again
+    }
 }
 
 void Receiver::send_hello(uint32_t flags) {
@@ -211,13 +272,29 @@ void Receiver::net_loop() {
     int64_t last_hello = 0, last_idr_req = 0, last_stats = 0, last_sync = 0;
 
     while (running_) {
+        apply_connect_requests();
         const int64_t now = now_ms();
+        if (!session_wanted_) {
+            // Home screen: ask who is out there every 2 s; no session, nothing changes on any PC.
+            if (now - last_discover_ms_ >= 2000) {
+                uint8_t d[tclproto::ControlMessage::kSize];
+                tclproto::ControlMessage{PacketType::Discover, 0, 0}.write(d);
+                sock_.send_to(tclproto::Endpoint::broadcast(host_port_), d);
+                last_discover_ms_ = now;
+            }
+            tclproto::Endpoint from;
+            const int n = sock_.recv_from(buf, from, 50);
+            if (n > 0) {
+                if (auto hi = tclproto::HostInfo::read(std::span<const uint8_t>(buf, size_t(n)))) on_host_info(*hi, from);
+            }
+            continue;
+        }
         // Hello doubles as discovery (broadcast until the host answers) and keepalive.
         // A displaced TV stays silent until the user presses OK on it: otherwise, when the other TV
         // stops playing, this one would silently grab the session (console mode for an empty room).
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
-            send_hello(codec_support_ | takeover);
+            send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
                 std::string name;
@@ -331,6 +408,10 @@ void Receiver::net_loop() {
             audio_fill_ = 0;
             audio_priming_ = true;
             have_audio_seq_ = false;
+            // Start every session with the normal audio cushion: one grown by an earlier session's
+            // network hiccups would otherwise add delay after switching TVs.
+            audio_target_ = kAudioStartTarget;
+            audio_level_avg_ = double(kAudioStartTarget);
         }
         if (h->type == PacketType::Audio) {
             on_audio(*h, std::span<const uint8_t>(buf + tclproto::MediaHeader::kSize,

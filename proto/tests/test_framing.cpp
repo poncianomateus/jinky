@@ -235,6 +235,21 @@ static void test_pairing_and_auth() {
     CHECK(rr && rr->accepted && rr->proof == accept_proof(k1, 42) && rr->proof != accept_proof(k1, 43));
 }
 
+static void test_host_info() {
+    HostInfo h;
+    h.host_id = 0xAABBCCDDEEFF0011ull;
+    h.state = HostInfo::kBusy;
+    h.mac = {0xDC, 0x71, 0x96, 0x6A, 0x45, 0x28};
+    h.name = "DESKTOP-BF21OEI";
+    h.busy_with = "TCL 55P7K";
+    uint8_t buf[HostInfo::kHeader + 2 * HostInfo::kMaxText];
+    const size_t len = h.write(buf);
+    auto r = HostInfo::read(std::span<const uint8_t>(buf, len));
+    CHECK(r && r->host_id == h.host_id && r->state == HostInfo::kBusy && r->mac == h.mac);
+    CHECK(r->name == "DESKTOP-BF21OEI" && r->busy_with == "TCL 55P7K");
+    CHECK(!HostInfo::read(std::span<const uint8_t>(buf, len - 1)).has_value());  // truncated
+}
+
 static void test_in_order_delivery() {
     std::vector<FrameAssembler::Frame> got;
     FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(std::move(f)); });
@@ -303,6 +318,7 @@ int main() {
     test_sha256_and_hmac_vectors();
     test_pairing_and_auth();
     test_input_roundtrip();
+    test_host_info();
     test_name_and_session_messages();
     test_in_order_delivery();
     test_reordered_fragments_and_duplicates();

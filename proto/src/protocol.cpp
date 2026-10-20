@@ -34,7 +34,7 @@ bool is_media(PacketType t) { return t == PacketType::Video || t == PacketType::
 bool is_control(PacketType t) {
     return t == PacketType::Hello || t == PacketType::RequestIdr || t == PacketType::Stats ||
            t == PacketType::Bye || t == PacketType::LatencyReport || t == PacketType::Displaced ||
-           t == PacketType::SessionEnd;
+           t == PacketType::SessionEnd || t == PacketType::Discover;
 }
 
 // Upper bound on a single encoded frame; anything larger is treated as corrupt.
@@ -206,6 +206,46 @@ std::optional<RumbleMessage> RumbleMessage::read(std::span<const uint8_t> in) {
     m.large_motor = p[12];
     m.small_motor = p[13];
     return m;
+}
+
+namespace {
+size_t utf8_cut(const std::string& s, size_t max) {
+    size_t len = std::min(s.size(), max);
+    while (len > 0 && len < s.size() && (uint8_t(s[len]) & 0xC0) == 0x80) --len;
+    return len;
+}
+}  // namespace
+
+size_t HostInfo::write(std::span<uint8_t> out) const {
+    const size_t nlen = utf8_cut(name, kMaxText), blen = utf8_cut(busy_with, kMaxText);
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::HostInfo);
+    p[6] = state;
+    p[7] = uint8_t(nlen);
+    for (int i = 0; i < 8; ++i) p[8 + i] = uint8_t(host_id >> (8 * i));
+    std::memcpy(p + 16, mac.data(), 6);
+    p[22] = uint8_t(blen);
+    p[23] = 0;
+    std::memcpy(p + kHeader, name.data(), nlen);
+    std::memcpy(p + kHeader + nlen, busy_with.data(), blen);
+    return kHeader + nlen + blen;
+}
+
+std::optional<HostInfo> HostInfo::read(std::span<const uint8_t> in) {
+    if (in.size() < kHeader) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::HostInfo)) return std::nullopt;
+    const size_t nlen = p[7], blen = p[22];
+    if (nlen > kMaxText || blen > kMaxText || in.size() < kHeader + nlen + blen) return std::nullopt;
+    HostInfo h;
+    h.state = p[6] == kBusy ? kBusy : kIdle;
+    for (int i = 0; i < 8; ++i) h.host_id |= uint64_t(p[8 + i]) << (8 * i);
+    std::memcpy(h.mac.data(), p + 16, 6);
+    h.name.assign(reinterpret_cast<const char*>(p + kHeader), nlen);
+    h.busy_with.assign(reinterpret_cast<const char*>(p + kHeader + nlen), blen);
+    return h;
 }
 
 size_t NameMessage::write(std::span<uint8_t> out) const {

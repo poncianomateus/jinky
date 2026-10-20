@@ -31,8 +31,18 @@ public:
 
     ~Receiver();
 
+    // Starts on the home screen: discovers PCs (Discover/HostInfo) without starting any session.
     bool start(uint16_t host_port);
     void stop();
+
+    // Home screen actions. connect() starts a session with the PC at `ip` (host byte order):
+    // console mode ("Jogar") or just its screen ("Área de trabalho"). disconnect() ends it and
+    // returns to discovery.
+    void connect(uint32_t ip, bool desktop);
+    void disconnect();
+    bool in_session() const { return session_wanted_; }
+    // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith" (hex ids/mac).
+    std::string hosts() const;
 
     // Blocks up to timeout_ms for the next decodable frame and copies it into dst.
     // Returns its size, 0 on timeout, or -(size) if dst is too small (frame dropped, keyframe requested).
@@ -101,6 +111,8 @@ private:
     void on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t> payload);
     void send_control(tclproto::PacketType type, uint32_t value);
     void send_hello(uint32_t flags);
+    void apply_connect_requests();
+    void on_host_info(const tclproto::HostInfo& info, const tclproto::Endpoint& from);
     // Handles AuthRequired / PairChallenge / PairResult; true if the packet was one of them.
     bool handle_auth(std::span<const uint8_t> packet, const tclproto::Endpoint& from);
     void send_time_request();
@@ -129,6 +141,21 @@ private:
     std::atomic<uint32_t> codec_support_{tclproto::kCodecH264};
     std::atomic<int> state_{kActive};
     std::atomic<int64_t> takeover_until_ms_{0};
+
+    // Home screen / session control (requests from the UI thread, applied by the network thread)
+    std::atomic<bool> session_wanted_{false};
+    std::atomic<bool> desktop_{false};
+    std::atomic<uint32_t> connect_ip_{0};  // pending connect request (0 = none)
+    std::atomic<bool> connect_desktop_{false};
+    std::atomic<bool> disconnect_requested_{false};
+    int64_t last_discover_ms_ = 0;
+    struct KnownHost {
+        tclproto::HostInfo info;
+        uint32_t ip = 0;
+        int64_t seen_ms = 0;
+    };
+    mutable std::mutex hosts_mu_;
+    std::map<uint64_t, KnownHost> hosts_;
     std::mutex name_mu_;
     std::string device_name_;
 
