@@ -53,6 +53,8 @@ public partial class App : Application
         _settings = Settings.Load();
         _vm = new MainViewModel(_settings, OnSettingsChanged);
         _window = new MainWindow(_vm);
+        // Console mode turns the PC into a console: don't leave Jinky's window on the monitor.
+        _vm.SessionStarted += () => { if (_settings.ConsoleMode) _window?.Hide(); };
         _window.Closing += (_, args) =>
         {
             // The window's X hides to the tray; only "Sair" quits.

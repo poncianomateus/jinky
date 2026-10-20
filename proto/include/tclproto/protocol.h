@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 
 namespace tclproto {
 
@@ -27,6 +28,11 @@ enum class PacketType : uint8_t {
     Stats = 12,        // periodic receiver statistics
     Bye = 13,          // receiver is leaving
     LatencyReport = 14,  // value = average capture-to-display latency in microseconds
+    // Host -> receiver
+    Displaced = 15,   // another TV took over this session ("the game continues elsewhere")
+    SessionEnd = 16,  // the PC ended the session (Big Picture closed): the TV app should close
+    // Receiver -> host
+    DeviceName = 17,  // the TV's user-visible name ("Sala", "TCL 55P7K"), see NameMessage
     // Clock synchronisation (both directions), see TimeSync
     TimeRequest = 20,
     TimeResponse = 21,
@@ -44,6 +50,23 @@ enum PacketFlags : uint8_t {
 enum CodecSupport : uint32_t {
     kCodecH264 = 1 << 0,
     kCodecHevc = 1 << 1,
+};
+
+// Hello.value flag: the user just opened Jinky on this TV (or pressed "play here"), so it should
+// take the session over from whichever TV has it. Without it, a second TV never steals a session.
+inline constexpr uint32_t kHelloTakeover = 1u << 8;
+
+// A TV's display name. Layout: magic(4) version(1) type(1) length(1) reserved(1) session(4) name(length)
+struct NameMessage {
+    uint32_t session_id = 0;
+    std::string name;  // UTF-8, truncated to kMaxName bytes
+
+    static constexpr size_t kHeader = 12;
+    static constexpr size_t kMaxName = 64;
+
+    // Returns the number of bytes written (header + name).
+    size_t write(std::span<uint8_t> out) const;
+    static std::optional<NameMessage> read(std::span<const uint8_t> in);
 };
 
 // Header that precedes every media fragment.

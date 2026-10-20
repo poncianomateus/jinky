@@ -1,5 +1,8 @@
 #include "tclproto/protocol.h"
 
+#include <algorithm>
+#include <cstring>
+
 namespace tclproto {
 namespace {
 
@@ -28,7 +31,8 @@ uint64_t get_u64(const uint8_t* p) {
 bool is_media(PacketType t) { return t == PacketType::Video || t == PacketType::Audio; }
 bool is_control(PacketType t) {
     return t == PacketType::Hello || t == PacketType::RequestIdr || t == PacketType::Stats ||
-           t == PacketType::Bye || t == PacketType::LatencyReport;
+           t == PacketType::Bye || t == PacketType::LatencyReport || t == PacketType::Displaced ||
+           t == PacketType::SessionEnd;
 }
 
 // Upper bound on a single encoded frame; anything larger is treated as corrupt.
@@ -191,6 +195,33 @@ std::optional<RumbleMessage> RumbleMessage::read(std::span<const uint8_t> in) {
     m.session_id = get_u32(p + 8);
     m.large_motor = p[12];
     m.small_motor = p[13];
+    return m;
+}
+
+size_t NameMessage::write(std::span<uint8_t> out) const {
+    // Cut at kMaxName bytes without splitting a UTF-8 sequence.
+    size_t len = std::min(name.size(), kMaxName);
+    while (len > 0 && len < name.size() && (uint8_t(name[len]) & 0xC0) == 0x80) --len;
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::DeviceName);
+    p[6] = uint8_t(len);
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    std::memcpy(p + kHeader, name.data(), len);
+    return kHeader + len;
+}
+
+std::optional<NameMessage> NameMessage::read(std::span<const uint8_t> in) {
+    if (in.size() < kHeader) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::DeviceName)) return std::nullopt;
+    const size_t len = p[6];
+    if (len > kMaxName || in.size() < kHeader + len) return std::nullopt;
+    NameMessage m;
+    m.session_id = get_u32(p + 8);
+    m.name.assign(reinterpret_cast<const char*>(p + kHeader), len);
     return m;
 }
 

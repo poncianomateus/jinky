@@ -69,9 +69,44 @@ void ConsoleMode::restore_display(const std::wstring& display) {
     ChangeDisplaySettingsExW(display.c_str(), nullptr, nullptr, 0, nullptr);
 }
 
+bool ConsoleMode::big_picture_window_open() {
+    // Steam's Big Picture window title contains "Big Picture" in every language ("Steam - Modo Big
+    // Picture" in Portuguese). Existence only, not visibility: a fullscreen game may minimise it,
+    // and the window is destroyed when the user leaves Big Picture (verified).
+    bool found = false;
+    EnumWindows(
+        [](HWND hwnd, LPARAM p) -> BOOL {
+            wchar_t title[256];
+            if (GetWindowTextW(hwnd, title, 256) > 0 && wcsstr(title, L"Big Picture")) {
+                *reinterpret_cast<bool*>(p) = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&found));
+    return found;
+}
+
+bool ConsoleMode::big_picture_closed() {
+    if (!active_) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (big_picture_window_open()) {
+        bp_seen_ = true;
+        bp_missing_since_ = {};
+        return false;
+    }
+    if (!bp_seen_) return false;  // still opening
+    if (bp_missing_since_ == std::chrono::steady_clock::time_point{}) bp_missing_since_ = now;
+    if (now - bp_missing_since_ < std::chrono::seconds(2)) return false;  // e.g. a game going fullscreen
+    bp_seen_ = false;
+    return true;
+}
+
 void ConsoleMode::enter(const std::wstring& display) {
     if (active_) return;
     active_ = true;
+    bp_seen_ = false;
+    bp_missing_since_ = {};
     display_ = display;
     if (const auto marker = marker_path(); !marker.empty()) std::wofstream(marker) << display;
 

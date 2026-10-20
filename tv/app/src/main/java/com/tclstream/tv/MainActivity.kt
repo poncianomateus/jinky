@@ -117,6 +117,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_AVC) != null) codecs = codecs or 1
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
         r.setCodecSupport(codecs)
+        r.setDeviceName(deviceName())
         startError = r.start(HOST_PORT)
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
@@ -162,8 +163,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     // Gamepad input goes to the PC; everything else (the TV remote) keeps working normally.
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        gamepads?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Session on another TV: OK on the remote or A on a controller brings it here.
+        if (receiver?.state() == STATE_DISPLACED && event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)
+        ) {
+            receiver?.takeover()
+            return true
+        }
+        return gamepads?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
+    }
+
+    /** The name the user gave this TV (e.g. "Fire TV da sala"), or its model. */
+    private fun deviceName(): String =
+        android.provider.Settings.Global.getString(contentResolver, "device_name")?.takeIf { it.isNotBlank() }
+            ?: "${Build.MANUFACTURER} ${Build.MODEL}"
 
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         gamepads?.onMotionEvent(event) == true || super.dispatchGenericMotionEvent(event)
@@ -219,6 +233,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateStartScreen() {
         val now = android.os.SystemClock.elapsedRealtime()
         val r = receiver
+        when (r?.state()) {
+            STATE_ENDED -> {
+                // Big Picture was closed on the PC: the session is over, like turning a console off.
+                finish()
+                return
+            }
+            STATE_DISPLACED -> {
+                startScreen.setShown(true)
+                startScreen.show(StartScreen.Model(
+                    "Jogando em outra TV",
+                    "O jogo continua em outra TV da casa. Aperte OK para trazer para cá.",
+                    emptyList()))
+                return
+            }
+        }
         val p = pipeline
         val host = r?.hostAddress()
         val picture = p != null && p.lastPresentMs != 0L && now - p.lastPresentMs < 3000
@@ -340,5 +369,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     companion object {
         private const val TAG = "Jinky"
         private const val HOST_PORT = 47100
+        private const val STATE_DISPLACED = 1
+        private const val STATE_ENDED = 2
     }
 }

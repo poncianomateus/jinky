@@ -32,6 +32,8 @@ bool Receiver::start(uint16_t host_port) {
         return false;
     }
     running_ = true;
+    state_ = kActive;
+    takeover_until_ms_ = now_ms() + 4000;
     thread_ = std::thread(&Receiver::net_loop, this);
     return true;
 }
@@ -78,9 +80,36 @@ void Receiver::net_loop() {
     while (running_) {
         const int64_t now = now_ms();
         // Hello doubles as discovery (broadcast until the host answers) and keepalive.
-        if (now - last_hello >= 1000) {
-            send_control(PacketType::Hello, codec_support_);
+        // A displaced TV stays silent until the user presses OK on it: otherwise, when the other TV
+        // stops playing, this one would silently grab the session (console mode for an empty room).
+        if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
+            const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
+            send_control(PacketType::Hello, codec_support_ | takeover);
             last_hello = now;
+            if (host_ && state_ == kActive) {
+                std::string name;
+                {
+                    std::lock_guard lock(name_mu_);
+                    name = device_name_;
+                }
+                if (!name.empty()) {
+                    uint8_t nbuf[tclproto::NameMessage::kHeader + tclproto::NameMessage::kMaxName];
+                    const size_t len = tclproto::NameMessage{session_id_, name}.write(nbuf);
+                    sock_.send_to(*host_, std::span<const uint8_t>(nbuf, len));
+                }
+            }
+        }
+        if (state_ != kActive) {
+            // Displaced or ended: no stats, sync or keyframe requests; just wait.
+            tclproto::Endpoint from;
+            uint8_t b[64];
+            const int n = sock_.recv_from(b, from, 20);
+            if (n > 0) {
+                auto m = tclproto::ControlMessage::read(std::span<const uint8_t>(b, size_t(n)));
+                if (m && m->type == PacketType::SessionEnd) state_ = kEnded;
+                if (m) last_packet_ms_ = now_ms();  // the host is alive; don't forget it
+            }
+            continue;
         }
         if (host_ && now - last_stats >= 1000) {
             send_control(PacketType::Stats, uint32_t(presented_.load()));
@@ -114,6 +143,22 @@ void Receiver::net_loop() {
             if (auto r = tclproto::RumbleMessage::read(packet); r && host_ && from == *host_) {
                 std::lock_guard lock(rumble_mu_);
                 if (rumble_.size() < 32) rumble_.push_back(*r);
+            }
+            continue;
+        }
+        if (const auto t = tclproto::peek_type(packet); t == PacketType::Displaced || t == PacketType::SessionEnd) {
+            if (!host_) {  // e.g. we broadcast while another TV is playing: remember the PC anyway
+                host_ = from;
+                host_known_ = true;
+                host_ip_ = from.ip;
+            }
+            if (from == *host_) {
+                LOGI("%s", *t == PacketType::Displaced ? "another TV took the session" : "the PC ended the session");
+                state_ = *t == PacketType::Displaced ? kDisplaced : kEnded;
+                takeover_until_ms_ = 0;
+                last_packet_ms_ = now_ms();
+                std::lock_guard lock(mu_);
+                queue_.clear();
             }
             continue;
         }
@@ -318,6 +363,16 @@ std::optional<tclproto::RumbleMessage> Receiver::poll_rumble() {
     auto r = rumble_.front();
     rumble_.pop_front();
     return r;
+}
+
+void Receiver::request_takeover() {
+    takeover_until_ms_ = now_ms() + 4000;
+    state_ = kActive;
+}
+
+void Receiver::set_device_name(std::string name) {
+    std::lock_guard lock(name_mu_);
+    device_name_ = std::move(name);
 }
 
 void Receiver::request_keyframe() {

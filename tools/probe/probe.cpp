@@ -79,6 +79,12 @@ int input_test() {
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--input-test") return input_test();
+    // --takeover (last argument): ask for the session like a TV the user just opened.
+    bool takeover = false;
+    if (argc > 1 && std::string(argv[argc - 1]) == "--takeover") {
+        takeover = true;
+        --argc;
+    }
     const std::string host_ip = argc > 1 ? argv[1] : "127.0.0.1";
     const int seconds = argc > 2 ? std::atoi(argv[2]) : 5;
     FILE* out = argc > 3 ? std::fopen(argv[3], "wb") : nullptr;
@@ -108,7 +114,7 @@ int main(int argc, char** argv) {
     });
 
     uint8_t buf[2048], hello[ControlMessage::kSize];
-    ControlMessage{PacketType::Hello, 0, 0}.write(hello);
+    ControlMessage{PacketType::Hello, 0, takeover ? kHelloTakeover : 0u}.write(hello);
     const auto end = steady_clock::now() + seconds * 1s;
     auto last_hello = steady_clock::now() - 2s;
     while (steady_clock::now() < end) {
@@ -120,7 +126,7 @@ int main(int argc, char** argv) {
         const int n = sock.recv_from(buf, from, 20);
         if (n <= 0) continue;
         auto h = MediaHeader::read(std::span<const uint8_t>(buf, size_t(n)));
-        if (h) assembler.push(*h, std::span<const uint8_t>(buf + MediaHeader::kSize, size_t(n) - MediaHeader::kSize));
+        if (h && h->type == PacketType::Video) assembler.push(*h, std::span<const uint8_t>(buf + MediaHeader::kSize, size_t(n) - MediaHeader::kSize));
     }
     uint8_t bye[ControlMessage::kSize];
     ControlMessage{PacketType::Bye, 0, 0}.write(bye);

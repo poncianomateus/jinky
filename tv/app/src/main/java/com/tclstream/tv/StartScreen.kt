@@ -78,6 +78,7 @@ class StartScreen(context: Context) : FrameLayout(context) {
         subtitle.text = model.subtitle
         subtitle.setTextColor(if (model.warning) WARN else MUTED)
         stepsBox.removeAllViews()
+        stepsBox.visibility = if (model.steps.isEmpty()) View.GONE else View.VISIBLE
         model.steps.forEachIndexed { i, (label, step) ->
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL

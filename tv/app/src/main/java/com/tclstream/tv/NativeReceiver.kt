@@ -43,6 +43,14 @@ class NativeReceiver : AutoCloseable {
     /** Address of the PC streaming to this TV, or null while still searching. */
     fun hostAddress(): String? = nativeHostAddress(handle)
 
+    /** 0 = this TV has the session (or is looking for the PC), 1 = another TV took it, 2 = the PC ended it. */
+    fun state(): Int = nativeState(handle)
+
+    /** "Play here": take the session over from another TV. */
+    fun takeover() = nativeTakeover(handle)
+
+    fun setDeviceName(name: String) = nativeSetDeviceName(handle, name)
+
     fun status(): String = nativeStatus(handle)
 
     override fun close() {
@@ -74,6 +82,9 @@ class NativeReceiver : AutoCloseable {
         )
         @JvmStatic external fun nativePollRumble(handle: Long): Int
         @JvmStatic external fun nativeHostAddress(handle: Long): String?
+        @JvmStatic external fun nativeState(handle: Long): Int
+        @JvmStatic external fun nativeTakeover(handle: Long)
+        @JvmStatic external fun nativeSetDeviceName(handle: Long, name: String)
         @JvmStatic external fun nativeStatus(handle: Long): String
     }
 }

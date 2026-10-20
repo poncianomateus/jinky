@@ -107,6 +107,21 @@ JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeHostAddress
     return a.empty() ? nullptr : env->NewStringUTF(a.c_str());
 }
 
+JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativeState(JNIEnv*, jclass, jlong h) {
+    return self(h)->state();
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeTakeover(JNIEnv*, jclass, jlong h) {
+    self(h)->request_takeover();
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(JNIEnv* env, jclass, jlong h,
+                                                                                jstring name) {
+    const char* s = env->GetStringUTFChars(name, nullptr);
+    self(h)->set_device_name(s ? s : "");
+    if (s) env->ReleaseStringUTFChars(name, s);
+}
+
 JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStatus(JNIEnv* env, jclass, jlong h) {
     return env->NewStringUTF(self(h)->status().c_str());
 }

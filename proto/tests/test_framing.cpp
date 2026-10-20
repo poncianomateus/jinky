@@ -118,6 +118,25 @@ static void test_input_roundtrip() {
     CHECK(rm && rm->pad_index == 1 && rm->large_motor == 200 && rm->small_motor == 30);
 }
 
+static void test_name_and_session_messages() {
+    NameMessage n{5, "Sala · Fire TV"};
+    uint8_t buf[NameMessage::kHeader + NameMessage::kMaxName];
+    const size_t len = n.write(buf);
+    auto r = NameMessage::read(std::span<const uint8_t>(buf, len));
+    CHECK(r && r->session_id == 5 && r->name == "Sala · Fire TV");
+    CHECK(peek_type(std::span<const uint8_t>(buf, len)) == PacketType::DeviceName);
+
+    NameMessage long_name{1, std::string(100, 'x') + "é"};
+    CHECK(long_name.write(buf) == NameMessage::kHeader + NameMessage::kMaxName);
+
+    for (auto t : {PacketType::Displaced, PacketType::SessionEnd}) {
+        uint8_t c[ControlMessage::kSize];
+        ControlMessage{t, 3, 0}.write(c);
+        auto m = ControlMessage::read(c);
+        CHECK(m && m->type == t);
+    }
+}
+
 static void test_in_order_delivery() {
     std::vector<FrameAssembler::Frame> got;
     FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(std::move(f)); });
@@ -184,6 +203,7 @@ int main() {
     test_control_roundtrip();
     test_time_sync_roundtrip();
     test_input_roundtrip();
+    test_name_and_session_messages();
     test_in_order_delivery();
     test_reordered_fragments_and_duplicates();
     test_waits_for_first_keyframe();

@@ -38,6 +38,15 @@ public:
     // Decoder lost sync (error, stall, recreation): next frames are useless until a keyframe.
     void request_keyframe();
     void report_presented(uint64_t count) { presented_ = count; }
+    // Session state as seen by this TV.
+    enum State { kActive = 0, kDisplaced = 1, kEnded = 2 };
+    int state() const { return state_; }
+    // "Play here": take the session over from whichever TV has it (also automatic for a few
+    // seconds after start, since opening Jinky means the user wants to play on this TV).
+    void request_takeover();
+    // The TV's user-visible name, sent to the PC (shown in the Jinky PC app).
+    void set_device_name(std::string name);
+
     // Codecs this device decodes in hardware (tclproto::CodecSupport), announced in every Hello.
     void set_codec_support(uint32_t mask) { codec_support_ = mask; }
     // Average capture-to-display latency measured by the decoder side, forwarded to the host log.
@@ -94,6 +103,10 @@ private:
     std::atomic<bool> await_keyframe_{false};
     std::atomic<uint64_t> presented_{0};
     std::atomic<uint32_t> codec_support_{tclproto::kCodecH264};
+    std::atomic<int> state_{kActive};
+    std::atomic<int64_t> takeover_until_ms_{0};
+    std::mutex name_mu_;
+    std::string device_name_;
     std::atomic<uint32_t> latency_us_{0};
 
     // Clock sync: keep the sample with the lowest round trip among the recent ones (least jitter).

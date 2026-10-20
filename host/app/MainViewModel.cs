@@ -88,6 +88,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // --- engine events --------------------------------------------------------------------------
 
     readonly HashSet<int> _activePads = new();
+    string? _tvName;
+
+    /// <summary>Raised when a TV starts a session (the app hides its window in console mode).</summary>
+    public event Action? SessionStarted;
 
     public void OnEngineEvent(EngineEvent e)
     {
@@ -104,6 +108,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 GamepadDriver = e.Bool("available") == true ? "Pronto (ViGEmBus)" : "Driver ViGEmBus não encontrado";
                 break;
             case "connected":
+                _tvName = null;
+                SessionStarted?.Invoke();
                 Current = State.Streaming;
                 StatusDetail = $"TV conectada · {Host(e.Str("tv"))}";
                 Add("TV conectada · " + Host(e.Str("tv")));
@@ -113,6 +119,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 StatusDetail = "Abra o Jinky na TV para começar.";
                 Latency = Fps = Bitrate = "—";
                 Add(e.Str("reason") == "silent" ? "A TV parou de responder · sessão encerrada" : "TV desconectou", e.Str("reason") == "silent");
+                break;
+            case "tv_name":
+                _tvName = e.Str("name");
+                if (IsStreaming) StatusDetail = $"TV conectada · {_tvName}";
+                break;
+            case "handoff":
+                Add($"O jogo passou de {e.Str("from")} para outra TV");
+                break;
+            case "session_end":
+                Add("Big Picture fechado · sessão encerrada");
                 break;
             case "codec":
                 Codec = e.Str("codec") ?? "—";

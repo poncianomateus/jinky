@@ -195,8 +195,15 @@ int main(int argc, char** argv) {
     TCL_INFO("net", "waiting for a receiver on UDP port {} (Ctrl+C to stop)", opt.port);
 
     std::optional<tclproto::Endpoint> peer;
+    std::string peer_name;
     bool busy_logged = false;
+    steady_clock::time_point last_displaced_sent{}, last_bp_check{};
     uint32_t session_id = std::random_device{}();
+    auto send_control = [&](const tclproto::Endpoint& to, PacketType type) {
+        uint8_t buf[tclproto::ControlMessage::kSize];
+        tclproto::ControlMessage{type, session_id, 0}.write(buf);
+        sock.send_to(to, buf);
+    };
 
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
     std::atomic<uint64_t> audio_peer{0};
@@ -280,6 +287,14 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
+            if (tclproto::peek_type(packet) == PacketType::DeviceName) {
+                if (auto nm = tclproto::NameMessage::read(packet); nm && peer && from == *peer && nm->name != peer_name) {
+                    peer_name = nm->name;
+                    TCL_INFO("session", "receiver is \"{}\"", peer_name);
+                    tcl::emit_event("tv_name", "\"name\":" + tcl::json_str(peer_name));
+                }
+                continue;
+            }
             if (tclproto::peek_type(packet) == PacketType::TimeRequest) {
                 if (auto t = tclproto::TimeSync::read(packet)) {
                     t->type = PacketType::TimeResponse;
@@ -293,13 +308,28 @@ int main(int argc, char** argv) {
             auto msg = tclproto::ControlMessage::read(std::span<const uint8_t>(rx, size_t(n)));
             if (!msg) continue;
             if (msg->type == PacketType::Hello) {
+                const bool takeover = msg->value & tclproto::kHelloTakeover;
                 if (peer && *peer != from && steady_clock::now() - last_peer_msg < 5s) {
-                    // Another device while one is streaming: keep the current one. It takes over
-                    // only after the current receiver leaves or goes silent.
-                    if (!busy_logged) TCL_WARN("session", "{} wants to connect, but {} is streaming; ignoring",
-                                               from.to_string(), peer->to_string());
-                    busy_logged = true;
-                    continue;
+                    if (!takeover) {
+                        // Another TV that is merely open (not asking to play): keep the current
+                        // session, and tell it so it shows "the game continues on another TV".
+                        if (!busy_logged) TCL_WARN("session", "{} is open, but {} is streaming; telling it",
+                                                   from.to_string(), peer->to_string());
+                        busy_logged = true;
+                        if (steady_clock::now() - last_displaced_sent > 1s) {
+                            send_control(from, PacketType::Displaced);
+                            last_displaced_sent = steady_clock::now();
+                        }
+                        continue;
+                    }
+                    // Handoff (bedroom -> living room): the game keeps running on the PC, only the
+                    // destination changes. Console mode stays on; the old TV is told to stand by.
+                    TCL_INFO("session", "{} took over the session from {}", from.to_string(), peer->to_string());
+                    tcl::emit_event("handoff", "\"from\":" + tcl::json_str(peer_name.empty() ? peer->to_string() : peer_name));
+                    send_control(*peer, PacketType::Displaced);
+                    gamepads.unplug_all();  // the new TV's pads plug in again as players 1..4
+                    peer.reset();
+                    peer_name.clear();
                 }
                 if (!peer || *peer != from) {
                     busy_logged = false;
@@ -321,6 +351,7 @@ int main(int argc, char** argv) {
                     tcl::emit_event("codec", "\"codec\":" + tcl::json_str(opt.enc.codec == tcl::VideoCodec::HEVC ? "HEVC" : "H.264") +
                                                  ",\"bitrate_kbps\":" + std::to_string(opt.enc.bitrate_kbps));
                     peer = from;
+                    peer_name.clear();
                     session_id++;
                     idr_pending = true;
                     first_sent_logged = false;
@@ -356,6 +387,21 @@ int main(int argc, char** argv) {
         }
         // The TV repeats every pad's state every 50 ms; silence means the pad or app is gone.
         gamepads.expire(3s);
+
+        // Console mode: leaving Big Picture ends the session — the TV app closes, the PC goes back
+        // to normal, like turning a console off.
+        if (peer && console.active() && steady_clock::now() - last_bp_check >= 1s) {
+            last_bp_check = steady_clock::now();
+            if (console.big_picture_closed()) {
+                TCL_INFO("session", "Big Picture closed: ending the session");
+                tcl::emit_event("session_end", "\"reason\":\"big_picture_closed\"");
+                for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::SessionEnd);  // UDP: say it thrice
+                peer.reset();
+                peer_name.clear();
+                publish_peer();
+                gamepads.unplug_all();
+            }
+        }
 
         // --- capture ---
         auto wait = duration_cast<milliseconds>(next_frame - steady_clock::now()).count();
