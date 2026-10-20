@@ -140,8 +140,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (hasFocus) UnbufferedInput.enable(window.decorView)
     }
 
+    // Wi-Fi power saving lets the radio doze between packets and deliver them in bursts, which
+    // showed up as audio dropouts with no packet lost. Keep it awake while Jinky is on screen.
+    private val wifiLock by lazy {
+        val wifi = applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)
+        @Suppress("DEPRECATION")
+        val mode = if (Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                   else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        wifi?.createWifiLock(mode, "jinky:stream")?.apply { setReferenceCounted(false) }
+    }
+
     override fun onResume() {
         super.onResume()
+        runCatching { wifiLock?.acquire() }.onFailure { Log.w(TAG, "wifi lock: $it") }
         val r = NativeReceiver()
         // Tell the PC which codecs this TV decodes in hardware at 1080p60 (it prefers HEVC).
         var codecs = 0
@@ -164,6 +175,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        runCatching { wifiLock?.release() }
         // TV going to standby / user leaving: release decoder and network, start clean on resume.
         ui.removeCallbacks(refresh)
         stopPipeline()

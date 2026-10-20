@@ -433,6 +433,7 @@ void Receiver::net_loop() {
             // network hiccups would otherwise add delay after switching TVs.
             audio_target_ = kAudioStartTarget;
             audio_level_avg_ = double(kAudioStartTarget);
+            audio_session_start_ms_ = now_ms();
         }
         if (h->type == PacketType::Audio) {
             on_audio(*h, std::span<const uint8_t>(buf + tclproto::MediaHeader::kSize,
@@ -548,7 +549,9 @@ void Receiver::read_audio(int16_t* dst, size_t frames) {
         // Ran dry (network hiccup or host silent): play silence and rebuild the cushion.
         audio_priming_ = true;
         audio_level_avg_ = double(audio_target_);
-        if (have_audio_seq_) {
+        // The first moments of a session don't count: the opening keyframe holds back the first
+        // audio packets, and that one-off gap used to grow the cushion for the whole session.
+        if (have_audio_seq_ && now - audio_session_start_ms_ > 2000) {
             audio_underruns_++;
             audio_last_underrun_ms_ = now;
             audio_target_ = std::min(audio_target_ + kAudioRate * 10 / 1000, kAudioMaxTarget);

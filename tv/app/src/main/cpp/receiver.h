@@ -208,6 +208,7 @@ private:
     static constexpr size_t kAudioStartTarget = kAudioRate * 30 / 1000;
     size_t audio_target_ = kAudioStartTarget;
     int64_t audio_last_underrun_ms_ = 0, audio_last_shrink_ms_ = 0;
+    int64_t audio_session_start_ms_ = 0;
     size_t audio_max_frames() const { return audio_target_ + kAudioRate * 60 / 1000; }  // above: trim
     mutable std::mutex audio_mu_;
     std::vector<int16_t> audio_ring_ = std::vector<int16_t>(kAudioRingFrames * 2);
