@@ -158,6 +158,13 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeAddPairedHost(
     self(h)->add_paired_host(uint64_t(host), k);
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeAddKnownAddress(JNIEnv* env, jclass, jlong h,
+                                                                                 jstring ip) {
+    const char* s = env->GetStringUTFChars(ip, nullptr);
+    self(h)->add_known_address(s);
+    env->ReleaseStringUTFChars(ip, s);
+}
+
 static bool to_public(JNIEnv* env, jbyteArray a, tclproto::PublicKey& out) {
     if (!a || env->GetArrayLength(a) != jsize(out.size())) return false;
     env->GetByteArrayRegion(a, 0, jsize(out.size()), reinterpret_cast<jbyte*>(out.data()));

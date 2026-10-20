@@ -470,6 +470,7 @@ int main(int argc, char** argv) {
             pending.reset();
         }
         // --- control messages from the receiver ---
+        audio.set_keepalive(peer.has_value() && !opt.test_pattern);
         // (input and clock sync are handled by the receive thread)
         if (const auto t = steady_clock::time_point(steady_clock::duration(last_input.load())); t > last_peer_msg)
             last_peer_msg = t;

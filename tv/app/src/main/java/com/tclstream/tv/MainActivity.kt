@@ -151,6 +151,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         r.setDeviceName(deviceName())
         r.setIdentity(pairingStore.deviceId())
         pairingStore.hosts().forEach { (host, key) -> r.addPairedHost(host, key) }
+        hostCache.all().forEach { r.addKnownAddress(it.ip) }
         pairing = null
         pairingCode = null
         startError = r.start(HOST_PORT)

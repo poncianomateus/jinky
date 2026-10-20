@@ -35,6 +35,12 @@ public:
     // Mutes/unmutes the PC's default output device (the stream keeps the sound). Restores the
     // user's original mute state on unmute. Returns false if the device can't be controlled.
     static bool set_pc_muted(bool muted);
+
+    // While a TV is listening, play silence on the output device: Windows delivers loopback audio
+    // only while something plays, and a quiet moment in a game used to stop the stream (the TV
+    // took the gap for a network hiccup and grew its audio delay). Off otherwise, because a
+    // playing stream keeps the PC from going to sleep.
+    void set_keepalive(bool on) { keepalive_wanted_ = on; }
     // A marker file records "Jinky muted the PC"; if the process died before unmuting, the
     // next run calls this to unmute. Returns true if it restored the sound.
     static bool restore_if_left_muted();
@@ -46,6 +52,7 @@ private:
     ChunkCallback on_chunk_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> keepalive_wanted_{false};
     std::atomic<int> init_state_{0};  // 0 pending, 1 ok, -1 failed
     std::atomic<int> peak_{0};        // max |sample| since last take_peak_dbfs()
     std::string error_, description_;

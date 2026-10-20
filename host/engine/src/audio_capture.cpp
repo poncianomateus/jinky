@@ -198,6 +198,26 @@ void AudioCapture::run() {
             continue;
         }
 
+        // Silent stream on the same device (see set_keepalive), started and stopped on demand.
+        ComPtr<IAudioClient> keepalive_client;
+        ComPtr<IAudioRenderClient> keepalive;
+        UINT32 keepalive_frames = 0;
+        bool keepalive_on = false;
+        if (FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &keepalive_client)) ||
+            FAILED(keepalive_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 100 * 10000, 0, wf, nullptr)) ||
+            FAILED(keepalive_client->GetBufferSize(&keepalive_frames)) ||
+            FAILED(keepalive_client->GetService(IID_PPV_ARGS(&keepalive)))) {
+            TCL_WARN("audio", "silent keep-alive stream unavailable; quiet moments may pause the TV's sound");
+            keepalive.Reset();
+        }
+        auto top_up_keepalive = [&] {
+            UINT32 padding = 0;
+            if (FAILED(keepalive_client->GetCurrentPadding(&padding))) return;
+            const UINT32 n = keepalive_frames - padding;
+            BYTE* buf = nullptr;
+            if (n && SUCCEEDED(keepalive->GetBuffer(n, &buf))) keepalive->ReleaseBuffer(n, AUDCLNT_BUFFERFLAGS_SILENT);
+        };
+
         const uint32_t in_rate = wf->nSamplesPerSec, in_ch = wf->nChannels, frame_bytes = wf->nBlockAlign,
                        sample_bytes = wf->wBitsPerSample / 8;
         description_ = std::format("WASAPI loopback {} Hz, {} ch, {}-bit -> PCM 48 kHz stereo 16-bit, 5 ms packets",
@@ -218,6 +238,17 @@ void AudioCapture::run() {
         bool device_ok = true;
         while (running_ && device_ok) {
             Sleep(2);
+            if (keepalive) {
+                if (keepalive_wanted_ && !keepalive_on) {
+                    top_up_keepalive();
+                    keepalive_on = SUCCEEDED(keepalive_client->Start());
+                } else if (!keepalive_wanted_ && keepalive_on) {
+                    keepalive_client->Stop();
+                    keepalive_client->Reset();
+                    keepalive_on = false;
+                }
+                if (keepalive_on) top_up_keepalive();
+            }
             UINT32 packet = 0;
             while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet > 0) {
                 BYTE* data = nullptr;

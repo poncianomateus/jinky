@@ -62,6 +62,9 @@ public:
     // --- pairing (crypto keys live in Kotlin storage; ECDH itself runs in Java) ---
     void set_identity(uint64_t device_id);
     void add_paired_host(uint64_t host_id, const tclproto::PairKey& key);
+    // A PC address remembered from earlier runs: discovery also asks it directly (Wi-Fi routers
+    // often delay or drop broadcasts; a direct question gets through).
+    void add_known_address(const std::string& ip);
     // Starts (or restarts) pairing with the PC that challenged us: sends our public key.
     void start_pairing(const tclproto::PublicKey& tv_public);
     // The PC's public key once its PairChallenge arrived.
@@ -156,6 +159,7 @@ private:
     };
     mutable std::mutex hosts_mu_;
     std::map<uint64_t, KnownHost> hosts_;
+    std::vector<uint32_t> known_ips_;  // guarded by hosts_mu_
     std::mutex name_mu_;
     std::string device_name_;
 

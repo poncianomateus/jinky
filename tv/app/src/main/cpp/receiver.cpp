@@ -187,6 +187,13 @@ void Receiver::set_identity(uint64_t device_id) {
     device_id_ = device_id;
 }
 
+void Receiver::add_known_address(const std::string& ip) {
+    auto e = tclproto::Endpoint::parse(ip, 0);
+    if (!e) return;
+    std::lock_guard lock(hosts_mu_);
+    if (std::find(known_ips_.begin(), known_ips_.end(), e->ip) == known_ips_.end()) known_ips_.push_back(e->ip);
+}
+
 void Receiver::add_paired_host(uint64_t host_id, const tclproto::PairKey& key) {
     std::lock_guard lock(auth_mu_);
     keys_[host_id] = key;
@@ -276,11 +283,24 @@ void Receiver::net_loop() {
         apply_connect_requests();
         const int64_t now = now_ms();
         if (!session_wanted_) {
-            // Home screen: ask who is out there every 2 s; no session, nothing changes on any PC.
-            if (now - last_discover_ms_ >= 2000) {
+            // Home screen: ask who is out there; no session, nothing changes on any PC. Every 2 s
+            // once a PC answers, every 0.5 s while none does. Broadcast finds new PCs; known ones
+            // are also asked directly, since Wi-Fi often delays or drops broadcasts.
+            std::vector<uint32_t> direct;
+            bool answered = false;
+            {
+                std::lock_guard lock(hosts_mu_);
+                direct = known_ips_;
+                for (const auto& [id, h] : hosts_) {
+                    if (now - h.seen_ms < 3000) answered = true;
+                    if (std::find(direct.begin(), direct.end(), h.ip) == direct.end()) direct.push_back(h.ip);
+                }
+            }
+            if (now - last_discover_ms_ >= (answered ? 2000 : 500)) {
                 uint8_t d[tclproto::ControlMessage::kSize];
                 tclproto::ControlMessage{PacketType::Discover, 0, 0}.write(d);
                 sock_.send_to(tclproto::Endpoint::broadcast(host_port_), d);
+                for (uint32_t ip : direct) sock_.send_to(tclproto::Endpoint{ip, host_port_}, d);
                 last_discover_ms_ = now;
             }
             tclproto::Endpoint from;

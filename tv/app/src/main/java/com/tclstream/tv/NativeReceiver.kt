@@ -63,6 +63,7 @@ class NativeReceiver : AutoCloseable {
     // --- pairing ---
     fun setIdentity(deviceId: Long) = nativeSetIdentity(handle, deviceId)
     fun addPairedHost(hostId: Long, key: ByteArray) = nativeAddPairedHost(handle, hostId, key)
+    fun addKnownAddress(ip: String) = nativeAddKnownAddress(handle, ip)
     fun startPairing(tvPublic: ByteArray) = nativeStartPairing(handle, tvPublic)
     /** The PC's public key (65 bytes) once its challenge arrived, else null. */
     fun pairingChallenge(): ByteArray? = nativePairingChallenge(handle)
@@ -115,6 +116,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeSetDeviceName(handle: Long, name: String)
         @JvmStatic external fun nativeSetIdentity(handle: Long, deviceId: Long)
         @JvmStatic external fun nativeAddPairedHost(handle: Long, hostId: Long, key: ByteArray)
+        @JvmStatic external fun nativeAddKnownAddress(handle: Long, ip: String)
         @JvmStatic external fun nativeStartPairing(handle: Long, tvPublic: ByteArray)
         @JvmStatic external fun nativePairingChallenge(handle: Long): ByteArray?
         @JvmStatic external fun nativeSetPairSecret(handle: Long, secret: ByteArray, tvPublic: ByteArray, pcPublic: ByteArray): String?
