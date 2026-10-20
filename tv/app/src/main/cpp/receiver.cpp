@@ -545,8 +545,9 @@ void Receiver::read_audio(int16_t* dst, size_t frames) {
     // (about 0.4%, inaudible), stretching the chunk with linear interpolation.
     audio_level_avg_ = audio_level_avg_ * 0.98 + double(audio_fill_) * 0.02;
     size_t consume = frames;
-    if (audio_level_avg_ < audio_target_ * 0.7) consume = frames - 1;  // TV faster: stretch
-    else if (audio_level_avg_ > audio_target_ * 1.4 && audio_fill_ > frames + 1) consume = frames + 1;  // shrink
+    // Tight band around the target: sitting near its top used to add ~15 ms of audio delay.
+    if (audio_level_avg_ < audio_target_ * 0.85) consume = frames - 1;  // TV faster: stretch
+    else if (audio_level_avg_ > audio_target_ * 1.15 && audio_fill_ > frames + 1) consume = frames + 1;  // shrink
     if (consume != frames) audio_adjustments_++;
     for (size_t i = 0; i < frames; ++i) {
         const double pos = double(i) * double(consume - 1) / double(frames - 1);

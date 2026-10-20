@@ -135,6 +135,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         window.attributes = window.attributes.also { it.preferredDisplayModeId = mode.modeId }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) UnbufferedInput.enable(window.decorView)
+    }
+
     override fun onResume() {
         super.onResume()
         val r = NativeReceiver()
@@ -208,7 +213,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             receiver?.retryPairing()
             return true
         }
-        return gamepads?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
+        if (gamepads?.onKeyEvent(event) == true) return true
+        // On the TV's own screens (home, menu) the controller's A works as OK.
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
+            return super.dispatchKeyEvent(KeyEvent(event.downTime, event.eventTime, event.action,
+                KeyEvent.KEYCODE_DPAD_CENTER, event.repeatCount, event.metaState, event.deviceId,
+                event.scanCode, event.flags, event.source))
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /** The name the user gave this TV (e.g. "Fire TV da sala"), or its model. */
@@ -410,17 +422,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
             return true
         }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER ||
-            keyCode == KeyEvent.KEYCODE_BUTTON_A
-        ) {
-            statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            return true
-        }
         return super.onKeyDown(keyCode, event)
     }
 
     private fun buildOverlay(): String = buildString {
-        appendLine("Jinky — estatísticas (OK oculta · Voltar ou View+Menu no controle abre o menu)")
+        appendLine("Jinky — estatísticas (Voltar ou View+Menu no controle abre o menu)")
         appendLine()
         startError?.let { appendLine("ERRO de rede: $it") }
         receiver?.let { appendLine(it.status()) }
@@ -432,7 +438,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             appendLine("etapa: ${stageText(p.stage)}")
             appendLine("decodificador: ${p.decoderName}")
             appendLine(latencyText(p.latency.last))
-            gamepads?.let { appendLine("controles: ${it.summary}") }
+            gamepads?.let {
+                appendLine("controles: ${it.summary}")
+                if (it.lagSummary.isNotEmpty()) appendLine(it.lagSummary)
+            }
             audio?.let { a ->
                 val out = if (a.outputLatencyMs.isNaN()) "?" else "%.0f".format(a.outputLatencyMs)
                 appendLine("áudio: saída da TV $out ms · falhas na saída ${a.deviceUnderruns}" + (a.error?.let { " · $it" } ?: ""))

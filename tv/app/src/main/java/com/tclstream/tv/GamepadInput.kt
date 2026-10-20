@@ -66,6 +66,28 @@ class GamepadInput(
     private val handler = Handler(thread.looper)
     @Volatile var summary = "nenhum controle"; private set
 
+    // How long Android held each gamepad event before handing it to us (diagnostics).
+    private var lagCount = 0
+    private var lagSumMs = 0L
+    private var lagMaxMs = 0L
+    private var lagBatched = 0
+    private var lagSince = 0L
+    @Volatile var lagSummary = ""; private set
+
+    private fun noteLag(eventTimeMs: Long, batched: Boolean) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val lag = now - eventTimeMs
+        lagCount++; lagSumMs += lag; if (lag > lagMaxMs) lagMaxMs = lag
+        if (batched) lagBatched++
+        if (lagSince == 0L) lagSince = now
+        if (now - lagSince >= 5000 && lagCount > 0) {
+            lagSummary = "entrada: Android segura %.1f ms em média, máx %d ms (%d eventos, %d em lote)"
+                .format(lagSumMs.toDouble() / lagCount, lagMaxMs, lagCount, lagBatched)
+            Log.i(TAG, lagSummary)
+            lagCount = 0; lagSumMs = 0; lagMaxMs = 0; lagBatched = 0; lagSince = now
+        }
+    }
+
     private val tick = object : Runnable {
         override fun run() {
             val now = android.os.SystemClock.uptimeMillis()
@@ -176,6 +198,7 @@ class GamepadInput(
         val bit = buttonFor(e.keyCode)
         val down = e.action == KeyEvent.ACTION_DOWN
         synchronized(pads) {  // the 50 ms repeat runs on another thread
+        if (e.repeatCount == 0) noteLag(e.eventTime, false)
         val now = android.os.SystemClock.uptimeMillis()
         if (bit and COMBO != 0 && e.repeatCount == 0) {
             if (down) {
@@ -202,7 +225,10 @@ class GamepadInput(
         if ((e.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         val pad = synchronized(pads) { pads[e.deviceId] } ?: return false
         val dev = e.device ?: return false
-        synchronized(pads) { applyMotion(pad, e, dev) }
+        synchronized(pads) {
+            noteLag(if (e.historySize > 0) e.getHistoricalEventTime(0) else e.eventTime, e.historySize > 0)
+            applyMotion(pad, e, dev)
+        }
         return true
     }
 

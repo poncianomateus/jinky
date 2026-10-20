@@ -287,11 +287,25 @@ int main(int argc, char** argv) {
         sock.send_to(to, buf);
     };
 
+    // The receive thread (below) applies controller input itself; it needs the current receiver
+    // and its key. Everything else it queues for the main loop.
+    struct RxPacket { tclproto::Endpoint from; std::vector<uint8_t> bytes; };
+    std::mutex rx_mu;
+    std::deque<RxPacket> rx_queue;
+    std::optional<tclproto::Endpoint> input_peer;
+    tclproto::PairKey input_key{};
+    std::atomic<steady_clock::rep> last_input{0};  // steady_clock ticks of the last accepted input
+
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
     std::atomic<uint64_t> audio_peer{0};
     std::atomic<uint32_t> audio_session{0};
     tcl::ConsoleMode console;
     auto publish_peer = [&] {
+        {
+            std::lock_guard lock(rx_mu);
+            input_peer = peer;
+            input_key = peer_key;
+        }
         audio_session = session_id;
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
         if (opt.console && !opt.test_pattern) {
@@ -360,7 +374,56 @@ int main(int argc, char** argv) {
     uint64_t frames_sent = 0, bytes_sent = 0, encode_us_total = 0, encode_us_max = 0;
     uint64_t last_send_us = 0, send_gap_max_us = 0, late_sends = 0;  // send-interval jitter
     std::vector<uint8_t> bitstream;
-    uint8_t rx[2048];
+
+    // Network receive thread. Controller input and clock-sync requests are answered the moment
+    // they arrive; the main loop can be busy for up to a frame (waiting for the desktop, encoding),
+    // which used to add 0-17 ms to every button press.
+    std::jthread rx_thread([&](std::stop_token stop) {
+        DWORD task_index = 0;
+        const HANDLE task = AvSetMmThreadCharacteristicsW(L"Games", &task_index);
+        if (task) AvSetMmThreadPriority(task, AVRT_PRIORITY_HIGH);
+        uint8_t rx[2048];
+        tclproto::Endpoint from;
+        while (!stop.stop_requested() && !g_quit) {
+            const int n = sock.recv_from(rx, from, 50);
+            if (n < 0) {
+                TCL_WARN("net", "{}", sock.error());
+                std::this_thread::sleep_for(50ms);
+                continue;
+            }
+            if (n == 0) continue;
+            const std::span<const uint8_t> packet(rx, size_t(n));
+            const auto type = tclproto::peek_type(packet);
+            if (type == PacketType::Input) {
+                auto in = tclproto::InputState::read(packet);
+                bool ok;
+                {
+                    std::lock_guard lock(rx_mu);
+                    ok = in && input_peer && from == *input_peer &&
+                         (opt.insecure || tclproto::InputState::verify(packet, input_key));
+                }
+                if (ok) {
+                    gamepads.apply(*in);
+                    last_input = steady_clock::now().time_since_epoch().count();
+                }
+                continue;
+            }
+            if (type == PacketType::TimeRequest) {
+                if (auto t = tclproto::TimeSync::read(packet)) {
+                    t->type = PacketType::TimeResponse;
+                    t->host_us = now_us();
+                    uint8_t reply[tclproto::TimeSync::kSize];
+                    t->write(reply);
+                    sock.send_to(from, reply);
+                }
+                continue;
+            }
+            std::lock_guard lock(rx_mu);
+            if (rx_queue.size() >= 512) rx_queue.pop_front();  // main loop stuck (e.g. capture lost)
+            rx_queue.push_back({from, std::vector<uint8_t>(packet.begin(), packet.end())});
+        }
+        if (task) AvRevertMmThreadCharacteristics(task);
+    });
 
     while (!g_quit) {
         // --- commands from the Jinky app ---
@@ -407,33 +470,22 @@ int main(int argc, char** argv) {
             pending.reset();
         }
         // --- control messages from the receiver ---
-        tclproto::Endpoint from;
-        int n;
-        while ((n = sock.recv_from(rx, from, 0)) > 0) {
-            const std::span<const uint8_t> packet(rx, size_t(n));
-            if (tclproto::peek_type(packet) == PacketType::Input) {
-                if (auto in = tclproto::InputState::read(packet);
-                    in && peer && from == *peer && (opt.insecure || tclproto::InputState::verify(packet, peer_key))) {
-                    last_peer_msg = steady_clock::now();
-                    gamepads.apply(*in);
-                }
-                continue;
-            }
+        // (input and clock sync are handled by the receive thread)
+        if (const auto t = steady_clock::time_point(steady_clock::duration(last_input.load())); t > last_peer_msg)
+            last_peer_msg = t;
+        std::deque<RxPacket> inbox;
+        {
+            std::lock_guard lock(rx_mu);
+            inbox.swap(rx_queue);
+        }
+        for (const RxPacket& item : inbox) {
+            const tclproto::Endpoint& from = item.from;
+            const std::span<const uint8_t> packet(item.bytes);
             if (tclproto::peek_type(packet) == PacketType::DeviceName) {
                 if (auto nm = tclproto::NameMessage::read(packet); nm && peer && from == *peer && nm->name != peer_name) {
                     peer_name = nm->name;
                     TCL_INFO("session", "receiver is \"{}\"", peer_name);
                     tcl::emit_event("tv_name", "\"name\":" + tcl::json_str(peer_name));
-                }
-                continue;
-            }
-            if (tclproto::peek_type(packet) == PacketType::TimeRequest) {
-                if (auto t = tclproto::TimeSync::read(packet)) {
-                    t->type = PacketType::TimeResponse;
-                    t->host_us = now_us();
-                    uint8_t reply[tclproto::TimeSync::kSize];
-                    t->write(reply);
-                    sock.send_to(from, reply);
                 }
                 continue;
             }
@@ -588,7 +640,6 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (n < 0) TCL_WARN("net", "{}", sock.error());
         if (peer && steady_clock::now() - last_peer_msg > 5s) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
             tcl::emit_event("disconnected", "\"reason\":\"silent\"");
@@ -615,7 +666,15 @@ int main(int argc, char** argv) {
         }
 
         // --- capture ---
-        auto wait = duration_cast<milliseconds>(next_frame - steady_clock::now()).count();
+        // A fresh desktop frame is encoded as soon as it is captured (waiting for the next 60 Hz
+        // tick added 0-16 ms). next_frame is the nominal slot of the next encode: a frame may go
+        // out up to `slack` early, and slots advance one interval per encode, so on average the
+        // rate never exceeds the target even on a 240 Hz desktop. Static screens and keyframe
+        // retries still follow the tick.
+        const auto slack = frame_interval / 4;
+        const bool send_on_capture = peer && !opt.test_pattern;
+        const auto deadline = send_on_capture && dirty ? next_frame - slack : next_frame;
+        auto wait = duration_cast<milliseconds>(deadline - steady_clock::now()).count();
         if (opt.test_pattern) {
             // Exactly one fresh synthetic frame per slot: exercises the full 60 fps path and latency.
             sleep_until_precise(next_frame);
@@ -677,9 +736,13 @@ int main(int argc, char** argv) {
 
         // --- encode + send, paced to the target frame rate ---
         auto now = steady_clock::now();
-        if (now < next_frame) continue;
-        next_frame += frame_interval;
-        if (next_frame < now) next_frame = now + frame_interval;  // fell behind; don't burst
+        if (send_on_capture && dirty && now >= next_frame - slack) {
+            next_frame = std::max(next_frame, now - slack) + frame_interval;
+        } else {
+            if (now < next_frame) continue;
+            next_frame += frame_interval;
+            if (next_frame < now) next_frame = now + frame_interval;  // fell behind; don't burst
+        }
 
         // Re-send a frame at least twice a second even on a static desktop, so the receiver can
         // tell "nothing changed" apart from "stream died".
@@ -754,6 +817,8 @@ int main(int argc, char** argv) {
 
     TCL_INFO("main", "stopping");
     tcl::emit_event("stopping");
+    rx_thread.request_stop();
+    rx_thread.join();
     audio.stop();
     console.leave();
     if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit
