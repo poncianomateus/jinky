@@ -70,7 +70,7 @@ inline constexpr uint32_t kHelloTakeover = 1u << 8;
 inline constexpr uint32_t kHelloDesktop = 1u << 9;
 
 // A PC's answer to Discover. Layout: magic(4) version(1) type(1) state(1) name_len(1) host_id(8)
-// mac(6) busy_len(1) reserved(1) name busy_with = 24 + name + busy_with bytes.
+// mac(6) busy_len(1) reserved(1) name busy_with [tv_version_code(4) update_port(2)].
 struct HostInfo {
     enum State : uint8_t { kIdle = 0, kBusy = 1 };
     uint64_t host_id = 0;
@@ -78,6 +78,9 @@ struct HostInfo {
     std::array<uint8_t, 6> mac{};  // of the PC's network adapter facing the TV, for Wake-on-LAN
     std::string name;              // the PC's name
     std::string busy_with;         // name of the TV playing, when busy
+    // TV app update offered by this PC (appended after the strings; older TVs ignore it).
+    uint32_t tv_version_code = 0;  // 0 = none
+    uint16_t update_port = 0;      // HTTP port serving /tv/jinky.apk
 
     static constexpr size_t kHeader = 24;
     static constexpr size_t kMaxText = 64;

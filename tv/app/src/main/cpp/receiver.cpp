@@ -66,7 +66,8 @@ std::string Receiver::hosts() const {
             std::snprintf(buf, sizeof buf, "%02x", b);
             out += buf;
         }
-        out += "|" + std::to_string(now - h.seen_ms) + "|" + h.info.name + "|" + h.info.busy_with + "\n";
+        out += "|" + std::to_string(now - h.seen_ms) + "|" + h.info.name + "|" + h.info.busy_with + "|" +
+               std::to_string(h.info.tv_version_code) + "|" + std::to_string(h.info.update_port) + "\n";
     }
     return out;
 }

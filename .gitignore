@@ -17,3 +17,5 @@ tv/.kotlin/
 .vscode/
 host/app/bin/
 host/app/obj/
+tv/build/
+dist/

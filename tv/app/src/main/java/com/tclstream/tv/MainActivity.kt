@@ -29,6 +29,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var homeScreen: HomeScreen
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
+    private val updater by lazy { Updater(this) }
     private var searchStartMs = 0L
     private val pairingStore by lazy { PairingStore(this) }
     private var pairing: PairingSession? = null
@@ -106,7 +107,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onWake = { host ->
                     host.mac?.let { HostCache.wake(it, host.ip) }
                     wakingUntil = android.os.SystemClock.elapsedRealtime() + 60_000
-                })
+                },
+                onUpdate = { host -> updater.update(host.ip, host.updatePort) })
+            updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
@@ -281,12 +284,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             hostCache.remember(id, p[5], p[1], p[3])
             if (age > 6000) return@mapNotNull null  // not answering any more
             HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
-                HostCache.parseMac(p[3]))
+                HostCache.parseMac(p[3]), p.getOrNull(7)?.toIntOrNull() ?: 0, p.getOrNull(8)?.toIntOrNull() ?: 0)
         }
         val host = online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
             ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
-        homeScreen.show(host, searching = true, waking = now < wakingUntil)
+        homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
     }
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */

@@ -230,7 +230,10 @@ size_t HostInfo::write(std::span<uint8_t> out) const {
     p[23] = 0;
     std::memcpy(p + kHeader, name.data(), nlen);
     std::memcpy(p + kHeader + nlen, busy_with.data(), blen);
-    return kHeader + nlen + blen;
+    uint8_t* t = p + kHeader + nlen + blen;
+    put_u32(t, tv_version_code);
+    put_u16(t + 4, update_port);
+    return kHeader + nlen + blen + 6;
 }
 
 std::optional<HostInfo> HostInfo::read(std::span<const uint8_t> in) {
@@ -245,6 +248,11 @@ std::optional<HostInfo> HostInfo::read(std::span<const uint8_t> in) {
     std::memcpy(h.mac.data(), p + 16, 6);
     h.name.assign(reinterpret_cast<const char*>(p + kHeader), nlen);
     h.busy_with.assign(reinterpret_cast<const char*>(p + kHeader + nlen), blen);
+    if (in.size() >= kHeader + nlen + blen + 6) {
+        const uint8_t* t = p + kHeader + nlen + blen;
+        h.tv_version_code = get_u32(t);
+        h.update_port = get_u16(t + 4);
+    }
     return h;
 }
 

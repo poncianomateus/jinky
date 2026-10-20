@@ -242,12 +242,17 @@ static void test_host_info() {
     h.mac = {0xDC, 0x71, 0x96, 0x6A, 0x45, 0x28};
     h.name = "DESKTOP-BF21OEI";
     h.busy_with = "TCL 55P7K";
-    uint8_t buf[HostInfo::kHeader + 2 * HostInfo::kMaxText];
+    h.tv_version_code = 300;
+    h.update_port = 47101;
+    uint8_t buf[HostInfo::kHeader + 2 * HostInfo::kMaxText + 6];
     const size_t len = h.write(buf);
     auto r = HostInfo::read(std::span<const uint8_t>(buf, len));
     CHECK(r && r->host_id == h.host_id && r->state == HostInfo::kBusy && r->mac == h.mac);
     CHECK(r->name == "DESKTOP-BF21OEI" && r->busy_with == "TCL 55P7K");
-    CHECK(!HostInfo::read(std::span<const uint8_t>(buf, len - 1)).has_value());  // truncated
+    CHECK(r->tv_version_code == 300 && r->update_port == 47101);
+    // A message from an older PC (no update fields) still parses, with no update offered.
+    auto old = HostInfo::read(std::span<const uint8_t>(buf, len - 6));
+    CHECK(old && old->name == "DESKTOP-BF21OEI" && old->tv_version_code == 0);
 }
 
 static void test_in_order_delivery() {

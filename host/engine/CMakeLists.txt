@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 project(jinky_engine LANGUAGES CXX)
 
+# Static C++ runtime: the engine runs on PCs without the Visual C++ Redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+file(READ ../../VERSION JINKY_VERSION)
+string(STRIP "${JINKY_VERSION}" JINKY_VERSION)
+
 add_subdirectory(../../proto proto)
 
 add_executable(jinky-engine
@@ -18,7 +23,7 @@ add_executable(jinky-engine
     ../../third_party/vigemclient/src/ViGEmClient.cpp
 )
 target_compile_features(jinky-engine PRIVATE cxx_std_20)
-target_compile_definitions(jinky-engine PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_compile_definitions(jinky-engine PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE JINKY_VERSION="${JINKY_VERSION}")
 target_include_directories(jinky-engine PRIVATE ../../third_party/nvenc ../../third_party/vigemclient/include)
 target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler bcrypt iphlpapi)
 if(MSVC)

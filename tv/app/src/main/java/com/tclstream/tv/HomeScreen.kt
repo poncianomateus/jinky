@@ -22,6 +22,8 @@ data class HomeHost(
     val status: Status,
     val busyWith: String,
     val mac: ByteArray?,
+    val updateVersion: Int = 0,  // TV app version the PC offers (0 = none)
+    val updatePort: Int = 0,
 ) {
     enum class Status { READY, BUSY, OFFLINE }
 }
@@ -35,6 +37,7 @@ class HomeScreen(
     context: Context,
     private val onPlay: (HomeHost, desktop: Boolean) -> Unit,
     private val onWake: (HomeHost) -> Unit,
+    private val onUpdate: (HomeHost) -> Unit,
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
@@ -47,6 +50,12 @@ class HomeScreen(
     private val play = bigButton()
     private val desktop = smallButton("Área de trabalho")
     private val wake = smallButton("Ligar o PC")
+    private val update = smallButton("Atualizar o Jinky").apply {
+        visibility = View.GONE
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        setPadding(dp(20), dp(10), dp(20), dp(10))
+    }
+    private val updateNote = text(16f, StartScreen.ACCENT)
     private val actions = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
     private var host: HomeHost? = null
@@ -58,13 +67,20 @@ class HomeScreen(
             orientation = LinearLayout.VERTICAL
             setPadding(pad, dp(40), pad, dp(32))
         }
-        // Brand
+        // Brand on the left; "update available" on the right (D-pad up from the main button).
         root.addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(ImageView(context).apply { setImageResource(R.drawable.ic_jinky) }, LinearLayout.LayoutParams(dp(40), dp(40)))
             addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark) },
                 LinearLayout.LayoutParams(dp(62), dp(32)).apply { marginStart = dp(12) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.END
+                addView(update, LinearLayout.LayoutParams(-2, -2))
+                addView(updateNote, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) })
+            })
         })
         // PC + status
         val info = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -87,10 +103,15 @@ class HomeScreen(
         play.setOnClickListener { host?.let { onPlay(it, false) } }
         desktop.setOnClickListener { host?.let { onPlay(it, true) } }
         wake.setOnClickListener { host?.let(onWake) }
+        update.setOnClickListener { host?.let(onUpdate) }
     }
 
     /** Updates the screen; `searching` = no PC known yet. Keeps focus where the user put it. */
-    fun show(h: HomeHost?, searching: Boolean, waking: Boolean) {
+    /** [updateStatus]: progress/result of an update in progress, else null. */
+    fun show(h: HomeHost?, searching: Boolean, waking: Boolean, updateStatus: String? = null) {
+        updateNote.text = updateStatus ?: ""
+        updateNote.visibility = if (updateStatus == null) View.GONE else View.VISIBLE
+        showUpdate(h)
         val previous = host
         host = h
         if (h == null) {
@@ -126,6 +147,17 @@ class HomeScreen(
         }
         // First time this PC shows up (or its buttons changed): put focus on the main action.
         if (previous?.id != h.id || previous.status != h.status) actions.getChildAt(0)?.requestFocus()
+    }
+
+    /** "Atualizar o Jinky" when the PC carries a newer TV app than this one. */
+    private fun showUpdate(h: HomeHost?) {
+        val v = h?.updateVersion ?: 0
+        if (h == null || h.status == HomeHost.Status.OFFLINE || v <= BuildConfig.VERSION_CODE || h.updatePort == 0) {
+            update.visibility = View.GONE
+            return
+        }
+        update.text = "Atualizar o Jinky · ${v / 10000}.${v / 100 % 100}.${v % 100}"
+        update.visibility = View.VISIBLE
     }
 
     private fun setStatus(color: Int, label: String) {

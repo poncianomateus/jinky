@@ -11,7 +11,8 @@
     <AssemblyName>Jinky</AssemblyName>
     <RootNamespace>Jinky</RootNamespace>
     <ApplicationIcon>Assets\jinky.ico</ApplicationIcon>
-    <Version>0.2.0</Version>
+    <!-- One version for the whole product: repo-root VERSION. -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
     <Product>Jinky</Product>
     <Description>Jinky — jogue os jogos do PC na TV</Description>
     <!-- Everything the user runs ends up in build\app next to the engine. -->
@@ -32,6 +33,9 @@
     <!-- The C++ streaming engine (built by host/engine) ships next to Jinky.exe. -->
     <None Include="..\..\build\host\Release\jinky-engine.exe" Link="jinky-engine.exe"
           CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\host\Release\jinky-engine.exe')" />
+    <!-- The TV app of this same version, served to the TVs for updates (TvUpdateServer). -->
+    <None Include="..\..\tv\app\build\outputs\apk\release\app-release.apk" Link="tv\jinky-tv.apk"
+          CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\tv\app\build\outputs\apk\release\app-release.apk')" />
   </ItemGroup>
 
 </Project>

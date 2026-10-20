@@ -89,7 +89,9 @@ struct Options {
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
     bool stdin_control = false;
-    bool insecure = false;  // accept any TV without pairing (test tools only)  // "quit" on stdin (or stdin closing) stops the engine cleanly
+    bool insecure = false;  // accept any TV without pairing (test tools only)
+    uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
+    uint16_t tv_update_port = 0;  // "quit" on stdin (or stdin closing) stops the engine cleanly
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
     tcl::EncoderConfig enc;
 };
@@ -109,6 +111,19 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--insecure") o.insecure = true;
+        else if (a == "--tv-update" && (v = next())) {
+            // "<versionCode>:<port>" — the desktop app serves the TV app on that port.
+            const std::string spec = v;
+            const auto colon = spec.find(':');
+            if (colon != std::string::npos) {
+                o.tv_update_version = uint32_t(std::strtoul(spec.substr(0, colon).c_str(), nullptr, 10));
+                o.tv_update_port = uint16_t(std::strtoul(spec.substr(colon + 1).c_str(), nullptr, 10));
+            }
+        }
+        else if (a == "--version") {
+            std::printf("jinky-engine %s\n", JINKY_VERSION);
+            std::exit(0);
+        }
         else if (a == "--codec" && (v = next())) o.codec = v;
         else if (a == "--refs" && (v = next())) o.enc.max_ref_frames = uint32_t(std::atoi(v));
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
@@ -464,7 +479,9 @@ int main(int argc, char** argv) {
                 hi.mac = tcl::mac_toward(from.ip);
                 hi.name = pc_name;
                 if (busy) hi.busy_with = peer_name.empty() ? peer->to_string() : peer_name;
-                uint8_t reply[tclproto::HostInfo::kHeader + 2 * tclproto::HostInfo::kMaxText];
+                hi.tv_version_code = opt.tv_update_version;
+                hi.update_port = opt.tv_update_port;
+                uint8_t reply[tclproto::HostInfo::kHeader + 2 * tclproto::HostInfo::kMaxText + 6];
                 sock.send_to(from, std::span<const uint8_t>(reply, hi.write(reply)));
                 continue;
             }

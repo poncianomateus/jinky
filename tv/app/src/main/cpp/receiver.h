@@ -41,7 +41,7 @@ public:
     void connect(uint32_t ip, bool desktop);
     void disconnect();
     bool in_session() const { return session_wanted_; }
-    // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith" (hex ids/mac).
+    // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith|tvVersion|updatePort".
     std::string hosts() const;
 
     // Blocks up to timeout_ms for the next decodable frame and copies it into dst.

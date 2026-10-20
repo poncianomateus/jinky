@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Updates come from the Jinky PC app; Android still asks the user to confirm each one. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- TV app: no touchscreen; leanback not required so the same APK installs on Fire TV. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -13,7 +15,10 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_jinky"
         android:label="@string/app_name"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+        android:usesCleartextTraffic="true">
+        <!-- Cleartext HTTP only ever goes to the paired PC on the home network (TV app updates).
+             The APK is checked by Android's signature verification before it can install. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
