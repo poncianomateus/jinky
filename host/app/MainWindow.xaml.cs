@@ -28,6 +28,8 @@ public partial class MainWindow : Window
     MainViewModel Vm => (MainViewModel)DataContext;
 
     void AcceptPairing_Click(object sender, RoutedEventArgs e) => Vm.AcceptPairing();
+
+    async void Update_Click(object sender, RoutedEventArgs e) => await Vm.InstallUpdateAsync();
     void RejectPairing_Click(object sender, RoutedEventArgs e) => Vm.RejectPairing();
 
     void Unpair_Click(object sender, RoutedEventArgs e)

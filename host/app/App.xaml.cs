@@ -86,6 +86,26 @@ public partial class App : Application
         _engine.Exited += () => Dispatcher.Invoke(() => { _vm.OnEngineExited(); UpdateTray(); });
         _engine.Start(_settings.EngineArguments());
 
+        // Updates: check shortly after start, then every 6 hours. Never interrupts a game: the user
+        // clicks "Atualizar" when it suits them.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(20));
+            while (true)
+            {
+                var update = await Updater.CheckAsync();
+                Dispatcher.Invoke(() =>
+                {
+                    var isNew = update is not null && _vm.UpdateButtonText != $"Atualizar para {update.Version}";
+                    _vm.SetUpdate(update);
+                    if (isNew)
+                        _tray?.ShowBalloonTip(5000, "Atualização do Jinky disponível",
+                                              $"Versão {update!.Version}. Abra o Jinky e clique em Atualizar.", Forms.ToolTipIcon.None);
+                });
+                await Task.Delay(TimeSpan.FromHours(6));
+            }
+        });
+
         if (!e.Args.Contains("--tray")) ShowWindow();
     }
 

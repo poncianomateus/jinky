@@ -25,6 +25,11 @@
                     <TextBlock Text="Jinky" FontFamily="{StaticResource Display}" FontSize="24" FontWeight="SemiBold"
                                Margin="12,0,0,2" VerticalAlignment="Center"/>
                 </StackPanel>
+                <!-- Update available: one click downloads, verifies and installs it. -->
+                <Button DockPanel.Dock="Right" Style="{StaticResource AccentButton}" Margin="12,0,0,0" VerticalAlignment="Center"
+                        Content="{Binding UpdateButtonText}" IsEnabled="{Binding CanInstallUpdate}" Click="Update_Click"
+                        Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="{Binding UpdateNotes}"/>
                 <Border DockPanel.Dock="Right" CornerRadius="999" Padding="12,6" VerticalAlignment="Center">
                     <Border.Style>
                         <Style TargetType="Border">

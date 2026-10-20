@@ -19,3 +19,5 @@ host/app/bin/
 host/app/obj/
 tv/build/
 dist/
+build/
+third_party/redist/*.exe

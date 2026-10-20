@@ -43,6 +43,45 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void RejectPairing() { if (_pairing is { } p) _sendCommand("pair-reject " + p.Id); }
     public void Unpair(string id) => _sendCommand("unpair " + id);
 
+    // --- app updates ------------------------------------------------------------------------------
+
+    UpdateInfo? _update;
+    string? _updateStatus;
+    bool _installing;
+
+    public bool HasUpdate => _update is not null;
+    public bool CanInstallUpdate => _update is not null && !_installing;
+    public string UpdateNotes => _update?.Notes ?? "";
+    public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}");
+
+    public void SetUpdate(UpdateInfo? update)
+    {
+        _update = update;
+        NotifyUpdate();
+    }
+
+    public async Task InstallUpdateAsync()
+    {
+        if (_update is null || _installing) return;
+        _installing = true;
+        var progress = new Progress<double>(p => { _updateStatus = $"Baixando… {p:P0}"; NotifyUpdate(); });
+        _updateStatus = "Baixando…";
+        NotifyUpdate();
+        var error = await Updater.InstallAsync(_update, progress);
+        _installing = false;
+        _updateStatus = error is null ? "Instalando…" : null;
+        if (error is not null) Add(error, warning: true);
+        NotifyUpdate();
+    }
+
+    void NotifyUpdate()
+    {
+        Notify(nameof(HasUpdate));
+        Notify(nameof(CanInstallUpdate));
+        Notify(nameof(UpdateNotes));
+        Notify(nameof(UpdateButtonText));
+    }
+
     // --- state -------------------------------------------------------------------------------
 
     public enum State { Starting, Waiting, Streaming, Failed }
