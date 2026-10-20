@@ -14,6 +14,8 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- Header: brand + status pill -->
@@ -58,8 +60,32 @@
                 </Border>
             </DockPanel>
 
+            <!-- Pairing request: a new TV shows a code; the user approves it here if it matches -->
+            <Border Grid.Row="1" CornerRadius="16" Padding="24" Margin="0,0,0,20" Background="#122340"
+                    BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                    Visibility="{Binding HasPairing, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,20,0">
+                        <TextBlock FontFamily="{StaticResource Display}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap">
+                            <Run Text="{Binding Pairing.Name, Mode=OneWay}"/><Run Text=" quer se conectar"/>
+                        </TextBlock>
+                        <TextBlock Text="Confira se a TV mostra o mesmo código. Só é preciso fazer isso uma vez."
+                                   Foreground="{StaticResource Muted}" Margin="0,4,0,10" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding PairingCode}" FontFamily="{StaticResource Display}" FontSize="36" FontWeight="Bold"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="Recusar" Style="{StaticResource GhostButton}" Margin="0,0,10,0" Padding="18,10" Click="RejectPairing_Click"/>
+                        <Button Content="Permitir" Style="{StaticResource AccentButton}" Click="AcceptPairing_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
             <!-- Hero: what is happening now + live numbers -->
-            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="26" Margin="0,0,0,20">
+            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="26" Margin="0,0,0,20">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -99,7 +125,7 @@
             </Border>
 
             <!-- Preferences + this PC -->
-            <Grid Grid.Row="2" Margin="0,0,0,20">
+            <Grid Grid.Row="3" Margin="0,0,0,20">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="20"/>
@@ -140,8 +166,29 @@
                 </Border>
             </Grid>
 
+            <!-- Paired TVs -->
+            <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,20">
+                <StackPanel>
+                    <TextBlock Text="TVs pareadas" Style="{StaticResource CardTitle}"/>
+                    <TextBlock Text="Nenhuma ainda. Abra o Jinky na TV: ela vai mostrar um código para você confirmar aqui."
+                               Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                               Visibility="{Binding NoPairedTvs, Converter={StaticResource BoolToVisibility}}"/>
+                    <ItemsControl ItemsSource="{Binding PairedTvs}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,4">
+                                    <Button Content="Remover" Style="{StaticResource GhostButton}" DockPanel.Dock="Right"
+                                            Tag="{Binding Id}" Click="Unpair_Click"/>
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
             <!-- Activity -->
-            <Border Grid.Row="3" Style="{StaticResource Card}">
+            <Border Grid.Row="5" Style="{StaticResource Card}">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
                         <TextBlock Text="Atividade" Style="{StaticResource CardTitle}" DockPanel.Dock="Left"/>

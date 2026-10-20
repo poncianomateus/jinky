@@ -39,6 +39,12 @@ enum class PacketType : uint8_t {
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
     Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
+    // Pairing and authentication (see auth.h)
+    AuthRequired = 40,   // host -> TV
+    AuthHello = 41,      // TV -> host
+    PairRequest = 42,    // TV -> host
+    PairChallenge = 43,  // host -> TV
+    PairResult = 44,     // host -> TV
 };
 
 enum PacketFlags : uint8_t {
@@ -147,10 +153,13 @@ struct InputState {
     uint8_t left_trigger = 0, right_trigger = 0;  // 0..255
     int16_t lx = 0, ly = 0, rx = 0, ry = 0;       // -32768..32767, +y = up (XInput convention)
 
-    static constexpr size_t kSize = 32;
+    // 32 bytes of state + a 16-byte MAC over them, made with the TV's pair key (zeros when the
+    // host runs without pairing, e.g. --insecure test mode).
+    static constexpr size_t kSize = 48;
 
-    void write(std::span<uint8_t> out) const;
+    void write(std::span<uint8_t> out, std::span<const uint8_t> key = {}) const;
     static std::optional<InputState> read(std::span<const uint8_t> in);
+    static bool verify(std::span<const uint8_t> in, std::span<const uint8_t> key);
 };
 
 struct RumbleMessage {

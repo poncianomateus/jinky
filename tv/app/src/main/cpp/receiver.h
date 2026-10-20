@@ -12,6 +12,9 @@
 #include <thread>
 #include <vector>
 
+#include <map>
+
+#include "tclproto/auth.h"
 #include "tclproto/framing.h"
 #include "tclproto/udp.h"
 
@@ -39,11 +42,29 @@ public:
     void request_keyframe();
     void report_presented(uint64_t count) { presented_ = count; }
     // Session state as seen by this TV.
-    enum State { kActive = 0, kDisplaced = 1, kEnded = 2 };
+    // kNeedPairing: the PC asked us to identify and we have no key for it; Kotlin starts pairing.
+    // kPairingCode: the 6-digit code is on screen, waiting for the user to approve on the PC.
+    enum State { kActive = 0, kDisplaced = 1, kEnded = 2, kNeedPairing = 3, kPairingCode = 4, kPairingRejected = 5 };
     int state() const { return state_; }
     // "Play here": take the session over from whichever TV has it (also automatic for a few
     // seconds after start, since opening Jinky means the user wants to play on this TV).
     void request_takeover();
+    // --- pairing (crypto keys live in Kotlin storage; ECDH itself runs in Java) ---
+    void set_identity(uint64_t device_id);
+    void add_paired_host(uint64_t host_id, const tclproto::PairKey& key);
+    // Starts (or restarts) pairing with the PC that challenged us: sends our public key.
+    void start_pairing(const tclproto::PublicKey& tv_public);
+    // The PC's public key once its PairChallenge arrived.
+    std::optional<tclproto::PublicKey> pairing_challenge();
+    // ECDH done in Java: derive the pair key, return the 6-digit code to show.
+    std::string set_pair_secret(std::span<const uint8_t> secret, const tclproto::PublicKey& tv_public,
+                                const tclproto::PublicKey& pc_public);
+    // After the PC approved: the new (host id, key) to persist, once.
+    std::optional<std::pair<uint64_t, tclproto::PairKey>> take_new_pairing();
+    // A PC that no longer knows us (unpaired there): its id, once, so Kotlin deletes the stale key.
+    uint64_t take_forgotten_host();
+    void retry_pairing();
+
     // The TV's user-visible name, sent to the PC (shown in the Jinky PC app).
     void set_device_name(std::string name);
 
@@ -79,6 +100,9 @@ private:
     void on_frame(tclproto::FrameAssembler::Frame&& f);
     void on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t> payload);
     void send_control(tclproto::PacketType type, uint32_t value);
+    void send_hello(uint32_t flags);
+    // Handles AuthRequired / PairChallenge / PairResult; true if the packet was one of them.
+    bool handle_auth(std::span<const uint8_t> packet, const tclproto::Endpoint& from);
     void send_time_request();
     void on_time_response(const tclproto::TimeSync& t);
 
@@ -107,6 +131,19 @@ private:
     std::atomic<int64_t> takeover_until_ms_{0};
     std::mutex name_mu_;
     std::string device_name_;
+
+    // Pairing / authentication (auth_mu_ guards everything below)
+    mutable std::mutex auth_mu_;
+    uint64_t device_id_ = 0;
+    std::map<uint64_t, tclproto::PairKey> keys_;  // host id -> pair key
+    uint64_t host_id_ = 0, nonce_ = 0;
+    bool auth_required_ = false;  // the PC asked for signed hellos
+    std::vector<uint8_t> pair_request_;
+    int64_t last_pair_request_ms_ = 0;
+    std::optional<tclproto::PublicKey> challenge_pc_;
+    std::optional<tclproto::PairKey> pending_key_;
+    std::optional<std::pair<uint64_t, tclproto::PairKey>> new_pairing_;
+    uint64_t forgotten_host_ = 0;
     std::atomic<uint32_t> latency_us_{0};
 
     // Clock sync: keep the sample with the lowest round trip among the recent ones (least jitter).

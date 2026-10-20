@@ -137,6 +137,21 @@ public sealed class Engine : IDisposable
         if (!p.WaitForExit(6000)) p.Kill();
     }
 
+    /// <summary>Sends a command line to the engine (e.g. "pair-accept &lt;id&gt;").</summary>
+    public void Send(string line)
+    {
+        try
+        {
+            var p = _process;
+            if (p is null || p.HasExited) return;
+            p.StandardInput.WriteLine(line);
+            p.StandardInput.Flush();
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     public void Restart(string arguments)
     {
         Stop();

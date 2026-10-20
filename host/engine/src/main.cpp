@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <deque>
+#include <map>
+#include <mutex>
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
@@ -24,6 +27,8 @@
 #include "gamepad.h"
 #include "log.h"
 #include "nvenc_encoder.h"
+#include "pairing.h"
+#include "tclproto/auth.h"
 #include "test_pattern.h"
 #include "tclproto/framing.h"
 #include "tclproto/protocol.h"
@@ -35,6 +40,9 @@ using tclproto::PacketType;
 namespace {
 
 std::atomic<bool> g_quit{false};
+// Commands from the Jinky app on stdin ("pair-accept <id>", "unpair <id>", ...).
+std::mutex g_cmd_mu;
+std::deque<std::string> g_cmds;
 HANDLE g_cleanup_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
 std::string utf8(const std::wstring& w) {
@@ -79,7 +87,8 @@ struct Options {
     bool audio = true;
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
-    bool stdin_control = false;  // "quit" on stdin (or stdin closing) stops the engine cleanly
+    bool stdin_control = false;
+    bool insecure = false;  // accept any TV without pairing (test tools only)  // "quit" on stdin (or stdin closing) stops the engine cleanly
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
     tcl::EncoderConfig enc;
 };
@@ -98,6 +107,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--console") o.console = true;
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
+        else if (a == "--insecure") o.insecure = true;
         else if (a == "--codec" && (v = next())) o.codec = v;
         else if (a == "--refs" && (v = next())) o.enc.max_ref_frames = uint32_t(std::atoi(v));
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
@@ -111,7 +121,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else {
             std::fprintf(stderr,
                          "usage: jinky-engine [--port 47100] [--output 0] [--bitrate 40000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console] [--insecure]\n"
                          "                      [--codec auto|hevc|h264]\n");
             return false;
         }
@@ -134,7 +144,10 @@ int main(int argc, char** argv) {
         // closing the pipe, so cleanup (display, sound, virtual pads) always runs.
         std::thread([] {
             std::string line;
-            while (std::getline(std::cin, line) && line != "quit") {}
+            while (std::getline(std::cin, line) && line != "quit") {
+                std::lock_guard lock(g_cmd_mu);
+                g_cmds.push_back(line);
+            }
             g_quit = true;
         }).detach();
     }
@@ -198,6 +211,56 @@ int main(int argc, char** argv) {
     std::string peer_name;
     bool busy_logged = false;
     steady_clock::time_point last_displaced_sent{}, last_bp_check{};
+
+    // --- pairing / authentication ---
+    tcl::PairedStore paired;
+    if (!opt.insecure) {
+        paired.load();
+        TCL_INFO("pairing", "this PC is {}; {} paired TV(s)", tcl::hex_id(paired.host_id()), paired.all().size());
+    } else {
+        TCL_WARN("pairing", "--insecure: any device on the network can connect (testing only)");
+    }
+    auto emit_paired_list = [&] {
+        std::string list = "[";
+        for (const auto& tv : paired.all()) {
+            if (list.size() > 1) list += ",";
+            list += "{\"id\":\"" + tcl::hex_id(tv.device_id) + "\",\"name\":" + tcl::json_str(tv.name) + "}";
+        }
+        tcl::emit_event("paired_list", "\"tvs\":" + list + "]");
+    };
+    emit_paired_list();
+    // Nonce per TV address: a signed Hello must carry the nonce given to *that* address.
+    struct Nonce { uint64_t value; steady_clock::time_point sent; };
+    std::map<uint64_t, Nonce> nonces;
+    auto addr_key = [](const tclproto::Endpoint& e) { return uint64_t(e.ip) << 16 | e.port; };
+    tclproto::PairKey peer_key{};
+    uint64_t peer_device = 0;
+    struct PendingPair {
+        uint64_t device_id;
+        std::string name;
+        tclproto::PairKey key;
+        tclproto::Endpoint from;
+        steady_clock::time_point created;
+        std::vector<uint8_t> challenge;
+        tclproto::PublicKey tv_public{};
+    };
+    std::optional<PendingPair> pending;
+    auto send_auth_required = [&](const tclproto::Endpoint& to) {
+        auto& n = nonces[addr_key(to)];
+        if (n.value == 0) n.value = tcl::random_u64() | 1;
+        if (steady_clock::now() - n.sent < 300ms) return;
+        n.sent = steady_clock::now();
+        uint8_t buf[tclproto::AuthRequired::kSize];
+        tclproto::AuthRequired{paired.host_id(), n.value}.write(buf);
+        sock.send_to(to, buf);
+    };
+    auto send_pair_result = [&](const PendingPair& p, bool accepted) {
+        uint8_t buf[tclproto::PairResult::kSize];
+        tclproto::PairResult{paired.host_id(), p.device_id, accepted,
+                             accepted ? tclproto::accept_proof(p.key, p.device_id) : tclproto::Mac{}}
+            .write(buf);
+        for (int i = 0; i < 3; ++i) sock.send_to(p.from, buf);  // UDP: say it thrice
+    };
     uint32_t session_id = std::random_device{}();
     auto send_control = [&](const tclproto::Endpoint& to, PacketType type) {
         uint8_t buf[tclproto::ControlMessage::kSize];
@@ -275,13 +338,57 @@ int main(int argc, char** argv) {
     uint8_t rx[2048];
 
     while (!g_quit) {
+        // --- commands from the Jinky app ---
+        std::deque<std::string> cmds;
+        {
+            std::lock_guard lock(g_cmd_mu);
+            cmds.swap(g_cmds);
+        }
+        for (const auto& line : cmds) {
+            const auto space = line.find(' ');
+            const std::string cmd = line.substr(0, space);
+            const auto id = space == std::string::npos ? std::nullopt : tcl::parse_hex_id(line.substr(space + 1));
+            if ((cmd == "pair-accept" || cmd == "pair-reject") && pending && id == pending->device_id) {
+                const bool ok = cmd == "pair-accept";
+                if (ok) paired.add({pending->device_id, pending->key, pending->name});
+                send_pair_result(*pending, ok);
+                TCL_INFO("pairing", "{} {} ({})", ok ? "paired" : "rejected", pending->name, tcl::hex_id(pending->device_id));
+                tcl::emit_event(ok ? "paired" : "pair_rejected", "\"id\":\"" + tcl::hex_id(pending->device_id) +
+                                                                   "\",\"name\":" + tcl::json_str(pending->name));
+                pending.reset();
+                emit_paired_list();
+            } else if (cmd == "unpair" && id) {
+                if (paired.remove(*id)) {
+                    TCL_INFO("pairing", "unpaired {}", tcl::hex_id(*id));
+                    if (peer && peer_device == *id) {
+                        // It is playing right now: end the session and tell it it is no longer
+                        // paired, so it forgets the key and shows the pairing screen.
+                        send_pair_result(PendingPair{*id, {}, {}, *peer, steady_clock::now(), {}}, false);
+                        peer.reset();
+                        peer_name.clear();
+                        publish_peer();
+                        gamepads.unplug_all();
+                        tcl::emit_event("disconnected", "\"reason\":\"unpaired\"");
+                    }
+                    emit_paired_list();
+                }
+            } else if (cmd == "list-paired") {
+                emit_paired_list();
+            }
+        }
+        if (pending && steady_clock::now() - pending->created > 120s) {
+            TCL_INFO("pairing", "pairing request from {} expired", pending->name);
+            tcl::emit_event("pair_expired");
+            pending.reset();
+        }
         // --- control messages from the receiver ---
         tclproto::Endpoint from;
         int n;
         while ((n = sock.recv_from(rx, from, 0)) > 0) {
             const std::span<const uint8_t> packet(rx, size_t(n));
             if (tclproto::peek_type(packet) == PacketType::Input) {
-                if (auto in = tclproto::InputState::read(packet); in && peer && from == *peer) {
+                if (auto in = tclproto::InputState::read(packet);
+                    in && peer && from == *peer && (opt.insecure || tclproto::InputState::verify(packet, peer_key))) {
                     last_peer_msg = steady_clock::now();
                     gamepads.apply(*in);
                 }
@@ -305,8 +412,65 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
-            auto msg = tclproto::ControlMessage::read(std::span<const uint8_t>(rx, size_t(n)));
-            if (!msg) continue;
+            if (tclproto::peek_type(packet) == PacketType::PairRequest) {
+                auto req = tclproto::PairRequest::read(packet);
+                if (!req || opt.insecure) continue;
+                if (pending && pending->device_id == req->device_id && pending->tv_public == req->tv_public) {
+                    sock.send_to(from, pending->challenge);  // retransmission: same challenge
+                    continue;
+                }
+                // Another TV mid-pairing: one at a time. The same TV with a new key (app reopened)
+                // starts over below, with a new code, instead of reusing the old challenge.
+                if (pending && pending->device_id != req->device_id) continue;
+                tcl::EcdhP256 ecdh;
+                auto secret = ecdh.ok() ? ecdh.agree(req->tv_public) : std::nullopt;
+                if (!secret) {
+                    TCL_WARN("pairing", "invalid pairing request from {}", from.to_string());
+                    continue;
+                }
+                PendingPair p{req->device_id, req->name.empty() ? from.to_string() : req->name,
+                              tclproto::derive_pair_key(*secret, req->tv_public, ecdh.public_key()), from,
+                              steady_clock::now(), {}};
+                p.tv_public = req->tv_public;
+                p.challenge.resize(tclproto::PairChallenge::kSize);
+                tclproto::PairChallenge{paired.host_id(), req->device_id, ecdh.public_key()}.write(p.challenge);
+                sock.send_to(from, p.challenge);
+                const std::string code = tclproto::pairing_code(p.key);
+                TCL_INFO("pairing", "\"{}\" wants to pair, code {}", p.name, code);
+                tcl::emit_event("pair_request", "\"id\":\"" + tcl::hex_id(p.device_id) + "\",\"name\":" +
+                                                    tcl::json_str(p.name) + ",\"code\":\"" + code + "\"");
+                pending = std::move(p);
+                continue;
+            }
+            std::optional<tclproto::ControlMessage> msg;
+            std::optional<tclproto::PairKey> hello_key;
+            uint64_t hello_device = 0;
+            if (tclproto::peek_type(packet) == PacketType::AuthHello) {
+                auto ah = tclproto::AuthHello::read(packet);
+                if (!ah || opt.insecure) continue;
+                const tcl::PairedTv* tv = paired.find(ah->device_id);
+                if (!tv) {
+                    // It believes it is paired but this PC doesn't know it (unpaired here): tell it to pair again.
+                    PendingPair forget{ah->device_id, {}, {}, from, steady_clock::now(), {}};
+                    send_pair_result(forget, false);
+                    continue;
+                }
+                auto it = nonces.find(addr_key(from));
+                if (it == nonces.end() || it->second.value != ah->nonce || !tclproto::AuthHello::verify(packet, tv->key)) {
+                    send_auth_required(from);  // stale nonce (e.g. PC restarted) or forged: challenge again
+                    continue;
+                }
+                msg = tclproto::ControlMessage{PacketType::Hello, 0, ah->flags};
+                hello_key = tv->key;
+                hello_device = tv->device_id;
+            } else {
+                msg = tclproto::ControlMessage::read(packet);
+                if (!msg) continue;
+                if (msg->type == PacketType::Hello && !opt.insecure) {
+                    send_auth_required(from);
+                    continue;
+                }
+            }
             if (msg->type == PacketType::Hello) {
                 const bool takeover = msg->value & tclproto::kHelloTakeover;
                 if (peer && *peer != from && steady_clock::now() - last_peer_msg < 5s) {
@@ -352,6 +516,8 @@ int main(int argc, char** argv) {
                                                  ",\"bitrate_kbps\":" + std::to_string(opt.enc.bitrate_kbps));
                     peer = from;
                     peer_name.clear();
+                    peer_key = hello_key.value_or(tclproto::PairKey{});
+                    peer_device = hello_device;
                     session_id++;
                     idr_pending = true;
                     first_sent_logged = false;

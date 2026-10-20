@@ -25,6 +25,19 @@ public partial class MainWindow : Window
         DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, ref caption, sizeof(int));
     }
 
+    MainViewModel Vm => (MainViewModel)DataContext;
+
+    void AcceptPairing_Click(object sender, RoutedEventArgs e) => Vm.AcceptPairing();
+    void RejectPairing_Click(object sender, RoutedEventArgs e) => Vm.RejectPairing();
+
+    void Unpair_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string id } &&
+            MessageBox.Show(this, "Essa TV vai precisar parear de novo para jogar. Remover?", "Jinky",
+                            MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            Vm.Unpair(id);
+    }
+
     void OpenLogs_Click(object sender, RoutedEventArgs e)
     {
         var folder = Path.Combine(Settings.Folder, "logs");

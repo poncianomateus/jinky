@@ -51,10 +51,16 @@ public partial class App : Application
         }) { IsBackground = true }.Start();
 
         _settings = Settings.Load();
-        _vm = new MainViewModel(_settings, OnSettingsChanged);
+        _vm = new MainViewModel(_settings, OnSettingsChanged, cmd => _engine?.Send(cmd));
         _window = new MainWindow(_vm);
         // Console mode turns the PC into a console: don't leave Jinky's window on the monitor.
         _vm.SessionStarted += () => { if (_settings.ConsoleMode) _window?.Hide(); };
+        // A TV asking to pair needs the user's eyes on the code: bring the window forward.
+        _vm.PairingRequested += () =>
+        {
+            ShowWindow();
+            _tray?.ShowBalloonTip(5000, "Nova TV quer se conectar", $"{_vm.Pairing?.Name} · código {_vm.PairingCode}", Forms.ToolTipIcon.None);
+        };
         _window.Closing += (_, args) =>
         {
             // The window's X hides to the tray; only "Sair" quits.

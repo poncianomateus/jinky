@@ -5,6 +5,8 @@ add_library(tclproto STATIC
     src/protocol.cpp
     src/framing.cpp
     src/udp.cpp
+    src/crypto.cpp
+    src/auth.cpp
 )
 target_include_directories(tclproto PUBLIC include)
 target_compile_features(tclproto PUBLIC cxx_std_20)

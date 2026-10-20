@@ -5,6 +5,8 @@
 #include <random>
 #include <vector>
 
+#include "tclproto/auth.h"
+#include "tclproto/crypto.h"
 #include "tclproto/framing.h"
 #include "tclproto/protocol.h"
 
@@ -137,6 +139,102 @@ static void test_name_and_session_messages() {
     }
 }
 
+static std::string hex(std::span<const uint8_t> d) {
+    static const char* x = "0123456789abcdef";
+    std::string s;
+    for (uint8_t b : d) { s += x[b >> 4]; s += x[b & 15]; }
+    return s;
+}
+
+static std::span<const uint8_t> bytes(const std::string& s) {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
+}
+
+static void test_sha256_and_hmac_vectors() {
+    // FIPS 180-4 examples
+    CHECK(hex(Sha256::hash(bytes(""))) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(hex(Sha256::hash(bytes("abc"))) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(hex(Sha256::hash(bytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))) ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    Sha256 million;  // one million 'a', fed in odd-sized chunks to exercise buffering
+    const std::string chunk(997, 'a');
+    size_t left = 1000000;
+    while (left) {
+        const size_t n = std::min(left, chunk.size());
+        million.update(bytes(chunk).first(n));
+        left -= n;
+    }
+    CHECK(hex(million.finish()) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+
+    // RFC 4231 test cases 1, 2 and 6
+    CHECK(hex(hmac_sha256(bytes(std::string(20, '\x0b')), bytes("Hi There"))) ==
+          "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    CHECK(hex(hmac_sha256(bytes("Jefe"), bytes("what do ya want for nothing?"))) ==
+          "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    CHECK(hex(hmac_sha256(bytes(std::string(131, '\xaa')), bytes("Test Using Larger Than Block-Size Key - Hash Key First"))) ==
+          "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+
+    const auto m1 = mac(bytes("key"), bytes("msg"));
+    auto m2 = m1;
+    CHECK(mac_equal(m1, m2));
+    m2[15] ^= 1;
+    CHECK(!mac_equal(m1, m2));
+}
+
+static void test_pairing_and_auth() {
+    // Both sides derive the same key and code from the same inputs; any difference changes both.
+    PublicKey tv{}, pc{};
+    tv[0] = pc[0] = 0x04;
+    for (int i = 1; i < 65; ++i) { tv[i] = uint8_t(i); pc[i] = uint8_t(200 - i); }
+    uint8_t secret[32];
+    for (int i = 0; i < 32; ++i) secret[i] = uint8_t(i * 7);
+    const PairKey k1 = derive_pair_key(secret, tv, pc);
+    const PairKey k2 = derive_pair_key(secret, tv, pc);
+    CHECK(k1 == k2 && pairing_code(k1) == pairing_code(k2) && pairing_code(k1).size() == 6);
+    secret[0] ^= 1;  // a man in the middle ends up with a different secret
+    CHECK(derive_pair_key(secret, tv, pc) != k1);
+
+    // Signed hello: verifies with the right key, fails with another or when tampered.
+    AuthHello h{0x1122334455667788ull, 1760000000000, kCodecHevc | kHelloTakeover};
+    uint8_t buf[AuthHello::kSize];
+    h.write(buf, k1);
+    auto r = AuthHello::read(buf);
+    CHECK(r && r->device_id == h.device_id && r->nonce == h.nonce && r->flags == h.flags);
+    CHECK(AuthHello::verify(buf, k1));
+    PairKey other = k1;
+    other[5] ^= 1;
+    CHECK(!AuthHello::verify(buf, other));
+    buf[24] ^= 1;  // flip a flag bit
+    CHECK(!AuthHello::verify(buf, k1));
+
+    // Signed controller state.
+    InputState in;
+    in.buttons = kBtnA;
+    in.seq = 9;
+    uint8_t ib[InputState::kSize];
+    in.write(ib, k1);
+    CHECK(InputState::verify(ib, k1) && !InputState::verify(ib, other));
+    ib[17] ^= kBtnB >> 8;  // forge a button (B lives in the high byte of the bitmask)
+    CHECK(!InputState::verify(ib, k1));
+
+    // Pairing messages round-trip.
+    PairRequest pr{42, tv, "Sala"};
+    uint8_t pb[PairRequest::kHeader + PairRequest::kMaxName];
+    const size_t plen = pr.write(pb);
+    auto prr = PairRequest::read(std::span<const uint8_t>(pb, plen));
+    CHECK(prr && prr->device_id == 42 && prr->tv_public == tv && prr->name == "Sala");
+    PairChallenge pc2{7, 42, pc};
+    uint8_t cb[PairChallenge::kSize];
+    pc2.write(cb);
+    auto pcr = PairChallenge::read(cb);
+    CHECK(pcr && pcr->host_id == 7 && pcr->device_id == 42 && pcr->pc_public == pc);
+    PairResult res{7, 42, true, accept_proof(k1, 42)};
+    uint8_t rb[PairResult::kSize];
+    res.write(rb);
+    auto rr = PairResult::read(rb);
+    CHECK(rr && rr->accepted && rr->proof == accept_proof(k1, 42) && rr->proof != accept_proof(k1, 43));
+}
+
 static void test_in_order_delivery() {
     std::vector<FrameAssembler::Frame> got;
     FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(std::move(f)); });
@@ -202,6 +300,8 @@ int main() {
     test_header_rejects_inconsistent();
     test_control_roundtrip();
     test_time_sync_roundtrip();
+    test_sha256_and_hmac_vectors();
+    test_pairing_and_auth();
     test_input_roundtrip();
     test_name_and_session_messages();
     test_in_order_delivery();

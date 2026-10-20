@@ -27,6 +27,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statusText: TextView
     private lateinit var startScreen: StartScreen
     private var searchStartMs = 0L
+    private val pairingStore by lazy { PairingStore(this) }
+    private var pairing: PairingSession? = null
+    private var pairingCode: String? = null
     private var receiver: NativeReceiver? = null
     private var pipeline: VideoPipeline? = null
     private var audio: AudioPlayer? = null
@@ -118,6 +121,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
         r.setCodecSupport(codecs)
         r.setDeviceName(deviceName())
+        r.setIdentity(pairingStore.deviceId())
+        pairingStore.hosts().forEach { (host, key) -> r.addPairedHost(host, key) }
+        pairing = null
+        pairingCode = null
         startError = r.start(HOST_PORT)
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
@@ -164,11 +171,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // Gamepad input goes to the PC; everything else (the TV remote) keeps working normally.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Session on another TV: OK on the remote or A on a controller brings it here.
-        if (receiver?.state() == STATE_DISPLACED && event.action == KeyEvent.ACTION_DOWN &&
+        val ok = event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)
-        ) {
+        // Session on another TV: OK on the remote or A on a controller brings it here.
+        if (ok && receiver?.state() == STATE_DISPLACED) {
             receiver?.takeover()
+            return true
+        }
+        // Pairing was refused: OK tries again with a fresh key pair.
+        if (ok && receiver?.state() == STATE_PAIRING_REJECTED) {
+            pairing = null
+            pairingCode = null
+            receiver?.retryPairing()
             return true
         }
         return gamepads?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
@@ -233,7 +247,39 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateStartScreen() {
         val now = android.os.SystemClock.elapsedRealtime()
         val r = receiver
+        // Persist pairing changes the native side reports.
+        r?.takeNewPairing()?.let { b ->
+            val host = java.nio.ByteBuffer.wrap(b, 0, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long
+            pairingStore.save(host, b.copyOfRange(8, 40))
+            pairing = null
+            pairingCode = null
+        }
+        r?.takeForgottenHost()?.takeIf { it != 0L }?.let { pairingStore.remove(it) }
+
         when (r?.state()) {
+            STATE_NEED_PAIRING, STATE_PAIRING_CODE -> {
+                // First time with this PC: ECDH, then show the code to confirm on the PC.
+                val session = pairing ?: PairingSession().also { pairing = it; r.startPairing(it.publicKey) }
+                if (pairingCode == null) {
+                    r.pairingChallenge()?.let { pc -> pairingCode = r.setPairSecret(session.secretWith(pc), session.publicKey, pc) }
+                }
+                startScreen.setShown(true)
+                val code = pairingCode
+                startScreen.show(
+                    if (code == null) StartScreen.Model("Conectando a um PC novo", "Preparando o pareamento…", emptyList())
+                    else StartScreen.Model(
+                        "Parear com o PC: ${code.substring(0, 3)} ${code.substring(3)}",
+                        "No computador, o Jinky está mostrando um código. Se for o mesmo, clique em Permitir. Isso só é preciso uma vez.",
+                        emptyList()))
+                return
+            }
+            STATE_PAIRING_REJECTED -> {
+                startScreen.setShown(true)
+                startScreen.show(StartScreen.Model(
+                    "Pareamento recusado", "O computador não permitiu esta TV. Aperte OK para tentar de novo.",
+                    emptyList(), warning = true))
+                return
+            }
             STATE_ENDED -> {
                 // Big Picture was closed on the PC: the session is over, like turning a console off.
                 finish()
@@ -371,5 +417,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val HOST_PORT = 47100
         private const val STATE_DISPLACED = 1
         private const val STATE_ENDED = 2
+        private const val STATE_NEED_PAIRING = 3
+        private const val STATE_PAIRING_CODE = 4
+        private const val STATE_PAIRING_REJECTED = 5
     }
 }

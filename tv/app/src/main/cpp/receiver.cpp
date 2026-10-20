@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <iterator>
+#include <utility>
 #include <sstream>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "Jinky", __VA_ARGS__)
@@ -43,6 +44,138 @@ void Receiver::stop() {
     cv_.notify_all();
     if (thread_.joinable()) thread_.join();
     sock_.close();
+}
+
+void Receiver::send_hello(uint32_t flags) {
+    std::lock_guard lock(auth_mu_);
+    if (auth_required_ && host_) {
+        if (auto it = keys_.find(host_id_); it != keys_.end()) {
+            uint8_t buf[tclproto::AuthHello::kSize];
+            tclproto::AuthHello{device_id_, nonce_, flags}.write(buf, it->second);
+            sock_.send_to(*host_, buf);
+            return;
+        }
+    }
+    // Discovery (broadcast until a PC answers) or a PC running without pairing.
+    uint8_t buf[tclproto::ControlMessage::kSize];
+    tclproto::ControlMessage{PacketType::Hello, session_id_, flags}.write(buf);
+    sock_.send_to(host_ ? *host_ : tclproto::Endpoint::broadcast(host_port_), buf);
+}
+
+bool Receiver::handle_auth(std::span<const uint8_t> packet, const tclproto::Endpoint& from) {
+    const auto type = tclproto::peek_type(packet);
+    if (type == PacketType::AuthRequired) {
+        auto ar = tclproto::AuthRequired::read(packet);
+        if (!ar || (host_ && from != *host_ && state_ == kActive && host_known_)) return true;
+        std::lock_guard lock(auth_mu_);
+        host_ = from;
+        host_known_ = true;
+        host_ip_ = from.ip;
+        last_packet_ms_ = now_ms();
+        host_id_ = ar->host_id;
+        nonce_ = ar->nonce;
+        auth_required_ = true;
+        if (!keys_.count(host_id_) && state_ == kActive) {
+            LOGI("PC %016llx needs pairing", (unsigned long long)host_id_);
+            state_ = kNeedPairing;
+        }
+        return true;
+    }
+    if (type == PacketType::PairChallenge) {
+        auto ch = tclproto::PairChallenge::read(packet);
+        std::lock_guard lock(auth_mu_);
+        if (ch && ch->device_id == device_id_ && state_ == kNeedPairing && !challenge_pc_) {
+            challenge_pc_ = ch->pc_public;
+            host_id_ = ch->host_id;
+        }
+        return true;
+    }
+    if (type == PacketType::PairResult) {
+        auto r = tclproto::PairResult::read(packet);
+        if (!r || r->device_id != device_id_) return true;
+        std::lock_guard lock(auth_mu_);
+        if (r->accepted) {
+            // Only trust an approval proven with the key both sides derived.
+            if (state_ == kPairingCode && pending_key_ && r->proof == tclproto::accept_proof(*pending_key_, device_id_)) {
+                keys_[r->host_id] = *pending_key_;
+                new_pairing_ = std::make_pair(r->host_id, *pending_key_);
+                pending_key_.reset();
+                challenge_pc_.reset();
+                LOGI("paired with PC %016llx", (unsigned long long)r->host_id);
+                state_ = kActive;
+                takeover_until_ms_ = now_ms() + 4000;  // the user is here to play
+            }
+        } else if (state_ == kPairingCode || (state_ == kNeedPairing && !pair_request_.empty())) {
+            // A refusal of *our* pairing request. (Duplicates of a "you're no longer paired"
+            // notice arrive while we are merely waiting to pair, and must not count as a refusal.)
+            state_ = kPairingRejected;
+        } else if (keys_.erase(r->host_id)) {
+            // The PC removed us: drop the stale key and pair again.
+            LOGW("PC %016llx no longer knows this TV; pairing again", (unsigned long long)r->host_id);
+            forgotten_host_ = r->host_id;
+            state_ = kNeedPairing;
+        }
+        return true;
+    }
+    return false;
+}
+
+void Receiver::set_identity(uint64_t device_id) {
+    std::lock_guard lock(auth_mu_);
+    device_id_ = device_id;
+}
+
+void Receiver::add_paired_host(uint64_t host_id, const tclproto::PairKey& key) {
+    std::lock_guard lock(auth_mu_);
+    keys_[host_id] = key;
+}
+
+void Receiver::start_pairing(const tclproto::PublicKey& tv_public) {
+    std::string name;
+    {
+        std::lock_guard lock(name_mu_);
+        name = device_name_;
+    }
+    std::lock_guard lock(auth_mu_);
+    pair_request_.resize(tclproto::PairRequest::kHeader + tclproto::PairRequest::kMaxName);
+    pair_request_.resize(tclproto::PairRequest{device_id_, tv_public, name}.write(pair_request_));
+    last_pair_request_ms_ = 0;  // send now
+    challenge_pc_.reset();
+    pending_key_.reset();
+}
+
+std::optional<tclproto::PublicKey> Receiver::pairing_challenge() {
+    std::lock_guard lock(auth_mu_);
+    return challenge_pc_;
+}
+
+std::string Receiver::set_pair_secret(std::span<const uint8_t> secret, const tclproto::PublicKey& tv_public,
+                                      const tclproto::PublicKey& pc_public) {
+    std::lock_guard lock(auth_mu_);
+    pending_key_ = tclproto::derive_pair_key(secret, tv_public, pc_public);
+    pair_request_.clear();
+    state_ = kPairingCode;
+    return tclproto::pairing_code(*pending_key_);
+}
+
+std::optional<std::pair<uint64_t, tclproto::PairKey>> Receiver::take_new_pairing() {
+    std::lock_guard lock(auth_mu_);
+    auto r = new_pairing_;
+    new_pairing_.reset();
+    return r;
+}
+
+uint64_t Receiver::take_forgotten_host() {
+    std::lock_guard lock(auth_mu_);
+    return std::exchange(forgotten_host_, 0);
+}
+
+void Receiver::retry_pairing() {
+    std::lock_guard lock(auth_mu_);
+    pair_request_.clear();
+    challenge_pc_.reset();
+    pending_key_.reset();
+    state_ = kNeedPairing;
 }
 
 void Receiver::send_control(PacketType type, uint32_t value) {
@@ -84,7 +217,7 @@ void Receiver::net_loop() {
         // stops playing, this one would silently grab the session (console mode for an empty room).
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
-            send_control(PacketType::Hello, codec_support_ | takeover);
+            send_hello(codec_support_ | takeover);
             last_hello = now;
             if (host_ && state_ == kActive) {
                 std::string name;
@@ -100,11 +233,19 @@ void Receiver::net_loop() {
             }
         }
         if (state_ != kActive) {
-            // Displaced or ended: no stats, sync or keyframe requests; just wait.
+            // Pairing, displaced or ended: no stats, sync or keyframe requests.
+            if (state_ == kNeedPairing) {
+                std::lock_guard lock(auth_mu_);
+                if (!pair_request_.empty() && host_ && now - last_pair_request_ms_ >= 1000) {
+                    sock_.send_to(*host_, pair_request_);  // repeated until the PC's challenge arrives
+                    last_pair_request_ms_ = now;
+                }
+            }
             tclproto::Endpoint from;
-            uint8_t b[64];
+            uint8_t b[256];
             const int n = sock_.recv_from(b, from, 20);
             if (n > 0) {
+                if (handle_auth(std::span<const uint8_t>(b, size_t(n)), from)) continue;
                 auto m = tclproto::ControlMessage::read(std::span<const uint8_t>(b, size_t(n)));
                 if (m && m->type == PacketType::SessionEnd) state_ = kEnded;
                 if (m) last_packet_ms_ = now_ms();  // the host is alive; don't forget it
@@ -139,6 +280,7 @@ void Receiver::net_loop() {
         const int n = sock_.recv_from(buf, from, 20);
         if (n <= 0) continue;
         const std::span<const uint8_t> packet(buf, size_t(n));
+        if (handle_auth(packet, from)) continue;
         if (tclproto::peek_type(packet) == PacketType::Rumble) {
             if (auto r = tclproto::RumbleMessage::read(packet); r && host_ && from == *host_) {
                 std::lock_guard lock(rumble_mu_);
@@ -352,7 +494,13 @@ void Receiver::send_input(tclproto::InputState state) {
     const uint32_t ip = host_ip_;
     state.session_id = session_id_;
     uint8_t buf[tclproto::InputState::kSize];
-    state.write(buf);
+    {
+        // Signed with the pair key, so the PC accepts it as coming from this TV.
+        std::lock_guard lock(auth_mu_);
+        auto it = keys_.find(host_id_);
+        if (it != keys_.end()) state.write(buf, it->second);
+        else state.write(buf);
+    }
     sock_.send_to(tclproto::Endpoint{ip, host_port_}, buf);
     inputs_sent_++;
 }

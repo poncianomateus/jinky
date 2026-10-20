@@ -155,3 +155,14 @@ Só depois disso começam interface, pareamento, áudio e controle.
 - NVIDIA Video Codec SDK (headers)
 - Android Studio (JDK, SDK, NDK, adb)
 - Depuração ADB habilitada na TCL e no Fire Stick
+
+## 12. Pareamento e segurança (implementado)
+
+- **Pareamento** (uma vez por TV): a TV e o PC trocam chaves públicas P-256 (ECDH; Android `KeyAgreement`, Windows CNG). Os dois derivam a mesma chave de par (`SHA-256("jinky-pair-v1" || segredo || pub_tv || pub_pc)`) e mostram um código de 6 dígitos tirado dela. O usuário confere e clica em **Permitir** no app do PC. Um intermediário acabaria com chaves e códigos diferentes (mesmo princípio da "comparação numérica" do Bluetooth).
+- **Conexão:** o PC responde a qualquer Hello com `AuthRequired` (id do PC + nonce aleatório ligado ao endereço da TV). A TV pareada responde com `AuthHello` assinado (HMAC-SHA256, 128 bits) incluindo o nonce: uma mensagem capturada não serve de outro endereço e não depende de relógio.
+- **Controle:** cada estado do controle vai assinado; o PC descarta estados sem assinatura válida.
+- **O PC só transmite a tela para uma TV autenticada.** Aparelho não pareado não recebe nenhum pacote de mídia.
+- Chaves: no PC em `%LOCALAPPDATA%\Jinky\paired.txt` (perfil do usuário); na TV em `SharedPreferences` privadas do app.
+- "Remover" uma TV no app do PC encerra a sessão dela e a faz voltar à tela de pareamento.
+- `--insecure` desliga tudo isso (apenas para as ferramentas de teste).
+- Limitação conhecida: o vídeo/áudio não é cifrado (só vai para a TV autenticada, na rede local). Cifrar o fluxo é um passo futuro.

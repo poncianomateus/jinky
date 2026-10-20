@@ -1,6 +1,9 @@
 // JNI surface for com.tclstream.tv.NativeReceiver.
 #include <jni.h>
 
+#include <cstring>
+#include <vector>
+
 #include "receiver.h"
 
 using tcltv::Receiver;
@@ -120,6 +123,70 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(
     const char* s = env->GetStringUTFChars(name, nullptr);
     self(h)->set_device_name(s ? s : "");
     if (s) env->ReleaseStringUTFChars(name, s);
+}
+
+// --- pairing ---
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetIdentity(JNIEnv*, jclass, jlong h, jlong id) {
+    self(h)->set_identity(uint64_t(id));
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeAddPairedHost(JNIEnv* env, jclass, jlong h,
+                                                                               jlong host, jbyteArray key) {
+    tclproto::PairKey k{};
+    if (env->GetArrayLength(key) != jsize(k.size())) return;
+    env->GetByteArrayRegion(key, 0, jsize(k.size()), reinterpret_cast<jbyte*>(k.data()));
+    self(h)->add_paired_host(uint64_t(host), k);
+}
+
+static bool to_public(JNIEnv* env, jbyteArray a, tclproto::PublicKey& out) {
+    if (!a || env->GetArrayLength(a) != jsize(out.size())) return false;
+    env->GetByteArrayRegion(a, 0, jsize(out.size()), reinterpret_cast<jbyte*>(out.data()));
+    return true;
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStartPairing(JNIEnv* env, jclass, jlong h,
+                                                                              jbyteArray tv_public) {
+    tclproto::PublicKey pub{};
+    if (to_public(env, tv_public, pub)) self(h)->start_pairing(pub);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_tclstream_tv_NativeReceiver_nativePairingChallenge(JNIEnv* env, jclass, jlong h) {
+    auto c = self(h)->pairing_challenge();
+    if (!c) return nullptr;
+    jbyteArray out = env->NewByteArray(jsize(c->size()));
+    env->SetByteArrayRegion(out, 0, jsize(c->size()), reinterpret_cast<const jbyte*>(c->data()));
+    return out;
+}
+
+JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetPairSecret(JNIEnv* env, jclass, jlong h,
+                                                                                  jbyteArray secret,
+                                                                                  jbyteArray tv_public,
+                                                                                  jbyteArray pc_public) {
+    tclproto::PublicKey tv{}, pc{};
+    if (!to_public(env, tv_public, tv) || !to_public(env, pc_public, pc)) return nullptr;
+    std::vector<uint8_t> s(size_t(env->GetArrayLength(secret)));
+    env->GetByteArrayRegion(secret, 0, jsize(s.size()), reinterpret_cast<jbyte*>(s.data()));
+    return env->NewStringUTF(self(h)->set_pair_secret(s, tv, pc).c_str());
+}
+
+// Returns host id (8 bytes, little-endian) + key (32 bytes), or null.
+JNIEXPORT jbyteArray JNICALL Java_com_tclstream_tv_NativeReceiver_nativeTakeNewPairing(JNIEnv* env, jclass, jlong h) {
+    auto p = self(h)->take_new_pairing();
+    if (!p) return nullptr;
+    uint8_t buf[40];
+    for (int i = 0; i < 8; ++i) buf[i] = uint8_t(p->first >> (8 * i));
+    std::memcpy(buf + 8, p->second.data(), 32);
+    jbyteArray out = env->NewByteArray(40);
+    env->SetByteArrayRegion(out, 0, 40, reinterpret_cast<const jbyte*>(buf));
+    return out;
+}
+
+JNIEXPORT jlong JNICALL Java_com_tclstream_tv_NativeReceiver_nativeTakeForgottenHost(JNIEnv*, jclass, jlong h) {
+    return jlong(self(h)->take_forgotten_host());
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeRetryPairing(JNIEnv*, jclass, jlong h) {
+    self(h)->retry_pairing();
 }
 
 JNIEXPORT jstring JNICALL Java_com_tclstream_tv_NativeReceiver_nativeStatus(JNIEnv* env, jclass, jlong h) {

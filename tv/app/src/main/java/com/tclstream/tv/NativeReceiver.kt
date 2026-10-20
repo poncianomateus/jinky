@@ -51,6 +51,21 @@ class NativeReceiver : AutoCloseable {
 
     fun setDeviceName(name: String) = nativeSetDeviceName(handle, name)
 
+    // --- pairing ---
+    fun setIdentity(deviceId: Long) = nativeSetIdentity(handle, deviceId)
+    fun addPairedHost(hostId: Long, key: ByteArray) = nativeAddPairedHost(handle, hostId, key)
+    fun startPairing(tvPublic: ByteArray) = nativeStartPairing(handle, tvPublic)
+    /** The PC's public key (65 bytes) once its challenge arrived, else null. */
+    fun pairingChallenge(): ByteArray? = nativePairingChallenge(handle)
+    /** Gives the ECDH secret; returns the 6-digit code to show. */
+    fun setPairSecret(secret: ByteArray, tvPublic: ByteArray, pcPublic: ByteArray): String? =
+        nativeSetPairSecret(handle, secret, tvPublic, pcPublic)
+    /** After approval on the PC: host id (8 bytes LE) + key (32 bytes), once; else null. */
+    fun takeNewPairing(): ByteArray? = nativeTakeNewPairing(handle)
+    /** A PC that forgot this TV (0 = none), once. */
+    fun takeForgottenHost(): Long = nativeTakeForgottenHost(handle)
+    fun retryPairing() = nativeRetryPairing(handle)
+
     fun status(): String = nativeStatus(handle)
 
     override fun close() {
@@ -85,6 +100,14 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeState(handle: Long): Int
         @JvmStatic external fun nativeTakeover(handle: Long)
         @JvmStatic external fun nativeSetDeviceName(handle: Long, name: String)
+        @JvmStatic external fun nativeSetIdentity(handle: Long, deviceId: Long)
+        @JvmStatic external fun nativeAddPairedHost(handle: Long, hostId: Long, key: ByteArray)
+        @JvmStatic external fun nativeStartPairing(handle: Long, tvPublic: ByteArray)
+        @JvmStatic external fun nativePairingChallenge(handle: Long): ByteArray?
+        @JvmStatic external fun nativeSetPairSecret(handle: Long, secret: ByteArray, tvPublic: ByteArray, pcPublic: ByteArray): String?
+        @JvmStatic external fun nativeTakeNewPairing(handle: Long): ByteArray?
+        @JvmStatic external fun nativeTakeForgottenHost(handle: Long): Long
+        @JvmStatic external fun nativeRetryPairing(handle: Long)
         @JvmStatic external fun nativeStatus(handle: Long): String
     }
 }

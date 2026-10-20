@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 namespace Jinky;
 
 public sealed record ActivityItem(string Time, string Text, bool IsWarning);
+public sealed record PairingRequest(string Id, string Name, string Code);
+public sealed record PairedTvItem(string Id, string Name);
 
 /// <summary>What the window shows, built only from real engine events (nothing is simulated).</summary>
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -15,11 +17,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
     readonly Action _settingsChanged;
     static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
 
-    public MainViewModel(Settings settings, Action settingsChanged)
+    readonly Action<string> _sendCommand;
+
+    public MainViewModel(Settings settings, Action settingsChanged, Action<string> sendCommand)
     {
         _settings = settings;
         _settingsChanged = settingsChanged;
+        _sendCommand = sendCommand;
     }
+
+    // --- pairing --------------------------------------------------------------------------------
+
+    /// <summary>Raised when a TV asks to pair (the app brings its window forward).</summary>
+    public event Action? PairingRequested;
+
+    PairingRequest? _pairing;
+    public PairingRequest? Pairing { get => _pairing; private set { _pairing = value; Notify(); Notify(nameof(HasPairing)); Notify(nameof(PairingCode)); } }
+    public bool HasPairing => _pairing is not null;
+    public string PairingCode => _pairing is null ? "" : $"{_pairing.Code[..3]} {_pairing.Code[3..]}";
+
+    public ObservableCollection<PairedTvItem> PairedTvs { get; } = new();
+    public bool NoPairedTvs => PairedTvs.Count == 0;
+
+    public void AcceptPairing() { if (_pairing is { } p) _sendCommand("pair-accept " + p.Id); }
+    public void RejectPairing() { if (_pairing is { } p) _sendCommand("pair-reject " + p.Id); }
+    public void Unpair(string id) => _sendCommand("unpair " + id);
 
     // --- state -------------------------------------------------------------------------------
 
@@ -119,6 +141,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 StatusDetail = "Abra o Jinky na TV para começar.";
                 Latency = Fps = Bitrate = "—";
                 Add(e.Str("reason") == "silent" ? "A TV parou de responder · sessão encerrada" : "TV desconectou", e.Str("reason") == "silent");
+                break;
+            case "pair_request":
+                Pairing = new PairingRequest(e.Str("id") ?? "", e.Str("name") ?? "TV", e.Str("code") ?? "000000");
+                Add($"{Pairing.Name} pediu para parear");
+                PairingRequested?.Invoke();
+                break;
+            case "paired":
+                Pairing = null;
+                Add($"{e.Str("name")} pareada · já pode jogar");
+                break;
+            case "pair_rejected":
+                Pairing = null;
+                Add($"Pareamento de {e.Str("name")} recusado", warning: true);
+                break;
+            case "pair_expired":
+                Pairing = null;
+                break;
+            case "paired_list":
+                PairedTvs.Clear();
+                if (e.Data.TryGetProperty("tvs", out var tvs))
+                    foreach (var tv in tvs.EnumerateArray())
+                        PairedTvs.Add(new PairedTvItem(tv.GetProperty("id").GetString() ?? "", tv.GetProperty("name").GetString() ?? "TV"));
+                Notify(nameof(NoPairedTvs));
                 break;
             case "tv_name":
                 _tvName = e.Str("name");

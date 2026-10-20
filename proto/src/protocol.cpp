@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "tclproto/crypto.h"
+
 namespace tclproto {
 namespace {
 
@@ -132,7 +134,7 @@ std::optional<TimeSync> TimeSync::read(std::span<const uint8_t> in) {
 
 // Layout: magic(4) version(1) type(1) pad(1) flags(1) session(4) seq(4) buttons(2) lt(1) rt(1)
 //         lx(2) ly(2) rx(2) ry(2) reserved(4) = 32 bytes
-void InputState::write(std::span<uint8_t> out) const {
+void InputState::write(std::span<uint8_t> out, std::span<const uint8_t> key) const {
     uint8_t* p = out.data();
     put_u32(p + 0, kMagic);
     p[4] = kVersion;
@@ -149,6 +151,14 @@ void InputState::write(std::span<uint8_t> out) const {
     put_u16(p + 24, uint16_t(rx));
     put_u16(p + 26, uint16_t(ry));
     put_u32(p + 28, 0);
+    const Mac m = key.empty() ? Mac{} : mac(key, {p, 32});
+    std::memcpy(p + 32, m.data(), kMacSize);
+}
+
+bool InputState::verify(std::span<const uint8_t> in, std::span<const uint8_t> key) {
+    if (in.size() < kSize) return false;
+    const Mac m = mac(key, in.first(32));
+    return mac_equal(m, in.subspan(32, kMacSize));
 }
 
 std::optional<InputState> InputState::read(std::span<const uint8_t> in) {
