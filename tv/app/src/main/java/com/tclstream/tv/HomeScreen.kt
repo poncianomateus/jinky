@@ -39,6 +39,7 @@ class HomeScreen(
     private val onWake: (HomeHost) -> Unit,
     private val onUpdate: (HomeHost) -> Unit,
     private val onSettings: () -> Unit,
+    private val onLibrary: (HomeHost) -> Unit,
 ) : TvPage(context) {
 
     private val statusDot = View(context)
@@ -47,6 +48,13 @@ class HomeScreen(
     private val subtitle = text(19f, StartScreen.MUTED)
     private val play = bigButton()
     private val desktop = smallButton("Área de trabalho")
+    private val library = smallButton("Biblioteca")
+    // Biblioteca and Área de trabalho side by side under Jogar.
+    private val secondary = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(library, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(desktop, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(14) })
+    }
     private val wake = smallButton("Ligar o PC")
     private val settings = smallButton("Configurações").apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -103,6 +111,7 @@ class HomeScreen(
         wake.setOnClickListener { host?.let(onWake) }
         update.setOnClickListener { host?.let(onUpdate) }
         settings.setOnClickListener { onSettings() }
+        library.setOnClickListener { host?.let(onLibrary) }
     }
 
     /** Updates the screen; `searching` = no PC known yet. Keeps focus where the user put it. */
@@ -127,7 +136,7 @@ class HomeScreen(
                 setStatus(StartScreen.DONE, "Pronto para jogar")
                 subtitle.text = h.ip
                 setPlay("Jogar", "Modo console · abre o Steam Big Picture")
-                setActions(listOf(play, desktop))
+                setActions(listOf(play, secondary))
             }
             HomeHost.Status.BUSY -> {
                 setStatus(StartScreen.WARN, "Jogando em ${h.busyWith.ifBlank { "outra TV" }}")

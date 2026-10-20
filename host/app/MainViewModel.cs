@@ -241,6 +241,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public void OnGameLaunched(string name) => Add($"Abrindo {name} pela TV");
+
     public void OnTvDiagnostics(string tv, string path) =>
         Add($"Diagnóstico recebido de {tv} ({System.IO.Path.GetFileName(path)})");
 

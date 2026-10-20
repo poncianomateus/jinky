@@ -29,10 +29,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var homeScreen: HomeScreen
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var helpScreen: HelpScreen
+    private lateinit var libraryScreen: LibraryScreen
+    private var pendingGame: Pair<HomeHost, LibraryGame>? = null  // started once the picture is up
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var wasInSession = false
@@ -124,7 +126,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     wakingUntil = android.os.SystemClock.elapsedRealtime() + 60_000
                 },
                 onUpdate = { host -> updater.update(host.ip, host.updatePort) },
-                onSettings = { showPage(Page.SETTINGS) })
+                onSettings = { showPage(Page.SETTINGS) },
+                onLibrary = { host ->
+                    showPage(Page.LIBRARY)
+                    libraryScreen.load(host.ip, host.updatePort)
+                })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             settingsScreen = SettingsScreen(this@MainActivity, settings,
@@ -135,6 +141,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
+            libraryScreen = LibraryScreen(this@MainActivity,
+                onPlay = { game ->
+                    val host = homeHost
+                    if (host != null && host.status == HomeHost.Status.READY) {
+                        // Console session first (Big Picture, 60 Hz, sound); the game starts once
+                        // the picture is on this TV.
+                        pendingGame = host to game
+                        showPage(Page.HOME)
+                        receiver?.connect(host.ip, false)
+                        homeScreen.visibility = View.GONE
+                        startScreen.setShown(true)
+                    }
+                },
+                onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
+            addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
@@ -234,17 +255,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             homeScreen.visibility == View.VISIBLE -> Page.HOME
             settingsScreen.visibility == View.VISIBLE -> Page.SETTINGS
             helpScreen.visibility == View.VISIBLE -> Page.HELP
+            libraryScreen.visibility == View.VISIBLE -> Page.LIBRARY
             else -> null
         }
         if (p != null) page = p
         homeScreen.visibility = if (p == Page.HOME) View.VISIBLE else View.GONE
         settingsScreen.visibility = if (p == Page.SETTINGS) View.VISIBLE else View.GONE
         helpScreen.visibility = if (p == Page.HELP) View.VISIBLE else View.GONE
+        libraryScreen.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) when (p) {
             Page.HOME -> homeScreen.focusFirst()
             Page.SETTINGS -> settingsScreen.focusFirst()
             Page.HELP -> helpScreen.focusFirst()
+            Page.LIBRARY -> libraryScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -410,7 +434,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
         val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
-            helpScreen.visibility == View.VISIBLE || menu.visibility == View.VISIBLE
+            helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
+            menu.visibility == View.VISIBLE
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
 
@@ -470,6 +495,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val picture = p != null && p.lastPresentMs != 0L && now - p.lastPresentMs < 3000
         if (picture) {
             startScreen.setShown(false)
+            pendingGame?.let { (host, game) ->
+                pendingGame = null
+                Thread {
+                    LibraryScreen.launch(host.ip, host.updatePort, game)?.let { Log.w(TAG, "launch ${game.name}: $it") }
+                }.start()
+            }
             return
         }
         startScreen.setShown(true)
@@ -518,6 +549,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
         if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
+        else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (settingsScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (homeScreen.visibility == View.VISIBLE) finish()
         else if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
