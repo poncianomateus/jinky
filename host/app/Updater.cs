@@ -16,7 +16,7 @@ public sealed record UpdateInfo(Version Version, string SetupUrl, string Checksu
 public sealed class Updater
 {
     /// <summary>Public repository that holds only the release installers (the code stays private).</summary>
-    public const string Repository = "OWNER/jinky-releases";
+    public const string Repository = "poncianomateus/jinky-releases";
 
     static readonly HttpClient Http = CreateClient();
 
