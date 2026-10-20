@@ -13,10 +13,21 @@ import java.lang.reflect.Method
  */
 object UnbufferedInput {
     private const val TAG = "Jinky"
+    private const val SOURCES = InputDevice.SOURCE_CLASS_JOYSTICK or InputDevice.SOURCE_CLASS_BUTTON
+    private var listened: java.lang.ref.WeakReference<View>? = null  // window already followed
 
     fun enable(view: View) {
         if (Build.VERSION.SDK_INT >= 30) {
-            view.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_JOYSTICK or InputDevice.SOURCE_CLASS_BUTTON)
+            view.requestUnbufferedDispatch(SOURCES)
+            if (listened?.get() !== view) {
+                // Every focus change makes Android recompute the request from the focused view,
+                // dropping ours; ask again once the change has settled.
+                listened = java.lang.ref.WeakReference(view)
+                view.viewTreeObserver.addOnGlobalFocusChangeListener { _, _ ->
+                    view.post { view.requestUnbufferedDispatch(SOURCES) }
+                }
+                Log.i(TAG, "input: entrega imediata ligada (Android ${Build.VERSION.SDK_INT})")
+            }
             return
         }
         // Android 9/10 (Fire OS 7) only offer this for touch gestures. ViewRootImpl keeps a flag
