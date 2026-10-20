@@ -12,7 +12,7 @@ $gh = "${env:ProgramFiles}\GitHub CLI\gh.exe"
 $setup = "$root\dist\Jinky-Setup-$version.exe"
 
 if ($repo -like 'OWNER/*') { throw "Set Updater.Repository in host\app\Updater.cs first" }
-foreach ($f in @($setup, "$setup.sha256")) { if (-not (Test-Path $f)) { throw "missing $f — run build-release.ps1" } }
+foreach ($f in @($setup, "$setup.sha256")) { if (-not (Test-Path $f)) { throw "missing $f - run build-release.ps1" } }
 $expected = (Get-Content "$setup.sha256" -Raw).Split(' ')[0]
 $actual = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
 if ($expected -ne $actual) { throw "checksum file does not match the installer" }
