@@ -374,6 +374,7 @@ int main(int argc, char** argv) {
     uint64_t frames_sent = 0, bytes_sent = 0, encode_us_total = 0, encode_us_max = 0;
     uint64_t last_send_us = 0, send_gap_max_us = 0, late_sends = 0;  // send-interval jitter
     std::vector<uint8_t> bitstream;
+    const uint32_t default_bitrate_kbps = opt.enc.bitrate_kbps;
 
     // Network receive thread. Controller input and clock-sync requests are answered the moment
     // they arrive; the main loop can be busy for up to a frame (waiting for the desktop, encoding),
@@ -599,8 +600,12 @@ int main(int argc, char** argv) {
                     const bool tv_hevc = msg->value & tclproto::kCodecHevc;
                     const auto want = (opt.codec == "hevc" || (opt.codec == "auto" && tv_hevc)) ? tcl::VideoCodec::HEVC
                                                                                                 : tcl::VideoCodec::H264;
-                    if (want != opt.enc.codec) {
+                    // Quality chosen on the TV (Configurações), else the PC's own setting.
+                    const uint32_t tv_mbps = tclproto::hello_bitrate_mbps(msg->value);
+                    const uint32_t want_kbps = tv_mbps >= 5 && tv_mbps <= 150 ? tv_mbps * 1000 : default_bitrate_kbps;
+                    if (want != opt.enc.codec || want_kbps != opt.enc.bitrate_kbps) {
                         opt.enc.codec = want;
+                        opt.enc.bitrate_kbps = want_kbps;
                         encoder.close();
                         if (!encoder.open(capture.device(), converter.output(), opt.enc)) {
                             TCL_ERROR("encoder", "{}", encoder.error());

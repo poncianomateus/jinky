@@ -241,6 +241,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public void OnTvDiagnostics(string tv, string path) =>
+        Add($"Diagnóstico recebido de {tv} ({System.IO.Path.GetFileName(path)})");
+
     public void OnEngineFailed(string message)
     {
         Current = State.Failed;

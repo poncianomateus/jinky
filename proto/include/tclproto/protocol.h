@@ -68,6 +68,10 @@ inline constexpr uint32_t kHelloTakeover = 1u << 8;
 // Hello.value flag: "Área de trabalho" — just show the PC's screen; no console mode (no Big
 // Picture, no 60 Hz switch).
 inline constexpr uint32_t kHelloDesktop = 1u << 9;
+// Hello.value bits 16..23: picture quality the user chose on the TV, in Mbit/s (0 = the PC's own
+// setting).
+inline constexpr uint32_t kHelloBitrateShift = 16;
+inline constexpr uint32_t hello_bitrate_mbps(uint32_t value) { return (value >> kHelloBitrateShift) & 0xFF; }
 
 // A PC's answer to Discover. Layout: magic(4) version(1) type(1) state(1) name_len(1) host_id(8)
 // mac(6) busy_len(1) reserved(1) name busy_with [tv_version_code(4) update_port(2)].

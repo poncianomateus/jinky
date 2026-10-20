@@ -27,6 +27,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statusText: TextView
     private lateinit var startScreen: StartScreen
     private lateinit var homeScreen: HomeScreen
+    private lateinit var settingsScreen: SettingsScreen
+    private lateinit var helpScreen: HelpScreen
+    private val settings by lazy { TvSettings(this) }
+
+    /** Which of the TV's own screens is up while no game is on. */
+    private enum class Page { HOME, SETTINGS, HELP }
+    private var page = Page.HOME
+    private var homeHost: HomeHost? = null  // the PC the home screen shows
+    private var wasInSession = false
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
     private val updater by lazy { Updater(this) }
@@ -60,8 +69,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private val refresh = object : Runnable {
         override fun run() {
-            if (receiver?.inSession() == true) {
-                homeScreen.visibility = View.GONE
+            val inSession = receiver?.inSession() == true
+            if (inSession != wasInSession) {
+                wasInSession = inSession
+                // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
+                statusText.visibility = if (inSession && settings.showStats) View.VISIBLE else View.GONE
+            }
+            if (inSession) {
+                showPage(null)
                 updateStartScreen()
             } else {
                 updateHome()
@@ -108,9 +123,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     host.mac?.let { HostCache.wake(it, host.ip) }
                     wakingUntil = android.os.SystemClock.elapsedRealtime() + 60_000
                 },
-                onUpdate = { host -> updater.update(host.ip, host.updatePort) })
+                onUpdate = { host -> updater.update(host.ip, host.updatePort) },
+                onSettings = { showPage(Page.SETTINGS) })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
+            settingsScreen = SettingsScreen(this@MainActivity, settings,
+                onChanged = { receiver?.setCodecSupport(helloCapabilities()) },
+                onSendDiagnostics = ::sendDiagnostics,
+                onForgetPc = ::forgetPc,
+                onHelp = { showPage(Page.HELP) }).apply { visibility = View.GONE }
+            addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
+            helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
+            addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
@@ -153,12 +177,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         runCatching { wifiLock?.acquire() }.onFailure { Log.w(TAG, "wifi lock: $it") }
-        val r = NativeReceiver()
-        // Tell the PC which codecs this TV decodes in hardware at 1080p60 (it prefers HEVC).
+        startReceiver()
+    }
+
+    /** What the TV asks of the PC in every Hello: decodable codecs and the chosen quality. */
+    private fun helloCapabilities(): Int {
+        // Codecs this TV decodes in hardware at 1080p60 (the PC prefers HEVC).
         var codecs = 0
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_AVC) != null) codecs = codecs or 1
-        if (HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
-        r.setCodecSupport(codecs)
+        if (!settings.forceH264 && HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
+        return codecs or (settings.bitrateMbps shl HELLO_BITRATE_SHIFT)
+    }
+
+    private fun startReceiver() {
+        val r = NativeReceiver()
+        r.setCodecSupport(helloCapabilities())
         r.setDeviceName(deviceName())
         r.setIdentity(pairingStore.deviceId())
         pairingStore.hosts().forEach { (host, key) -> r.addPairedHost(host, key) }
@@ -177,6 +210,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onPause() {
         runCatching { wifiLock?.release() }
         // TV going to standby / user leaving: release decoder and network, start clean on resume.
+        stopReceiver()
+        super.onPause()
+    }
+
+    private fun stopReceiver() {
         ui.removeCallbacks(refresh)
         stopPipeline()
         audio?.stop()
@@ -186,7 +224,58 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         receiver?.stop()
         receiver?.close()
         receiver = null
-        super.onPause()
+    }
+
+    // --- the TV's own screens ---
+
+    /** Shows home, settings or help; null hides them all (a game is on). */
+    private fun showPage(p: Page?) {
+        val before = when {
+            homeScreen.visibility == View.VISIBLE -> Page.HOME
+            settingsScreen.visibility == View.VISIBLE -> Page.SETTINGS
+            helpScreen.visibility == View.VISIBLE -> Page.HELP
+            else -> null
+        }
+        if (p != null) page = p
+        homeScreen.visibility = if (p == Page.HOME) View.VISIBLE else View.GONE
+        settingsScreen.visibility = if (p == Page.SETTINGS) View.VISIBLE else View.GONE
+        helpScreen.visibility = if (p == Page.HELP) View.VISIBLE else View.GONE
+        if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
+        if (p != null && p != before) when (p) {
+            Page.HOME -> homeScreen.focusFirst()
+            Page.SETTINGS -> settingsScreen.focusFirst()
+            Page.HELP -> helpScreen.focusFirst()
+        }
+        updateUiInput()
+    }
+
+    private fun decoderSummary(): String {
+        val hevc = !settings.forceH264 && HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true
+        val d = HardwareInfo.bestDecoder(if (hevc) VideoPipeline.MIME_HEVC else VideoPipeline.MIME_AVC)
+        return d?.let { "${if (hevc) "HEVC" else "H.264"} por hardware (${it.name})" } ?: "nenhum por hardware"
+    }
+
+    private fun sendDiagnostics() {
+        val pc = homeHost
+        if (pc == null || pc.status == HomeHost.Status.OFFLINE || pc.updatePort == 0) {
+            settingsScreen.setNote("O PC precisa estar ligado e com o Jinky aberto para receber o diagnóstico.")
+            return
+        }
+        settingsScreen.setNote("Enviando diagnóstico ao PC…")
+        Diagnostics.send(pc.ip, pc.updatePort, deviceName(), buildOverlay()) { msg -> ui.post { settingsScreen.setNote(msg) } }
+    }
+
+    private fun forgetPc() {
+        val ids = pairingStore.hosts().keys
+        if (ids.isEmpty()) {
+            settingsScreen.setNote("Esta TV não está pareada com nenhum PC.")
+            return
+        }
+        ids.forEach { pairingStore.remove(it) }
+        // The native side still holds the old key: start it again without it.
+        stopReceiver()
+        startReceiver()
+        settingsScreen.setNote("Pronto: este PC foi esquecido. Na próxima conexão, a TV pede um novo pareamento.")
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) = startPipeline(holder)
@@ -300,7 +389,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateHome() {
         val now = android.os.SystemClock.elapsedRealtime()
         startScreen.setShown(false)
-        homeScreen.visibility = View.VISIBLE
+        showPage(page)
         val online = receiver?.hosts().orEmpty().lines().mapNotNull { line ->
             val p = line.split('|')
             if (p.size < 7) return@mapNotNull null
@@ -314,12 +403,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val host = online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
             ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
+        homeHost = host
         homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
     }
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
-        val ui = homeScreen.visibility == View.VISIBLE || menu.visibility == View.VISIBLE
+        val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
+            helpScreen.visibility == View.VISIBLE || menu.visibility == View.VISIBLE
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
 
@@ -424,8 +515,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     @Deprecated("Back opens/closes the menu instead of leaving")
     override fun onBackPressed() {
-        // On the home screen Back leaves the app; while playing it opens/closes the menu.
-        if (homeScreen.visibility == View.VISIBLE) finish()
+        // On the home screen Back leaves the app; settings/help go back one step; while playing it
+        // opens/closes the menu.
+        if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
+        else if (settingsScreen.visibility == View.VISIBLE) showPage(Page.HOME)
+        else if (homeScreen.visibility == View.VISIBLE) finish()
         else if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
     }
 
@@ -494,6 +588,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     companion object {
         private const val TAG = "Jinky"
         private const val HOST_PORT = 47100
+        private const val HELLO_BITRATE_SHIFT = 16  // tclproto::kHelloBitrateShift
         private const val STATE_DISPLACED = 1
         private const val STATE_ENDED = 2
         private const val STATE_NEED_PAIRING = 3

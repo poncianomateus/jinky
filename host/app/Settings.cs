@@ -43,7 +43,7 @@ public sealed class Settings
     {
         var args = "--events --stdin-control";
         // Offer the bundled TV app to TVs (they update from this PC).
-        if (TvUpdateServer.Available) args += $" --tv-update {TvUpdateServer.VersionCode}:{TvUpdateServer.Port}";
+        if (TvService.Available) args += $" --tv-update {TvService.VersionCode}:{TvService.Port}";
         if (ConsoleMode) args += " --console";
         else if (SoundOnlyOnTv) args += " --mute-pc";
         return args;

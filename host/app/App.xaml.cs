@@ -17,7 +17,7 @@ public partial class App : Application
     Forms.NotifyIcon? _tray;
     MainWindow? _window;
     Engine? _engine;
-    TvUpdateServer? _tvUpdates;
+    TvService? _tvService;
     Settings _settings = new();
     MainViewModel? _vm;
     bool _trayHintShown;
@@ -77,8 +77,9 @@ public partial class App : Application
 
         CreateTray();
 
-        _tvUpdates = new TvUpdateServer();
-        _tvUpdates.Start();
+        _tvService = new TvService();
+        _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
+        _tvService.Start();
 
         _engine = new Engine();
         _engine.EventReceived += ev => Dispatcher.Invoke(() => { _vm.OnEngineEvent(ev); UpdateTray(); });
@@ -162,7 +163,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _tvUpdates?.Dispose();
+        _tvService?.Dispose();
         _engine?.Dispose();
         _tray?.Dispose();
         _instance?.Dispose();

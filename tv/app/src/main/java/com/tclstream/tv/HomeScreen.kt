@@ -38,10 +38,8 @@ class HomeScreen(
     private val onPlay: (HomeHost, desktop: Boolean) -> Unit,
     private val onWake: (HomeHost) -> Unit,
     private val onUpdate: (HomeHost) -> Unit,
-) : FrameLayout(context) {
-
-    private val density = resources.displayMetrics.density
-    private fun dp(v: Int) = (v * density).toInt()
+    private val onSettings: () -> Unit,
+) : TvPage(context) {
 
     private val statusDot = View(context)
     private val statusText = text(17f, StartScreen.MUTED)
@@ -50,6 +48,10 @@ class HomeScreen(
     private val play = bigButton()
     private val desktop = smallButton("Área de trabalho")
     private val wake = smallButton("Ligar o PC")
+    private val settings = smallButton("Configurações").apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        setPadding(dp(20), dp(10), dp(20), dp(10))
+    }
     private val update = smallButton("Atualizar o Jinky").apply {
         visibility = View.GONE
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -61,24 +63,19 @@ class HomeScreen(
     private var host: HomeHost? = null
 
     init {
-        setBackgroundColor(StartScreen.GROUND)
-        val pad = dp(56)
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, dp(40), pad, dp(32))
-        }
-        // Brand on the left; "update available" on the right (D-pad up from the main button).
-        root.addView(LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(ImageView(context).apply { setImageResource(R.drawable.ic_jinky) }, LinearLayout.LayoutParams(dp(40), dp(40)))
-            addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark) },
-                LinearLayout.LayoutParams(dp(62), dp(32)).apply { marginStart = dp(12) })
+        val root = pageRoot()
+        // Brand on the left; "update available" and Configurações on the right (D-pad up from the
+        // main buttons), the way TV apps keep their settings.
+        root.addView(brandHeader().apply {
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.END
-                addView(update, LinearLayout.LayoutParams(-2, -2))
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(update, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(12) })
+                    addView(settings, LinearLayout.LayoutParams(-2, -2))
+                })
                 addView(updateNote, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) })
             })
         })
@@ -96,7 +93,7 @@ class HomeScreen(
         root.addView(info, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(36) })
         // Footer hints
         root.addView(text(15f, StartScreen.HINT).apply {
-            text = "A ou OK: escolher   ·   Voltar: sair   ·   No jogo, segure View + Menu para abrir o menu" +
+            text = "A ou OK: escolher   ·   Voltar: sair   ·   ↑ Configurações   ·   No jogo, View + Menu abre o menu" +
                 "   ·   versão ${BuildConfig.VERSION_NAME}"
         })
         addView(root, LayoutParams(-1, -1))
@@ -105,6 +102,7 @@ class HomeScreen(
         desktop.setOnClickListener { host?.let { onPlay(it, true) } }
         wake.setOnClickListener { host?.let(onWake) }
         update.setOnClickListener { host?.let(onUpdate) }
+        settings.setOnClickListener { onSettings() }
     }
 
     /** Updates the screen; `searching` = no PC known yet. Keeps focus where the user put it. */
@@ -120,6 +118,7 @@ class HomeScreen(
             title.text = "Procurando seu PC"
             subtitle.text = "Abra o Jinky no computador. A TV e o PC precisam estar na mesma rede de casa."
             setActions(emptyList())
+            settings.requestFocus()
             return
         }
         title.text = h.name
@@ -147,7 +146,7 @@ class HomeScreen(
             }
         }
         // First time this PC shows up (or its buttons changed): put focus on the main action.
-        if (previous?.id != h.id || previous.status != h.status) actions.getChildAt(0)?.requestFocus()
+        if (previous?.id != h.id || previous.status != h.status) (actions.getChildAt(0) ?: settings).requestFocus()
     }
 
     /** "Atualizar o Jinky" when the PC carries a newer TV app than this one. */
@@ -180,48 +179,10 @@ class HomeScreen(
     // --- views ---
 
     private fun setPlay(label: String, detail: String) {
-        // Two lines: the action, then a smaller, lighter description.
-        val s = android.text.SpannableString("$label\n$detail")
-        val start = label.length + 1
-        s.setSpan(android.text.style.RelativeSizeSpan(0.72f), start, s.length, 0)
-        s.setSpan(android.text.style.StyleSpan(Typeface.NORMAL), start, s.length, 0)
-        play.text = s
+        play.text = twoLines(label, detail)
     }
 
-    private fun bigButton() = Button(context).apply {
-        isAllCaps = false
-        gravity = Gravity.START or Gravity.CENTER_VERTICAL
-        setPadding(dp(28), dp(20), dp(28), dp(20))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        setTextColor(focusColors(0xFF06101F.toInt(), Color.WHITE))
-        setLineSpacing(0f, 1.15f)
-        background = states(StartScreen.ACCENT, 0xFF121821.toInt(), 18)
-    }
-
-    private fun smallButton(label: String) = Button(context).apply {
-        text = label
-        isAllCaps = false
-        gravity = Gravity.START or Gravity.CENTER_VERTICAL
-        setPadding(dp(28), dp(16), dp(28), dp(16))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-        setTextColor(focusColors(0xFF06101F.toInt(), Color.WHITE))
-        background = states(StartScreen.ACCENT, 0xFF121821.toInt(), 16)
-    }
-
-    private fun states(focused: Int, normal: Int, radius: Int) = StateListDrawable().apply {
-        addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply { setColor(focused); cornerRadius = dp(radius).toFloat() })
-        addState(intArrayOf(), GradientDrawable().apply {
-            setColor(normal); cornerRadius = dp(radius).toFloat(); setStroke(dp(1), 0xFF222C3B.toInt())
-        })
-    }
-
-    private fun focusColors(focused: Int, normal: Int) = android.content.res.ColorStateList(
-        arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(focused, normal))
-
-    private fun text(sp: Float, color: Int, bold: Boolean = false) = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
-        setTextColor(color)
-        typeface = Typeface.create("sans-serif-medium", if (bold) Typeface.BOLD else Typeface.NORMAL)
+    override fun focusFirst() {
+        (actions.getChildAt(0) ?: settings).requestFocus()
     }
 }
