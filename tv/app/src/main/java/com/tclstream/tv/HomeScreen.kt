@@ -96,7 +96,8 @@ class HomeScreen(
         root.addView(info, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(36) })
         // Footer hints
         root.addView(text(15f, StartScreen.HINT).apply {
-            text = "A ou OK: escolher   ·   Voltar: sair   ·   No jogo, segure View + Menu para abrir o menu"
+            text = "A ou OK: escolher   ·   Voltar: sair   ·   No jogo, segure View + Menu para abrir o menu" +
+                "   ·   versão ${BuildConfig.VERSION_NAME}"
         })
         addView(root, LayoutParams(-1, -1))
 

@@ -52,6 +52,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool HasUpdate => _update is not null;
     public bool CanInstallUpdate => _update is not null && !_installing;
     public string UpdateNotes => _update?.Notes ?? "";
+    public string VersionText => $"versão {Updater.Current}";
     public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}");
 
     public void SetUpdate(UpdateInfo? update)
