@@ -41,7 +41,8 @@ public:
     // `game`: a game chosen in the TV's library (console mode without Big Picture; the PC says
     // when the game is on screen and ends the session when it closes).
     void connect(uint32_t ip, bool desktop, bool game = false);
-    bool game_ready() const { return game_ready_; }
+    // -1 = not yet; else tclproto::GameReadyReason (on screen / a prompt waits for the player).
+    int game_ready() const { return game_ready_; }
     int end_reason() const { return end_reason_; }
     void close_game();
     void disconnect();
@@ -157,7 +158,7 @@ private:
     std::atomic<bool> connect_desktop_{false};
     std::atomic<bool> connect_game_{false};
     std::atomic<bool> game_{false};
-    std::atomic<bool> game_ready_{false};
+    std::atomic<int> game_ready_{-1};
     std::atomic<int> end_reason_{0};
     std::atomic<bool> disconnect_requested_{false};
     int64_t last_discover_ms_ = 0;

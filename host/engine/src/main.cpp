@@ -313,7 +313,9 @@ int main(int argc, char** argv) {
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
         if (opt.console && !opt.test_pattern) {
             if (peer && !peer_desktop) {
-                console.enter(capture.display_name(), !peer_game);
+                // Games from the TV's library also start inside Big Picture (it handles Steam's
+                // prompts and controller input in launchers); the TV hides it until the game shows.
+                console.enter(capture.display_name(), true);
                 return;
             }
             console.leave();  // no-op unless a console session just ended
@@ -623,7 +625,7 @@ int main(int argc, char** argv) {
                     if (peer_desktop) TCL_INFO("session", "desktop mode: showing the PC as it is (no console mode)");
                     peer_game = !peer_desktop && (msg->value & tclproto::kHelloGame);
                     if (peer_game) {
-                        TCL_INFO("session", "game session: console mode without Big Picture");
+                        TCL_INFO("session", "game session: Big Picture hidden behind the TV's launch screen");
                         game_watch.reset();
                     }
                     peer_name.clear();
@@ -673,9 +675,11 @@ int main(int argc, char** argv) {
         if (peer && console.active() && steady_clock::now() - last_bp_check >= 1s) {
             last_bp_check = steady_clock::now();
             const auto game = peer_game ? game_watch.poll() : tcl::SteamGameWatch::Event::None;
-            if (game == tcl::SteamGameWatch::Event::Ready) {
-                TCL_INFO("game", "game on screen: revealing the picture on the TV");
-                for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::GameReady);
+            if (game == tcl::SteamGameWatch::Event::Ready || game == tcl::SteamGameWatch::Event::NeedsAttention) {
+                const bool attention = game == tcl::SteamGameWatch::Event::NeedsAttention;
+                if (!attention) TCL_INFO("game", "game on screen: revealing the picture on the TV");
+                for (int i = 0; i < 3; ++i)
+                    send_control(*peer, PacketType::GameReady, attention ? tclproto::kGameNeedsAttention : tclproto::kGameOnScreen);
             }
             const bool bp_closed = !peer_game && console.big_picture_closed();
             if (bp_closed || game == tcl::SteamGameWatch::Event::Closed) {

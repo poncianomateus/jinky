@@ -24,6 +24,9 @@ class AudioPlayer(private val receiver: NativeReceiver) {
         thread = Thread(::loop, "tcl-audio").apply { start() }
     }
 
+    /** Silent while a game is still starting (Big Picture, launchers); fades back in when cleared. */
+    @Volatile var muted = false
+
     fun stop() {
         running = false
         thread?.join(1000)
@@ -76,10 +79,18 @@ class AudioPlayer(private val receiver: NativeReceiver) {
         // internal buffers (measured ~15% over the first second). Feed it silence during that phase
         // instead of draining the jitter buffer, which would cause clicks at the start.
         val warmupEnd = System.nanoTime() + WARMUP_NS
+        var gain = if (muted) 0f else 1f
         try {
             while (running) {
                 if (System.nanoTime() < warmupEnd) chunk.fill(0)
                 else receiver.readAudio(chunk, CHUNK_FRAMES)
+                // Muted: keep draining the stream (no delay builds up), play silence; unmuting
+                // ramps the volume up over ~0.4 s.
+                val target = if (muted) 0f else 1f
+                if (gain != target || gain < 1f) {
+                    gain = if (target == 0f) 0f else minOf(1f, gain + CHUNK_FRAMES / (RATE * 0.4f))
+                    for (i in chunk.indices) chunk[i] = (chunk[i] * gain).toInt().toShort()
+                }
                 track.write(chunk, 0, chunk.size)
                 written += CHUNK_FRAMES
                 val now = System.nanoTime()

@@ -339,6 +339,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         showPage(Page.HOME)
         homeScreen.visibility = View.GONE
         launchScreen.show(game, host.ip, host.updatePort)
+        audio?.muted = true  // Big Picture opens behind the launch screen: not a sound of it
         receiver?.connect(host.ip, false, game = true)
         // The PC starts the game as soon as this session begins.
         Thread {
@@ -364,17 +365,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Thread {
             LibraryScreen.install(host.ip, host.updatePort, game)?.let { Log.w(TAG, "install ${game.name}: $it") }
         }.start()
-        showHint("Confirme a instalação com A.  Depois: Voltar  →  Voltar ao início.")
+        showHint("Confirme a instalação com A.  Depois: Voltar  →  Voltar ao início.", delayMs = 2500)
     }
 
     private var installing = false
 
     /** A short note at the bottom of the screen (over the game), gone after a few seconds. */
-    private fun showHint(text: String) {
+    private fun showHint(text: String, delayMs: Long = 0) {
         hint.text = text
         hint.visibility = View.VISIBLE
         hint.alpha = 0f
-        hint.animate().alpha(1f).setStartDelay(2500).setDuration(300).start()
+        hint.animate().alpha(1f).setStartDelay(delayMs).setDuration(300).start()
         ui.removeCallbacks(hideHint)
         ui.postDelayed(hideHint, 14_000)
     }
@@ -382,6 +383,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val hideHint = Runnable { hint.animate().alpha(0f).setStartDelay(0).setDuration(300).withEndAction { hint.visibility = View.GONE }.start() }
 
     private fun stopLaunching() {
+        audio?.muted = false
         launching = null
         launchScreen.hide()
     }
@@ -588,8 +590,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (launching != null) {
             // The game's own screen stays up until the game is in front on the PC.
             startScreen.setShown(false)
-            if (picture && r?.gameReady() == true) stopLaunching()
-            else launchScreen.setStatus(if (host == null) "Conectando ao PC…" else "Abrindo o jogo…")
+            val ready = r?.gameReady() ?: -1
+            if (picture && ready >= 0) {
+                stopLaunching()
+                // A launcher or Steam prompt is in front of the game: say why it's showing.
+                if (ready == GAME_NEEDS_ATTENTION) showHint("O jogo pediu uma confirmação: use o controle.")
+            } else {
+                launchScreen.setStatus(if (host == null) "Conectando ao PC…" else "Abrindo o jogo…")
+            }
             return
         }
         if (picture) {
@@ -729,5 +737,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val STATE_PAIRING_CODE = 4
         private const val STATE_PAIRING_REJECTED = 5
         private const val END_GAME_CLOSED = 1  // tclproto::kEndGameClosed
+        private const val GAME_NEEDS_ATTENTION = 1  // tclproto::kGameNeedsAttention
     }
 }

@@ -133,7 +133,7 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeConnect(JNIEnv
     if (s) env->ReleaseStringUTFChars(ip, s);
 }
 
-JNIEXPORT jboolean JNICALL Java_com_tclstream_tv_NativeReceiver_nativeGameReady(JNIEnv*, jclass, jlong h) {
+JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativeGameReady(JNIEnv*, jclass, jlong h) {
     return self(h)->game_ready();
 }
 

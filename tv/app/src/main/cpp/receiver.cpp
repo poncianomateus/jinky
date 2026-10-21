@@ -110,7 +110,7 @@ void Receiver::apply_connect_requests() {
         last_packet_ms_ = now_ms();
         desktop_ = connect_desktop_.load();
         game_ = connect_game_.load();
-        game_ready_ = false;
+        game_ready_ = -1;
         end_reason_ = 0;
         session_wanted_ = true;
         state_ = kActive;
@@ -403,7 +403,10 @@ void Receiver::net_loop() {
             continue;
         }
         if (tclproto::peek_type(packet) == PacketType::GameReady) {
-            if (host_ && from == *host_ && !game_ready_.exchange(true)) LOGI("the game is on screen");
+            if (auto m = tclproto::ControlMessage::read(packet); m && host_ && from == *host_ && game_ready_ != int(m->value)) {
+                game_ready_ = int(m->value);
+                LOGI("%s", m->value == tclproto::kGameNeedsAttention ? "a prompt waits for the player" : "the game is on screen");
+            }
             continue;
         }
         if (const auto t = tclproto::peek_type(packet); t == PacketType::Displaced || t == PacketType::SessionEnd) {

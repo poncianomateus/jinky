@@ -41,7 +41,7 @@ enum class PacketType : uint8_t {
     TimeRequest = 20,
     TimeResponse = 21,
     // Game sessions (kHelloGame)
-    GameReady = 22,  // host -> TV: the game the TV started is on screen; reveal the picture
+    GameReady = 22,  // host -> TV: reveal the picture; value = GameReadyReason
     CloseGame = 23,  // TV -> host: quit the game that is running (menu "Fechar jogo")
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
@@ -71,9 +71,15 @@ inline constexpr uint32_t kHelloTakeover = 1u << 8;
 // Hello.value flag: "Área de trabalho" — just show the PC's screen; no console mode (no Big
 // Picture, no 60 Hz switch).
 inline constexpr uint32_t kHelloDesktop = 1u << 9;
-// Hello.value flag: a game chosen in the TV's own library — console mode without Steam Big Picture;
-// the session ends when the game is closed.
+// Hello.value flag: a game chosen in the TV's own library — the TV hides Big Picture behind its own
+// launch screen until the game is up; the session ends when the game is closed.
 inline constexpr uint32_t kHelloGame = 1u << 10;
+
+// GameReady.value
+enum GameReadyReason : uint32_t {
+    kGameOnScreen = 0,        // the game is in front
+    kGameNeedsAttention = 1,  // a launcher or prompt waits for the player
+};
 
 // SessionEnd.value
 enum SessionEndReason : uint32_t {

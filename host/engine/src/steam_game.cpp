@@ -55,6 +55,22 @@ bool SteamGameWatch::game_in_front() {
     return mon > 0 && win >= 0.8 * mon;
 }
 
+void* SteamGameWatch::prompt_in_front() {
+    HWND hwnd = GetForegroundWindow();
+    if (!hwnd || !IsWindowVisible(hwnd)) return nullptr;
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    if (wcsstr(title, L"Big Picture")) return nullptr;  // Steam's own console screen: fine
+    const auto program = window_program(hwnd);
+    const auto ends_with = [&](const wchar_t* name) {
+        const size_t n = wcslen(name);
+        return program.size() >= n && program.compare(program.size() - n, n, name) == 0;
+    };
+    if (program.empty() || ends_with(L"\\explorer.exe") || ends_with(L"\\jinky.exe") || ends_with(L"\\jinky-engine.exe"))
+        return nullptr;
+    return hwnd;
+}
+
 bool SteamGameWatch::close_foreground_game() {
     HWND hwnd = GetForegroundWindow();
     DWORD pid = 0;
@@ -72,7 +88,9 @@ bool SteamGameWatch::close_foreground_game() {
 }
 
 void SteamGameWatch::reset() {
-    started_ = ready_ = false;
+    started_ = ready_ = attention_ = false;
+    prompt_ = nullptr;
+    prompt_since_ = {};
     began_ = std::chrono::steady_clock::now();
     running_since_ = gone_since_ = {};
 }
@@ -80,6 +98,19 @@ void SteamGameWatch::reset() {
 SteamGameWatch::Event SteamGameWatch::poll() {
     using namespace std::chrono;
     const auto now = steady_clock::now();
+    // Something other than the game waiting in front (launcher, EULA, Steam prompt, another
+    // store's app): after 3 s in front, show it on the TV so the player can deal with it.
+    if (!ready_ && !attention_ && !game_in_front() && now - began_ > 4s) {
+        void* prompt = prompt_in_front();
+        if (prompt != prompt_) {
+            prompt_ = prompt;
+            prompt_since_ = now;
+        } else if (prompt && now - prompt_since_ >= 3s) {
+            attention_ = true;
+            TCL_INFO("game", "a window is waiting for the player in front of the game: showing it on the TV");
+            return Event::NeedsAttention;
+        }
+    }
     if (running_app_id() != 0) {
         if (!started_) {
             started_ = true;
@@ -104,7 +135,9 @@ SteamGameWatch::Event SteamGameWatch::poll() {
         return Event::None;
     }
     if (gone_since_ == steady_clock::time_point{}) gone_since_ = now;
-    if (now - gone_since_ < 3s) return Event::None;  // e.g. a launcher handing over to the game
+    // Launchers often exit and start the game as a new process; Steam may report "nothing
+    // running" for a moment in between.
+    if (now - gone_since_ < 10s) return Event::None;
     started_ = false;
     return Event::Closed;
 }
