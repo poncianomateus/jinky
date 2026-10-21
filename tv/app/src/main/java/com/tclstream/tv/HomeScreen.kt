@@ -10,6 +10,8 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewOutlineProvider
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -71,7 +73,11 @@ class HomeScreen(
         clipToPadding = false
         setPadding(dp(10), dp(14), dp(40), dp(14))  // room for the focused tile to grow
     }
-    private val row = HorizontalScrollView(context).apply {
+    private val row = object : HorizontalScrollView(context) {
+        // Focus changes don't jump the row; onTileFocused glides it so the focused tile sits
+        // near the left edge, like the PS5.
+        override fun computeScrollDeltaToGetChildRectOnScreen(rect: android.graphics.Rect) = 0
+    }.apply {
         isHorizontalScrollBarEnabled = false
         clipChildren = false
         clipToPadding = false
@@ -91,6 +97,10 @@ class HomeScreen(
     }
     private val meta = text(18f, 0xFFD5DCE6.toInt()).apply { setShadowLayer(dp(8).toFloat(), 0f, 0f, 0xCC000000.toInt()) }
     private val primary = playButton()
+    // Logo / name, the line about it and the button move together when the focus changes.
+    private val info = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private var rowGlide: android.animation.ObjectAnimator? = null
+    private var heroTop: ImageView? = null  // the artwork layer currently in front
 
     private var host: HomeHost? = null
     private var waking = false
@@ -139,10 +149,11 @@ class HomeScreen(
         root.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         root.addView(View(context), LinearLayout.LayoutParams(1, 0, 1f))
         // The focused item: its logo (or name), a line about it, and the big button.
-        root.addView(logo, LinearLayout.LayoutParams(-2, -2))
-        root.addView(title, LinearLayout.LayoutParams(dp(640), -2))
-        root.addView(meta, LinearLayout.LayoutParams(dp(640), -2).apply { topMargin = dp(10) })
-        root.addView(primary, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(22); bottomMargin = dp(12) })
+        info.addView(logo, LinearLayout.LayoutParams(-2, -2))
+        info.addView(title, LinearLayout.LayoutParams(dp(640), -2))
+        info.addView(meta, LinearLayout.LayoutParams(dp(640), -2).apply { topMargin = dp(10) })
+        info.addView(primary, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(22); bottomMargin = dp(12) })
+        root.addView(info, LinearLayout.LayoutParams(-1, -2))
         addView(root, LayoutParams(-1, -1))
 
         primary.id = View.generateViewId()
@@ -199,6 +210,8 @@ class HomeScreen(
         art = pcIp to port
         val keep = selected
         rebuildRow()
+        row.scrollX = 0
+        if (isShown && !touched) animateIn()
         // Like a console: open on the most recently played game, unless the user already moved.
         val again = (if (touched) items.firstOrNull { it.first == keep } else null) ?: items.firstOrNull()
         if (host?.status == HomeHost.Status.READY && again != null) {
@@ -295,15 +308,47 @@ class HomeScreen(
             setColor(Color.TRANSPARENT); cornerRadius = dp(14).toFloat(); setStroke(dp(3), Color.TRANSPARENT)
         }
         setOnFocusChangeListener { v, focused ->
-            v.animate().scaleX(if (focused) 1.14f else 1f).scaleY(if (focused) 1.14f else 1f).setDuration(140).start()
+            v.animate().cancel()
+            if (focused) {
+                v.animate().scaleX(1.14f).scaleY(1.14f).setDuration(260).setInterpolator(OvershootInterpolator(1.6f)).start()
+            } else {
+                v.animate().scaleX(1f).scaleY(1f).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
+            }
             v.translationZ = if (focused) dp(10).toFloat() else 0f
             (v.foreground as GradientDrawable).setStroke(dp(3), if (focused) Color.WHITE else Color.TRANSPARENT)
             if (focused) {
                 primary.nextFocusUpId = v.id
+                glideRowTo(v)
                 showItem(item)
             }
         }
         setOnClickListener { activate(item) }
+    }
+
+    /** Smoothly scrolls the row so [tile] sits near its left edge (as far as the row allows). */
+    private fun glideRowTo(tile: View) {
+        val max = (rowItems.width - row.width).coerceAtLeast(0)
+        val target = (tile.left - dp(18)).coerceIn(0, max)
+        rowGlide?.cancel()
+        if (target == row.scrollX) return
+        rowGlide = android.animation.ObjectAnimator.ofInt(row, "scrollX", row.scrollX, target).apply {
+            duration = 300
+            interpolator = DecelerateInterpolator(1.8f)
+            start()
+        }
+    }
+
+    /** Tiles slide in one after another (when the home screen opens or the games arrive). */
+    fun animateIn() {
+        if (row.visibility != View.VISIBLE) return
+        items.forEachIndexed { i, (_, tile) ->
+            tile.alpha = 0f
+            tile.translationX = dp(56).toFloat()
+            tile.animate().alpha(1f).translationX(0f).setStartDelay(i * 45L).setDuration(380)
+                .setInterpolator(DecelerateInterpolator(2f)).start()
+        }
+        info.alpha = 0f
+        info.animate().alpha(1f).setStartDelay(120).setDuration(400).start()
     }
 
     private fun tileLabel(name: String, detail: String) = LinearLayout(context).apply {
@@ -321,6 +366,13 @@ class HomeScreen(
         val changed = item != selected
         selected = item
         primary.visibility = View.VISIBLE
+        if (changed) {
+            info.animate().cancel()
+            info.alpha = 0f
+            info.translationY = dp(18).toFloat()
+            info.animate().alpha(1f).translationY(0f).setStartDelay(0).setDuration(280)
+                .setInterpolator(DecelerateInterpolator(1.6f)).start()
+        }
         when (item) {
             is Item.Game -> {
                 val g = item.game
@@ -360,28 +412,35 @@ class HomeScreen(
         ArtLoader.load(ip, port, g.id, "logo", 1) { bmp ->
             if ((selected as? Item.Game)?.game?.id != g.id || bmp == null) return@load
             logo.setImageBitmap(bmp)
+            logo.alpha = 0f
             logo.visibility = View.VISIBLE
+            logo.animate().alpha(1f).setDuration(260).start()
             title.visibility = View.GONE
         }
     }
 
     /** Cross-fades to [bmp]; null shows the Jinky backdrop. */
     private fun showHero(bmp: Bitmap?, key: String? = null) {
-        if (key == shownHero && (key != null || heroFront.drawable != null)) return
+        if (key == shownHero && (key != null || heroTop?.drawable != null)) return
         shownHero = key
-        heroBack.animate().cancel()
-        heroBack.alpha = 0f
+        // The new artwork goes on the layer behind, which is moved in front of the old one (still
+        // under the scrims) and fades in while settling from a slight zoom.
+        val incoming = if (heroTop === heroFront) heroBack else heroFront
+        incoming.animate().cancel()
         if (bmp == null) {
-            heroBack.setImageDrawable(GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            incoming.setImageDrawable(GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 intArrayOf(0xFF13233F.toInt(), 0xFF0A1220.toInt(), 0xFF070A0F.toInt())))
         } else {
-            heroBack.setImageBitmap(bmp)
+            incoming.setImageBitmap(bmp)
         }
-        heroBack.animate().alpha(1f).setDuration(320).withEndAction {
-            heroFront.setImageDrawable(heroBack.drawable)
-            heroFront.alpha = 1f
-            heroBack.alpha = 0f
-        }.start()
+        removeView(incoming)
+        addView(incoming, 1, LayoutParams(-1, -1))
+        heroTop = incoming
+        incoming.alpha = 0f
+        incoming.scaleX = 1.06f
+        incoming.scaleY = 1.06f
+        incoming.animate().scaleX(1f).scaleY(1f).setDuration(1400).setInterpolator(DecelerateInterpolator(2f)).start()
+        android.animation.ObjectAnimator.ofFloat(incoming, View.ALPHA, 0f, 1f).apply { duration = 420 }.start()
     }
 
     private fun activate(item: Item?) {

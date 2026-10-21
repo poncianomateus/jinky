@@ -256,6 +256,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         helpScreen.visibility = if (p == Page.HELP) View.VISIBLE else View.GONE
         libraryScreen.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
+        if (p != null && p != before) {
+            // Screens fade in instead of popping up.
+            val view = when (p) {
+                Page.HOME -> homeScreen
+                Page.SETTINGS -> settingsScreen
+                Page.HELP -> helpScreen
+                Page.LIBRARY -> libraryScreen
+            }
+            view.alpha = 0f
+            view.animate().alpha(1f).setDuration(220).start()
+            if (p == Page.HOME) homeScreen.animateIn()
+        }
         if (p != null && p != before) when (p) {
             Page.HOME -> homeScreen.focusFirst()
             Page.SETTINGS -> settingsScreen.focusFirst()
