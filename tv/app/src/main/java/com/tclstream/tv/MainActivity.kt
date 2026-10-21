@@ -31,6 +31,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var helpScreen: HelpScreen
     private lateinit var libraryScreen: LibraryScreen
     private var pendingGame: Pair<HomeHost, LibraryGame>? = null  // started once the picture is up
+    private var gamesFrom: String? = null  // PC whose games the home row shows ("ip:port")
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
@@ -76,6 +77,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 wasInSession = inSession
                 // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
                 statusText.visibility = if (inSession && settings.showStats) View.VISIBLE else View.GONE
+                if (!inSession) gamesFrom = null  // "last played" changed: reload the home row
             }
             if (inSession) {
                 showPage(null)
@@ -116,6 +118,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             startScreen = StartScreen(this@MainActivity)
             addView(startScreen, FrameLayout.LayoutParams(-1, -1))
             homeScreen = HomeScreen(this@MainActivity,
+                onPlayGame = ::playGame,
                 onPlay = { host, desktop ->
                     receiver?.connect(host.ip, desktop)
                     homeScreen.visibility = View.GONE
@@ -142,18 +145,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             libraryScreen = LibraryScreen(this@MainActivity,
-                onPlay = { game ->
-                    val host = homeHost
-                    if (host != null && host.status == HomeHost.Status.READY) {
-                        // Console session first (Big Picture, 60 Hz, sound); the game starts once
-                        // the picture is on this TV.
-                        pendingGame = host to game
-                        showPage(Page.HOME)
-                        receiver?.connect(host.ip, false)
-                        homeScreen.visibility = View.GONE
-                        startScreen.setShown(true)
-                    }
-                },
+                onPlay = { game -> homeHost?.let { playGame(it, game) } },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
@@ -271,6 +263,32 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.LIBRARY -> libraryScreen.focusFirst()
         }
         updateUiInput()
+    }
+
+    /** Console session first (Big Picture, 60 Hz, sound); the game starts once the picture is here. */
+    private fun playGame(host: HomeHost, game: LibraryGame) {
+        if (host.status != HomeHost.Status.READY) return
+        pendingGame = host to game
+        showPage(Page.HOME)
+        receiver?.connect(host.ip, false)
+        homeScreen.visibility = View.GONE
+        startScreen.setShown(true)
+    }
+
+    /** The home row shows the PC's games; fetched once per PC (and again after each session). */
+    private fun loadGames(host: HomeHost) {
+        val key = "${host.ip}:${host.updatePort}"
+        if (host.status != HomeHost.Status.READY || host.updatePort == 0 || gamesFrom == key) return
+        gamesFrom = key
+        Thread {
+            val games = try {
+                LibraryScreen.fetchGames(host.ip, host.updatePort)
+            } catch (e: Exception) {
+                Log.w(TAG, "home games: $e")
+                null
+            }
+            ui.post { homeScreen.setGames(games, host.ip, host.updatePort) }
+        }.start()
     }
 
     private fun decoderSummary(): String {
@@ -428,6 +446,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
         homeHost = host
+        host?.let(::loadGames)
         homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
     }
 

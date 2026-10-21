@@ -6,7 +6,7 @@ using Microsoft.Win32;
 
 namespace Jinky;
 
-public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath);
+public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath);
 
 /// <summary>
 /// The games installed through Steam on this PC, for the TV's Biblioteca: names and install state
@@ -45,7 +45,8 @@ public static partial class SteamLibrary
                 if (!int.TryParse(Value(text, "StateFlags"), out var state) || (state & 4) == 0) continue;
                 var name = Value(text, "name") ?? $"App {id}";
                 if (name.Contains("Redistributable") || name.StartsWith("Proton") || name.StartsWith("Steam Linux Runtime")) continue;
-                games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id), Cover(steam, id));
+                games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id), Cover(steam, id),
+                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"));
             }
         }
         return games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
@@ -91,19 +92,19 @@ public static partial class SteamLibrary
         return result;
     }
 
-    /// <summary>Portrait cover from Steam's cache (older and newer cache layouts), else its banner.</summary>
-    static string? Cover(string steam, int id)
+    /// <summary>Portrait cover from Steam's cache, else its banner.</summary>
+    static string? Cover(string steam, int id) =>
+        Art(steam, id, "library_600x900.jpg") ?? Art(steam, id, "library_capsule.jpg") ??
+        Art(steam, id, "library_header.jpg") ?? Art(steam, id, "header.jpg");
+
+    /// <summary>One of a game's artwork files in Steam's cache (older flat and newer per-game layouts).</summary>
+    static string? Art(string steam, int id, string name)
     {
-        var dir = Path.Combine(steam, "appcache", "librarycache", id.ToString());
-        var flat = Path.Combine(steam, "appcache", "librarycache", $"{id}_library_600x900.jpg");
+        var cache = Path.Combine(steam, "appcache", "librarycache");
+        var flat = Path.Combine(cache, $"{id}_{name}");
         if (File.Exists(flat)) return flat;
-        if (!Directory.Exists(dir)) return null;
-        foreach (var name in new[] { "library_600x900.jpg", "library_capsule.jpg", "library_header.jpg", "header.jpg" })
-        {
-            var found = Directory.EnumerateFiles(dir, name, SearchOption.AllDirectories).FirstOrDefault();
-            if (found is not null) return found;
-        }
-        return null;
+        var dir = Path.Combine(cache, id.ToString());
+        return Directory.Exists(dir) ? Directory.EnumerateFiles(dir, name, SearchOption.AllDirectories).FirstOrDefault() : null;
     }
 
     static string? Value(string vdf, string key)

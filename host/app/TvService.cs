@@ -11,7 +11,7 @@ namespace Jinky;
 /// this Jinky, so TVs update from the PC (Android only installs it over the existing app if it
 /// carries the same signature, so a tampered file is refused by the TV itself);
 /// POST /tv/diagnostics?tv=Name -> a TV's diagnostic report, saved next to the PC's logs;
-/// GET /library -> installed Steam games (JSON); GET /library/cover?id=N -> a game's cover;
+/// GET /library -> installed Steam games (JSON); GET /library/art?id=N&kind=cover|hero|logo -> artwork;
 /// POST /library/launch?id=N -> starts that game, only while a TV is streaming from this PC.
 /// </summary>
 public sealed class TvService : IDisposable
@@ -30,8 +30,8 @@ public sealed class TvService : IDisposable
     /// <summary>Whether a TV is streaming right now; games can only be started from a TV then.</summary>
     public Func<bool>? Streaming { get; set; }
 
-    // Covers are served only from the files the last library listing found (never arbitrary paths).
-    readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> _covers = new();
+    // Artwork is served only from the files the last library listing found (never arbitrary paths).
+    readonly System.Collections.Concurrent.ConcurrentDictionary<(int, string), string> _art = new();
 
     public static string ApkPath => Path.Combine(AppContext.BaseDirectory, "tv", "jinky-tv.apk");
     public static bool Available => File.Exists(ApkPath);
@@ -123,18 +123,27 @@ public sealed class TvService : IDisposable
                 {
                     var games = SteamLibrary.Games();
                     foreach (var g in games)
-                        if (g.CoverPath is not null) _covers[g.Id] = g.CoverPath;
+                    {
+                        if (g.CoverPath is not null) _art[(g.Id, "cover")] = g.CoverPath;
+                        if (g.HeroPath is not null) _art[(g.Id, "hero")] = g.HeroPath;
+                        if (g.LogoPath is not null) _art[(g.Id, "logo")] = g.LogoPath;
+                    }
                     var json = System.Text.Json.JsonSerializer.Serialize(new
                     {
-                        games = games.Select(g => new { id = g.Id, name = g.Name, lastPlayed = g.LastPlayed, cover = g.CoverPath is not null }),
+                        games = games.Select(g => new
+                        {
+                            id = g.Id, name = g.Name, lastPlayed = g.LastPlayed,
+                            cover = g.CoverPath is not null, hero = g.HeroPath is not null, logo = g.LogoPath is not null,
+                        }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
                 }
-                else if (request.Is("GET", "/library/cover") && int.TryParse(request.Query("id"), out var coverId) &&
-                         _covers.TryGetValue(coverId, out var coverPath) && File.Exists(coverPath))
+                else if ((request.Is("GET", "/library/art") || request.Is("GET", "/library/cover")) &&
+                         int.TryParse(request.Query("id"), out var artId) &&
+                         _art.TryGetValue((artId, request.Query("kind") ?? "cover"), out var artPath) && File.Exists(artPath))
                 {
-                    await using var file = File.OpenRead(coverPath);
-                    await Respond(stream, "200 OK", coverPath.EndsWith(".png") ? "image/png" : "image/jpeg", file.Length);
+                    await using var file = File.OpenRead(artPath);
+                    await Respond(stream, "200 OK", artPath.EndsWith(".png") ? "image/png" : "image/jpeg", file.Length);
                     await file.CopyToAsync(stream);
                 }
                 else if (request.Is("POST", "/library/launch") && int.TryParse(request.Query("id"), out var gameId))
