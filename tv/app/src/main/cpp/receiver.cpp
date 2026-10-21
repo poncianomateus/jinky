@@ -46,9 +46,18 @@ void Receiver::stop() {
     sock_.close();
 }
 
-void Receiver::connect(uint32_t ip, bool desktop) {
+void Receiver::connect(uint32_t ip, bool desktop, bool game) {
     connect_desktop_ = desktop;
+    connect_game_ = game;
     connect_ip_ = ip;
+}
+
+void Receiver::close_game() {
+    // From the UI thread: address the PC like send_input does (host_ belongs to the net thread).
+    if (!host_known_ || !session_wanted_) return;
+    uint8_t buf[tclproto::ControlMessage::kSize];
+    tclproto::ControlMessage{PacketType::CloseGame, session_id_, 0}.write(buf);
+    for (int i = 0; i < 2; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);
 }
 
 void Receiver::disconnect() { disconnect_requested_ = true; }
@@ -100,6 +109,9 @@ void Receiver::apply_connect_requests() {
         host_ip_ = ip;
         last_packet_ms_ = now_ms();
         desktop_ = connect_desktop_.load();
+        game_ = connect_game_.load();
+        game_ready_ = false;
+        end_reason_ = 0;
         session_wanted_ = true;
         state_ = kActive;
         takeover_until_ms_ = now_ms() + 4000;  // the user chose to play here: take it from any other TV
@@ -315,7 +327,8 @@ void Receiver::net_loop() {
         // stops playing, this one would silently grab the session (console mode for an empty room).
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
-            send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u));
+            send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+                       (game_ ? tclproto::kHelloGame : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
                 std::string name;
@@ -345,7 +358,10 @@ void Receiver::net_loop() {
             if (n > 0) {
                 if (handle_auth(std::span<const uint8_t>(b, size_t(n)), from)) continue;
                 auto m = tclproto::ControlMessage::read(std::span<const uint8_t>(b, size_t(n)));
-                if (m && m->type == PacketType::SessionEnd) state_ = kEnded;
+                if (m && m->type == PacketType::SessionEnd) {
+                    end_reason_ = int(m->value);
+                    state_ = kEnded;
+                }
                 if (m) last_packet_ms_ = now_ms();  // the host is alive; don't forget it
             }
             continue;
@@ -386,7 +402,14 @@ void Receiver::net_loop() {
             }
             continue;
         }
+        if (tclproto::peek_type(packet) == PacketType::GameReady) {
+            if (host_ && from == *host_ && !game_ready_.exchange(true)) LOGI("the game is on screen");
+            continue;
+        }
         if (const auto t = tclproto::peek_type(packet); t == PacketType::Displaced || t == PacketType::SessionEnd) {
+            if (*t == PacketType::SessionEnd) {
+                if (auto m = tclproto::ControlMessage::read(packet)) end_reason_ = int(m->value);
+            }
             if (!host_) {  // e.g. we broadcast while another TV is playing: remember the PC anyway
                 host_ = from;
                 host_known_ = true;

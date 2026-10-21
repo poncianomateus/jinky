@@ -31,7 +31,7 @@ enum class PacketType : uint8_t {
     LatencyReport = 14,  // value = average capture-to-display latency in microseconds
     // Host -> receiver
     Displaced = 15,   // another TV took over this session ("the game continues elsewhere")
-    SessionEnd = 16,  // the PC ended the session (Big Picture closed): the TV app should close
+    SessionEnd = 16,  // the PC ended the session; value = SessionEndReason
     // Receiver -> host
     DeviceName = 17,  // the TV's user-visible name ("Sala", "TCL 55P7K"), see NameMessage
     // Home screen discovery (no session): TV broadcasts Discover, each PC answers with HostInfo.
@@ -40,6 +40,9 @@ enum class PacketType : uint8_t {
     // Clock synchronisation (both directions), see TimeSync
     TimeRequest = 20,
     TimeResponse = 21,
+    // Game sessions (kHelloGame)
+    GameReady = 22,  // host -> TV: the game the TV started is on screen; reveal the picture
+    CloseGame = 23,  // TV -> host: quit the game that is running (menu "Fechar jogo")
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
     Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
@@ -68,6 +71,16 @@ inline constexpr uint32_t kHelloTakeover = 1u << 8;
 // Hello.value flag: "Área de trabalho" — just show the PC's screen; no console mode (no Big
 // Picture, no 60 Hz switch).
 inline constexpr uint32_t kHelloDesktop = 1u << 9;
+// Hello.value flag: a game chosen in the TV's own library — console mode without Steam Big Picture;
+// the session ends when the game is closed.
+inline constexpr uint32_t kHelloGame = 1u << 10;
+
+// SessionEnd.value
+enum SessionEndReason : uint32_t {
+    kEndBigPictureClosed = 0,  // the TV app closes, like turning a console off
+    kEndGameClosed = 1,        // the TV goes back to its home screen
+};
+
 // Hello.value bits 16..23: picture quality the user chose on the TV, in Mbit/s (0 = the PC's own
 // setting).
 inline constexpr uint32_t kHelloBitrateShift = 16;

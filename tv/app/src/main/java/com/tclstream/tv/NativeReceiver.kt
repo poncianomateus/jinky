@@ -13,7 +13,12 @@ class NativeReceiver : AutoCloseable {
 
     // --- home screen ---
     /** Starts a session with the PC at [ip]: console mode, or just its screen when [desktop]. */
-    fun connect(ip: String, desktop: Boolean) = nativeConnect(handle, ip, desktop)
+    fun connect(ip: String, desktop: Boolean, game: Boolean = false) = nativeConnect(handle, ip, desktop, game)
+    /** Game session: the PC reports the game is on screen. */
+    fun gameReady(): Boolean = nativeGameReady(handle)
+    /** Why the PC ended the session: 0 Big Picture closed, 1 game closed. */
+    fun endReason(): Int = nativeEndReason(handle)
+    fun closeGame() = nativeCloseGame(handle)
     /** Ends the session and goes back to discovering PCs. */
     fun disconnect() = nativeDisconnect(handle)
     fun inSession(): Boolean = nativeInSession(handle)
@@ -94,7 +99,10 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeStart(handle: Long, port: Int): String?
         @JvmStatic external fun nativeStop(handle: Long)
-        @JvmStatic external fun nativeConnect(handle: Long, ip: String, desktop: Boolean)
+        @JvmStatic external fun nativeConnect(handle: Long, ip: String, desktop: Boolean, game: Boolean)
+        @JvmStatic external fun nativeGameReady(handle: Long): Boolean
+        @JvmStatic external fun nativeEndReason(handle: Long): Int
+        @JvmStatic external fun nativeCloseGame(handle: Long)
         @JvmStatic external fun nativeDisconnect(handle: Long)
         @JvmStatic external fun nativeInSession(handle: Long): Boolean
         @JvmStatic external fun nativeHosts(handle: Long): String

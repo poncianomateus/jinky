@@ -12,7 +12,8 @@ namespace Jinky;
 /// carries the same signature, so a tampered file is refused by the TV itself);
 /// POST /tv/diagnostics?tv=Name -> a TV's diagnostic report, saved next to the PC's logs;
 /// GET /library -> installed Steam games (JSON); GET /library/art?id=N&kind=cover|hero|logo -> artwork;
-/// POST /library/launch?id=N -> starts that game, only while a TV is streaming from this PC.
+/// POST /library/launch?id=N -> starts that game when a TV streams from this PC (right away, or as
+/// soon as the session the TV is opening starts).
 /// </summary>
 public sealed class TvService : IDisposable
 {
@@ -29,6 +30,19 @@ public sealed class TvService : IDisposable
 
     /// <summary>Whether a TV is streaming right now; games can only be started from a TV then.</summary>
     public Func<bool>? Streaming { get; set; }
+
+    // A game a TV asked for while its session was still opening (id, when).
+    (SteamGame Game, DateTime At)? _pendingLaunch;
+
+    /// <summary>A TV session started: start the game it asked for, if any (and if recent).</summary>
+    public void OnSessionStarted()
+    {
+        if (_pendingLaunch is not { } p) return;
+        _pendingLaunch = null;
+        if (DateTime.UtcNow - p.At > TimeSpan.FromSeconds(30)) return;
+        SteamLibrary.Launch(p.Game.Id);
+        GameLaunched?.Invoke(p.Game.Name);
+    }
 
     // Artwork is served only from the files the last library listing found (never arbitrary paths).
     readonly System.Collections.Concurrent.ConcurrentDictionary<(int, string), string> _art = new();
@@ -150,7 +164,13 @@ public sealed class TvService : IDisposable
                 {
                     var game = SteamLibrary.Games().FirstOrDefault(g => g.Id == gameId);
                     if (game is null) await Respond(stream, "404 Not Found", "text/plain", 0);
-                    else if (Streaming?.Invoke() != true) await Respond(stream, "409 Conflict", "text/plain", 0);
+                    else if (Streaming?.Invoke() != true)
+                    {
+                        // The TV asks for the game together with its connection: start it as soon
+                        // as that session begins (never without a TV session).
+                        _pendingLaunch = (game, DateTime.UtcNow);
+                        await RespondText(stream, "pending");
+                    }
                     else
                     {
                         SteamLibrary.Launch(game.Id);

@@ -11,7 +11,8 @@ namespace tcl {
 class ConsoleMode {
 public:
     // `display` is the GDI device name of the captured monitor (e.g. \\.\DISPLAY1).
-    void enter(const std::wstring& display);
+    // `big_picture`: also open Steam Big Picture (not for a game started from the TV's library).
+    void enter(const std::wstring& display, bool big_picture = true);
     void leave();
     bool active() const { return active_; }
 
@@ -30,6 +31,7 @@ private:
 
     bool active_ = false;
     bool bp_seen_ = false;
+    bool bp_opened_ = false;
     std::chrono::steady_clock::time_point bp_missing_since_{};
     std::wstring display_;
 };

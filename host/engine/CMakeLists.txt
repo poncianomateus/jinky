@@ -13,6 +13,7 @@ add_executable(jinky-engine
     src/audio_capture.cpp
     src/capture.cpp
     src/console_mode.cpp
+    src/steam_game.cpp
     src/cursor.cpp
     src/converter.cpp
     src/nvenc_encoder.cpp

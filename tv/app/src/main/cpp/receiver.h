@@ -38,7 +38,12 @@ public:
     // Home screen actions. connect() starts a session with the PC at `ip` (host byte order):
     // console mode ("Jogar") or just its screen ("Área de trabalho"). disconnect() ends it and
     // returns to discovery.
-    void connect(uint32_t ip, bool desktop);
+    // `game`: a game chosen in the TV's library (console mode without Big Picture; the PC says
+    // when the game is on screen and ends the session when it closes).
+    void connect(uint32_t ip, bool desktop, bool game = false);
+    bool game_ready() const { return game_ready_; }
+    int end_reason() const { return end_reason_; }
+    void close_game();
     void disconnect();
     bool in_session() const { return session_wanted_; }
     // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith|tvVersion|updatePort".
@@ -150,6 +155,10 @@ private:
     std::atomic<bool> desktop_{false};
     std::atomic<uint32_t> connect_ip_{0};  // pending connect request (0 = none)
     std::atomic<bool> connect_desktop_{false};
+    std::atomic<bool> connect_game_{false};
+    std::atomic<bool> game_{false};
+    std::atomic<bool> game_ready_{false};
+    std::atomic<int> end_reason_{0};
     std::atomic<bool> disconnect_requested_{false};
     int64_t last_discover_ms_ = 0;
     struct KnownHost {

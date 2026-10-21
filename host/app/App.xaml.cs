@@ -55,7 +55,11 @@ public partial class App : Application
         _vm = new MainViewModel(_settings, OnSettingsChanged, cmd => _engine?.Send(cmd));
         _window = new MainWindow(_vm);
         // Console mode turns the PC into a console: don't leave Jinky's window on the monitor.
-        _vm.SessionStarted += () => { if (_settings.ConsoleMode) _window?.Hide(); };
+        _vm.SessionStarted += () =>
+        {
+            if (_settings.ConsoleMode) _window?.Hide();
+            _tvService?.OnSessionStarted();
+        };
         // A TV asking to pair needs the user's eyes on the code: bring the window forward.
         _vm.PairingRequested += () =>
         {

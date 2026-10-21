@@ -102,9 +102,10 @@ bool ConsoleMode::big_picture_closed() {
     return true;
 }
 
-void ConsoleMode::enter(const std::wstring& display) {
+void ConsoleMode::enter(const std::wstring& display, bool big_picture) {
     if (active_) return;
     active_ = true;
+    bp_opened_ = big_picture;
     bp_seen_ = false;
     bp_missing_since_ = {};
     display_ = display;
@@ -117,15 +118,15 @@ void ConsoleMode::enter(const std::wstring& display) {
         TCL_WARN("console", "could not switch {} to 60 Hz; games may tear or judder", narrow(display));
 
     if (!AudioCapture::set_pc_muted(true)) TCL_WARN("console", "could not mute the PC");
-    open_url(L"steam://open/bigpicture");
-    TCL_INFO("console", "console mode on: Steam Big Picture, 60 Hz, PC muted");
+    if (big_picture) open_url(L"steam://open/bigpicture");
+    TCL_INFO("console", "console mode on: {}60 Hz, PC muted", big_picture ? "Steam Big Picture, " : "");
     emit_event("console", "\"on\":true");
 }
 
 void ConsoleMode::leave() {
     if (!active_) return;
     active_ = false;
-    open_url(L"steam://close/bigpicture");
+    if (bp_opened_) open_url(L"steam://close/bigpicture");
     restore_display(display_);
     AudioCapture::set_pc_muted(false);
     if (const auto marker = marker_path(); !marker.empty()) DeleteFileW(marker.c_str());

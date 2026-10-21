@@ -308,11 +308,10 @@ class HomeScreen(
             setColor(Color.TRANSPARENT); cornerRadius = dp(14).toFloat(); setStroke(dp(3), Color.TRANSPARENT)
         }
         setOnFocusChangeListener { v, focused ->
-            v.animate().cancel()
             if (focused) {
-                v.animate().scaleX(1.14f).scaleY(1.14f).setDuration(260).setInterpolator(OvershootInterpolator(1.6f)).start()
+                v.animate().scaleX(1.14f).scaleY(1.14f).setStartDelay(0).setDuration(260).setInterpolator(OvershootInterpolator(1.6f)).start()
             } else {
-                v.animate().scaleX(1f).scaleY(1f).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
+                v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
             }
             v.translationZ = if (focused) dp(10).toFloat() else 0f
             (v.foreground as GradientDrawable).setStroke(dp(3), if (focused) Color.WHITE else Color.TRANSPARENT)
@@ -341,11 +340,19 @@ class HomeScreen(
     /** Tiles slide in one after another (when the home screen opens or the games arrive). */
     fun animateIn() {
         if (row.visibility != View.VISIBLE) return
+        // Own animators (not the view's animate()), so the focus grow can't cut them short and
+        // leave a tile half-faded.
         items.forEachIndexed { i, (_, tile) ->
-            tile.alpha = 0f
-            tile.translationX = dp(56).toFloat()
-            tile.animate().alpha(1f).translationX(0f).setStartDelay(i * 45L).setDuration(380)
-                .setInterpolator(DecelerateInterpolator(2f)).start()
+            android.animation.AnimatorSet().apply {
+                playTogether(
+                    android.animation.ObjectAnimator.ofFloat(tile, View.ALPHA, 0f, 1f),
+                    android.animation.ObjectAnimator.ofFloat(tile, View.TRANSLATION_X, dp(56).toFloat(), 0f))
+                startDelay = i * 45L
+                duration = 380
+                interpolator = DecelerateInterpolator(2f)
+                tile.alpha = 0f
+                start()
+            }
         }
         info.alpha = 0f
         info.animate().alpha(1f).setStartDelay(120).setDuration(400).start()

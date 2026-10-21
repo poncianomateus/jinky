@@ -30,7 +30,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var helpScreen: HelpScreen
     private lateinit var libraryScreen: LibraryScreen
-    private var pendingGame: Pair<HomeHost, LibraryGame>? = null  // started once the picture is up
+    private lateinit var launchScreen: LaunchScreen
+    private var launching: LibraryGame? = null  // a game starting on the PC, picture not revealed yet
+    private var launchedAt = 0L
     private var gamesFrom: String? = null  // PC whose games the home row shows ("ip:port")
     private val settings by lazy { TvSettings(this) }
 
@@ -50,7 +52,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var pipeline: VideoPipeline? = null
     private var audio: AudioPlayer? = null
     private var gamepads: GamepadInput? = null
-    private lateinit var menu: android.widget.LinearLayout
+    private lateinit var menu: GameMenu
+    private var sessionTitle = ""      // what is playing, for the menu
+    private var sessionDesktop = false
     private var startError: String? = null
     private val hardwareReport by lazy { HardwareInfo.report() }
 
@@ -83,9 +87,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 showPage(null)
                 updateStartScreen()
             } else {
+                // (the session starts a moment after the request; don't cancel in between)
+                if (launching != null && android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) stopLaunching()
                 updateHome()
             }
             updateUiInput()
+            if (menu.isOpen) menu.updateStream(streamLine())
             val text = buildOverlay()
             statusText.text = text
             // Same diagnostics in logcat every 5 s, for remote debugging over adb.
@@ -120,6 +127,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             homeScreen = HomeScreen(this@MainActivity,
                 onPlayGame = ::playGame,
                 onPlay = { host, desktop ->
+                    sessionTitle = when {
+                        host.status == HomeHost.Status.BUSY -> "Jogo em andamento"
+                        desktop -> "Área de trabalho"
+                        else -> "Steam Big Picture"
+                    }
+                    sessionDesktop = desktop
                     receiver?.connect(host.ip, desktop)
                     homeScreen.visibility = View.GONE
                     startScreen.setShown(true)
@@ -148,13 +161,32 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onPlay = { game -> homeHost?.let { playGame(it, game) } },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
+            launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
+            addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
             statusParams.setMargins(margin, margin, margin, margin)
             addView(statusText, statusParams)
-            menu = buildMenu()
-            addView(menu, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+            menu = GameMenu(this@MainActivity,
+                onResume = { hideMenu() },
+                onCloseGame = {
+                    // The PC closes the game in front; a game session then ends by itself.
+                    receiver?.closeGame()
+                    hideMenu()
+                },
+                onToggleStats = {
+                    statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    hideMenu()
+                },
+                onHome = {
+                    // Ends the session (the PC goes back to normal) and shows the home screen.
+                    stopLaunching()
+                    receiver?.disconnect()
+                    hideMenu()
+                },
+                onExit = { finish() })
+            addView(menu, FrameLayout.LayoutParams(-1, -1))
         })
         Log.i(TAG, "hardware:\n$hardwareReport")
         Log.i(TAG, "tuning: $tuning displayHz=$displayHz surfaceRate=$surfaceRate")
@@ -277,14 +309,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         updateUiInput()
     }
 
-    /** Console session first (Big Picture, 60 Hz, sound); the game starts once the picture is here. */
+    /**
+     * A game from the TV's own library: a console session without Big Picture. The TV shows the
+     * game's artwork until the PC says the game is on screen; closing the game brings the TV back
+     * to its home screen.
+     */
     private fun playGame(host: HomeHost, game: LibraryGame) {
         if (host.status != HomeHost.Status.READY) return
-        pendingGame = host to game
+        launching = game
+        launchedAt = android.os.SystemClock.elapsedRealtime()
+        sessionTitle = game.name
+        sessionDesktop = false
         showPage(Page.HOME)
-        receiver?.connect(host.ip, false)
         homeScreen.visibility = View.GONE
-        startScreen.setShown(true)
+        launchScreen.show(game, host.ip, host.updatePort)
+        receiver?.connect(host.ip, false, game = true)
+        // The PC starts the game as soon as this session begins.
+        Thread {
+            LibraryScreen.launch(host.ip, host.updatePort, game)?.let { Log.w(TAG, "launch ${game.name}: $it") }
+        }.start()
+    }
+
+    private fun stopLaunching() {
+        launching = null
+        launchScreen.hide()
     }
 
     /** The home row shows the PC's games; fetched once per PC (and again after each session). */
@@ -389,56 +437,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // --- in-stream menu: View + Menu held on the controller, or Back on the TV remote ---
 
-    private fun buildMenu(): android.widget.LinearLayout {
-        val density = resources.displayMetrics.density
-        fun dp(v: Int) = (v * density).toInt()
-        return android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            visibility = View.GONE
-            setPadding(dp(32), dp(24), dp(32), dp(24))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(0xF00B0F17.toInt())
-                cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), 0x402F7BFF)
-            }
-            addView(TextView(context).apply {
-                text = "Jinky"
-                setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-                setPadding(0, 0, 0, dp(16))
-            })
-            fun item(label: String, action: () -> Unit) = addView(android.widget.Button(context).apply {
-                text = label
-                isAllCaps = false
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                setTextColor(Color.WHITE)
-                minWidth = dp(320)
-                background = android.graphics.drawable.StateListDrawable().apply {
-                    val focused = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0xFF2F7BFF.toInt()); cornerRadius = dp(10).toFloat()
-                    }
-                    val normal = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0x22FFFFFF); cornerRadius = dp(10).toFloat()
-                    }
-                    addState(intArrayOf(android.R.attr.state_focused), focused)
-                    addState(intArrayOf(), normal)
-                }
-                setOnClickListener { action() }
-            }, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-            item("Continuar jogando") { hideMenu() }
-            item("Voltar ao início") {
-                // Ends the session (the PC goes back to normal) and shows the home screen.
-                receiver?.disconnect()
-                hideMenu()
-            }
-            item("Mostrar/ocultar desempenho") {
-                statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-                hideMenu()
-            }
-            item("Sair do Jinky") { finish() }
-        }
-    }
-
     /** Home screen: the PC this TV knows, live from discovery, else from the cache (to wake it). */
     private fun updateHome() {
         val now = android.os.SystemClock.elapsedRealtime()
@@ -466,7 +464,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateUiInput() {
         val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
             helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
-            menu.visibility == View.VISIBLE
+            menu.isOpen
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
 
@@ -508,6 +506,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 return
             }
             STATE_ENDED -> {
+                if (r.endReason() == END_GAME_CLOSED) {
+                    // The game was closed: back to the home screen, like a console.
+                    stopLaunching()
+                    r.disconnect()
+                    return
+                }
                 // Big Picture was closed on the PC: the session is over, like turning a console off.
                 finish()
                 return
@@ -524,14 +528,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val p = pipeline
         val host = r?.hostAddress()
         val picture = p != null && p.lastPresentMs != 0L && now - p.lastPresentMs < 3000
+        if (launching != null) {
+            // The game's own screen stays up until the game is in front on the PC.
+            startScreen.setShown(false)
+            if (picture && r?.gameReady() == true) stopLaunching()
+            else launchScreen.setStatus(if (host == null) "Conectando ao PC…" else "Abrindo o jogo…")
+            return
+        }
         if (picture) {
             startScreen.setShown(false)
-            pendingGame?.let { (host, game) ->
-                pendingGame = null
-                Thread {
-                    LibraryScreen.launch(host.ip, host.updatePort, game)?.let { Log.w(TAG, "launch ${game.name}: $it") }
-                }.start()
-            }
             return
         }
         startScreen.setShown(true)
@@ -563,15 +568,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startScreen.show(model)
     }
 
+    /** Live line for the menu: latency, codec and quality of the stream. */
+    private fun streamLine(): String {
+        val p = pipeline
+        val latency = p?.latency?.last?.totalAvgMs?.takeIf { !it.isNaN() }?.let { "%.0f ms".format(it) } ?: "— ms"
+        val codec = p?.decoderName?.substringBefore(" · ")?.takeIf { it == "HEVC" || it == "H.264" } ?: "vídeo"
+        val quality = if (settings.bitrateMbps == 0) "qualidade do PC" else "${settings.bitrateMbps} Mbit/s"
+        return "Latência $latency  ·  1080p60  ·  $codec  ·  $quality"
+    }
+
     private fun showMenu() {
-        if (menu.visibility == View.VISIBLE) return
+        if (menu.isOpen) return
+        menu.open(sessionTitle.ifEmpty { "Jinky" }, homeHost?.name ?: (receiver?.hostAddress() ?: ""), streamLine(),
+            canClose = !sessionDesktop, statsShown = statusText.visibility == View.VISIBLE)
         gamepads?.menuOpen = true
-        menu.visibility = View.VISIBLE
-        menu.getChildAt(1).requestFocus()
     }
 
     private fun hideMenu() {
-        menu.visibility = View.GONE
+        menu.close()
         updateUiInput()
     }
 
@@ -583,13 +597,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (settingsScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (homeScreen.visibility == View.VISIBLE) finish()
-        else if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
+        else if (menu.isOpen) hideMenu() else showMenu()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // The Fire TV remote has a Menu (☰) key; it opens the Jinky menu like Back does.
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            if (menu.visibility == View.VISIBLE) hideMenu() else showMenu()
+            if (menu.isOpen) hideMenu() else showMenu()
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -657,5 +671,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val STATE_NEED_PAIRING = 3
         private const val STATE_PAIRING_CODE = 4
         private const val STATE_PAIRING_REJECTED = 5
+        private const val END_GAME_CLOSED = 1  // tclproto::kEndGameClosed
     }
 }

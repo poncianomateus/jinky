@@ -29,6 +29,7 @@
 #include "netinfo.h"
 #include "nvenc_encoder.h"
 #include "pairing.h"
+#include "steam_game.h"
 #include "tclproto/auth.h"
 #include "test_pattern.h"
 #include "tclproto/framing.h"
@@ -225,6 +226,8 @@ int main(int argc, char** argv) {
 
     std::optional<tclproto::Endpoint> peer;
     bool peer_desktop = false;  // the TV chose "Área de trabalho": no console mode for this session
+    bool peer_game = false;     // a game chosen in the TV's library: console mode without Big Picture
+    tcl::SteamGameWatch game_watch;
     std::string peer_name;
     bool busy_logged = false;
     steady_clock::time_point last_displaced_sent{}, last_bp_check{};
@@ -281,9 +284,9 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 3; ++i) sock.send_to(p.from, buf);  // UDP: say it thrice
     };
     uint32_t session_id = std::random_device{}();
-    auto send_control = [&](const tclproto::Endpoint& to, PacketType type) {
+    auto send_control = [&](const tclproto::Endpoint& to, PacketType type, uint32_t value = 0) {
         uint8_t buf[tclproto::ControlMessage::kSize];
-        tclproto::ControlMessage{type, session_id, 0}.write(buf);
+        tclproto::ControlMessage{type, session_id, value}.write(buf);
         sock.send_to(to, buf);
     };
 
@@ -310,7 +313,7 @@ int main(int argc, char** argv) {
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
         if (opt.console && !opt.test_pattern) {
             if (peer && !peer_desktop) {
-                console.enter(capture.display_name());
+                console.enter(capture.display_name(), !peer_game);
                 return;
             }
             console.leave();  // no-op unless a console session just ended
@@ -618,6 +621,11 @@ int main(int argc, char** argv) {
                     peer = from;
                     peer_desktop = msg->value & tclproto::kHelloDesktop;
                     if (peer_desktop) TCL_INFO("session", "desktop mode: showing the PC as it is (no console mode)");
+                    peer_game = !peer_desktop && (msg->value & tclproto::kHelloGame);
+                    if (peer_game) {
+                        TCL_INFO("session", "game session: console mode without Big Picture");
+                        game_watch.reset();
+                    }
                     peer_name.clear();
                     peer_key = hello_key.value_or(tclproto::PairKey{});
                     peer_device = hello_device;
@@ -637,6 +645,8 @@ int main(int argc, char** argv) {
                 } else if (msg->type == PacketType::LatencyReport) {
                     TCL_INFO("receiver", "capture-to-display latency: {:.1f} ms", msg->value / 1000.0);
                     tcl::emit_event("latency", std::format("\"ms\":{:.1f}", msg->value / 1000.0));
+                } else if (msg->type == PacketType::CloseGame) {
+                    tcl::SteamGameWatch::close_foreground_game();
                 } else if (msg->type == PacketType::Bye) {
                     TCL_INFO("session", "receiver left");
                     tcl::emit_event("disconnected", "\"reason\":\"left\"");
@@ -658,12 +668,21 @@ int main(int argc, char** argv) {
 
         // Console mode: leaving Big Picture ends the session — the TV app closes, the PC goes back
         // to normal, like turning a console off.
+        // A game started from the TV's library: reveal the picture once the game is in front, and
+        // closing the game ends the session (the TV goes back to its home screen).
         if (peer && console.active() && steady_clock::now() - last_bp_check >= 1s) {
             last_bp_check = steady_clock::now();
-            if (console.big_picture_closed()) {
-                TCL_INFO("session", "Big Picture closed: ending the session");
-                tcl::emit_event("session_end", "\"reason\":\"big_picture_closed\"");
-                for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::SessionEnd);  // UDP: say it thrice
+            const auto game = peer_game ? game_watch.poll() : tcl::SteamGameWatch::Event::None;
+            if (game == tcl::SteamGameWatch::Event::Ready) {
+                TCL_INFO("game", "game on screen: revealing the picture on the TV");
+                for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::GameReady);
+            }
+            const bool bp_closed = !peer_game && console.big_picture_closed();
+            if (bp_closed || game == tcl::SteamGameWatch::Event::Closed) {
+                TCL_INFO("session", "{}: ending the session", bp_closed ? "Big Picture closed" : "game closed");
+                tcl::emit_event("session_end", bp_closed ? "\"reason\":\"big_picture_closed\"" : "\"reason\":\"game_closed\"");
+                const uint32_t reason = bp_closed ? tclproto::kEndBigPictureClosed : tclproto::kEndGameClosed;
+                for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::SessionEnd, reason);  // UDP: say it thrice
                 peer.reset();
                 peer_name.clear();
                 publish_peer();

@@ -127,10 +127,22 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(
 
 // --- home screen ---
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeConnect(JNIEnv* env, jclass, jlong h, jstring ip,
-                                                                         jboolean desktop) {
+                                                                         jboolean desktop, jboolean game) {
     const char* s = env->GetStringUTFChars(ip, nullptr);
-    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, desktop);
+    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, desktop, game);
     if (s) env->ReleaseStringUTFChars(ip, s);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_tclstream_tv_NativeReceiver_nativeGameReady(JNIEnv*, jclass, jlong h) {
+    return self(h)->game_ready();
+}
+
+JNIEXPORT jint JNICALL Java_com_tclstream_tv_NativeReceiver_nativeEndReason(JNIEnv*, jclass, jlong h) {
+    return self(h)->end_reason();
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeCloseGame(JNIEnv*, jclass, jlong h) {
+    self(h)->close_game();
 }
 
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeDisconnect(JNIEnv*, jclass, jlong h) {
