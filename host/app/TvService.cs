@@ -31,17 +31,43 @@ public sealed class TvService : IDisposable
     /// <summary>Whether a TV is streaming right now; games can only be started from a TV then.</summary>
     public Func<bool>? Streaming { get; set; }
 
-    // A game a TV asked for while its session was still opening (id, when).
-    (SteamGame Game, DateTime At)? _pendingLaunch;
+    /// <summary>The Steam Web API key (lists the account's games that aren't installed), if set.</summary>
+    public Func<string?>? SteamApiKey { get; set; }
 
-    /// <summary>A TV session started: start the game it asked for, if any (and if recent).</summary>
+    // What a TV asked for while its session was still opening (start or install a game).
+    (Action Run, DateTime At)? _pending;
+
+    /// <summary>A TV session started: do what it asked for, if anything (and if recent).</summary>
     public void OnSessionStarted()
     {
-        if (_pendingLaunch is not { } p) return;
-        _pendingLaunch = null;
-        if (DateTime.UtcNow - p.At > TimeSpan.FromSeconds(30)) return;
-        SteamLibrary.Launch(p.Game.Id);
-        GameLaunched?.Invoke(p.Game.Name);
+        if (_pending is not { } p) return;
+        _pending = null;
+        if (DateTime.UtcNow - p.At <= TimeSpan.FromSeconds(30)) p.Run();
+    }
+
+    /// <summary>Runs [action] now if a TV is streaming, else as soon as the TV's session starts.</summary>
+    bool RunInSession(Action action)
+    {
+        if (Streaming?.Invoke() == true)
+        {
+            action();
+            return true;
+        }
+        _pending = (action, DateTime.UtcNow);
+        return false;
+    }
+
+    // Games the last library listing returned (installs are only accepted for these).
+    Dictionary<int, string> _known = [];
+
+    /// <summary>A game's artwork: Steam's local copy, else downloaded once from Steam's servers.</summary>
+    string? ArtFor(int id, string kind)
+    {
+        if (_art.TryGetValue((id, kind), out var path) && File.Exists(path)) return path;
+        if (!_known.ContainsKey(id) || kind is not ("cover" or "hero" or "logo")) return null;
+        var downloaded = SteamLibrary.DownloadArt(id, kind);
+        if (downloaded is not null) _art[(id, kind)] = downloaded;
+        return downloaded;
     }
 
     // Artwork is served only from the files the last library listing found (never arbitrary paths).
@@ -135,7 +161,8 @@ public sealed class TvService : IDisposable
                 }
                 else if (request.Is("GET", "/library"))
                 {
-                    var games = SteamLibrary.Games();
+                    var games = SteamLibrary.Games(SteamApiKey?.Invoke());
+                    _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
                     {
                         if (g.CoverPath is not null) _art[(g.Id, "cover")] = g.CoverPath;
@@ -147,14 +174,18 @@ public sealed class TvService : IDisposable
                         games = games.Select(g => new
                         {
                             id = g.Id, name = g.Name, lastPlayed = g.LastPlayed,
-                            cover = g.CoverPath is not null, hero = g.HeroPath is not null, logo = g.LogoPath is not null,
+                            // Games without a local picture get one from Steam's servers on request.
+                            cover = g.CoverPath is not null || g.State != GameState.Installed,
+                            hero = g.HeroPath is not null || g.State != GameState.Installed,
+                            logo = g.LogoPath is not null || g.State != GameState.Installed,
+                            state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
+                            progress = g.Progress,
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if ((request.Is("GET", "/library/art") || request.Is("GET", "/library/cover")) &&
-                         int.TryParse(request.Query("id"), out var artId) &&
-                         _art.TryGetValue((artId, request.Query("kind") ?? "cover"), out var artPath) && File.Exists(artPath))
+                         int.TryParse(request.Query("id"), out var artId) && ArtFor(artId, request.Query("kind") ?? "cover") is { } artPath)
                 {
                     await using var file = File.OpenRead(artPath);
                     await Respond(stream, "200 OK", artPath.EndsWith(".png") ? "image/png" : "image/jpeg", file.Length);
@@ -162,21 +193,25 @@ public sealed class TvService : IDisposable
                 }
                 else if (request.Is("POST", "/library/launch") && int.TryParse(request.Query("id"), out var gameId))
                 {
+                    // The TV asks for the game together with its connection: it starts as soon as
+                    // that session begins (never without a TV session).
                     var game = SteamLibrary.Games().FirstOrDefault(g => g.Id == gameId);
                     if (game is null) await Respond(stream, "404 Not Found", "text/plain", 0);
-                    else if (Streaming?.Invoke() != true)
-                    {
-                        // The TV asks for the game together with its connection: start it as soon
-                        // as that session begins (never without a TV session).
-                        _pendingLaunch = (game, DateTime.UtcNow);
-                        await RespondText(stream, "pending");
-                    }
-                    else
+                    else await RespondText(stream, RunInSession(() =>
                     {
                         SteamLibrary.Launch(game.Id);
-                        await RespondText(stream, "ok");
                         GameLaunched?.Invoke(game.Name);
-                    }
+                    }) ? "ok" : "pending");
+                }
+                else if (request.Is("POST", "/library/install") && int.TryParse(request.Query("id"), out var installId) &&
+                         _known.TryGetValue(installId, out var installName))
+                {
+                    // Steam asks for confirmation in its own window (Big Picture, on the TV).
+                    await RespondText(stream, RunInSession(() =>
+                    {
+                        SteamLibrary.Install(installId);
+                        GameLaunched?.Invoke($"a instalação de {installName}");
+                    }) ? "ok" : "pending");
                 }
                 else
                 {

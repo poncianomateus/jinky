@@ -1,17 +1,23 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
 namespace Jinky;
 
-public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath);
+public enum GameState { Installed, Downloading, NotInstalled }
+
+public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath,
+                               GameState State = GameState.Installed, double Progress = 1);
 
 /// <summary>
-/// The games installed through Steam on this PC, for the TV's Biblioteca: names and install state
-/// from the library manifests, "last played" from the user's Steam config, covers from Steam's own
-/// local artwork cache (nothing is downloaded).
+/// The games in Steam on this PC, for the TV's Biblioteca: names and install state from the
+/// library manifests (with download progress), "last played" from the user's Steam config,
+/// artwork from Steam's own local cache. With a Steam Web API key, also the games the account owns
+/// but hasn't installed.
 /// </summary>
 public static partial class SteamLibrary
 {
@@ -24,8 +30,11 @@ public static partial class SteamLibrary
         return p is not null && Directory.Exists(p) ? Path.GetFullPath(p) : null;
     }
 
-    /// <summary>Installed games, most recently played first. Empty if Steam is not installed.</summary>
-    public static List<SteamGame> Games()
+    /// <summary>
+    /// Installed and downloading games (most recently played first), then — with an API key — the
+    /// account's games that aren't installed (alphabetical). Empty if Steam is not installed.
+    /// </summary>
+    public static List<SteamGame> Games(string? apiKey = null)
     {
         var steam = SteamPath();
         if (steam is null) return [];
@@ -41,15 +50,141 @@ public static partial class SteamLibrary
                 try { text = File.ReadAllText(manifest, Encoding.UTF8); }
                 catch (IOException) { continue; }
                 if (!int.TryParse(Value(text, "appid"), out var id) || NotGames.Contains(id)) continue;
-                // StateFlags bit 2 (4) = fully installed; skip downloads in progress.
-                if (!int.TryParse(Value(text, "StateFlags"), out var state) || (state & 4) == 0) continue;
+                if (!int.TryParse(Value(text, "StateFlags"), out var state)) continue;
                 var name = Value(text, "name") ?? $"App {id}";
-                if (name.Contains("Redistributable") || name.StartsWith("Proton") || name.StartsWith("Steam Linux Runtime")) continue;
+                if (!IsGame(id, name)) continue;
+                // StateFlags bit 2 (4) = fully installed; without it the game is still downloading.
+                var installed = (state & 4) != 0;
+                double progress = 1;
+                if (!installed && long.TryParse(Value(text, "BytesToDownload"), out var total) && total > 0 &&
+                    long.TryParse(Value(text, "BytesDownloaded"), out var done))
+                    progress = Math.Clamp((double)done / total, 0, 1);
+                else if (!installed) progress = 0;
                 games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id), Cover(steam, id),
-                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"));
+                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"),
+                                          installed ? GameState.Installed : GameState.Downloading, progress);
             }
         }
-        return games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            foreach (var (id, name, last) in Owned(apiKey!, steam).OrderBy(o => o.Name, StringComparer.CurrentCultureIgnoreCase))
+            {
+                if (games.ContainsKey(id) || !IsGame(id, name)) continue;
+                list.Add(new SteamGame(id, name, lastPlayed.GetValueOrDefault(id, last), Cover(steam, id),
+                                       Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"), GameState.NotInstalled, 0));
+            }
+        }
+        return list;
+    }
+
+    static bool IsGame(int id, string name) =>
+        !NotGames.Contains(id) && !name.Contains("Redistributable") && !name.StartsWith("Proton") &&
+        !name.StartsWith("Steam Linux Runtime") && !name.StartsWith("Steamworks");
+
+    /// <summary>Asks Steam to install a game (Steam shows its own confirmation).</summary>
+    public static void Install(int id) =>
+        Process.Start(new ProcessStartInfo($"steam://install/{id}") { UseShellExecute = true });
+
+    // --- the account's games (Steam Web API) ---
+
+    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    static readonly object OwnedLock = new();
+    static (string Key, DateTime At, List<(int Id, string Name, long Last)> Games)? _owned;
+
+    /// <summary>The Steam account most recently signed in on this PC (SteamID64).</summary>
+    public static string? SteamId(string steam)
+    {
+        var file = Path.Combine(steam, "config", "loginusers.vdf");
+        if (!File.Exists(file)) return null;
+        var text = File.ReadAllText(file, Encoding.UTF8);
+        var recent = Regex.Match(text, "\"(\\d{17})\"\\s*\\{[^}]*?\"MostRecent\"\\s*\"1\"", RegexOptions.IgnoreCase);
+        if (recent.Success) return recent.Groups[1].Value;
+        var any = Regex.Match(text, "\"(\\d{17})\"\\s*\\{");
+        return any.Success ? any.Groups[1].Value : null;
+    }
+
+    /// <summary>The account's games (cached for 10 minutes). Empty on any error.</summary>
+    static List<(int Id, string Name, long Last)> Owned(string apiKey, string steam)
+    {
+        lock (OwnedLock)
+        {
+            if (_owned is { } c && c.Key == apiKey && DateTime.UtcNow - c.At < TimeSpan.FromMinutes(10)) return c.Games;
+        }
+        var (games, _) = FetchOwned(apiKey, steam);
+        lock (OwnedLock) _owned = (apiKey, DateTime.UtcNow, games ?? []);
+        return games ?? [];
+    }
+
+    /// <summary>Checks a key: the number of games on the account, or an error to show.</summary>
+    public static (int Count, string? Error) CheckKey(string apiKey)
+    {
+        var steam = SteamPath();
+        if (steam is null) return (0, "A Steam não está instalada neste PC.");
+        var (games, error) = FetchOwned(apiKey, steam);
+        if (games is not null) lock (OwnedLock) _owned = (apiKey, DateTime.UtcNow, games);
+        return (games?.Count ?? 0, error);
+    }
+
+    static (List<(int, string, long)>? Games, string? Error) FetchOwned(string apiKey, string steam)
+    {
+        var id = SteamId(steam);
+        if (id is null) return (null, "Entre na sua conta na Steam deste PC.");
+        try
+        {
+            var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={Uri.EscapeDataString(apiKey.Trim())}" +
+                      $"&steamid={id}&include_appinfo=1&include_played_free_games=1&format=json";
+            using var response = Http.GetAsync(url).GetAwaiter().GetResult();
+            if (response.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized)
+                return (null, "A Steam recusou a chave. Confira se ela foi copiada inteira.");
+            response.EnsureSuccessStatusCode();
+            using var doc = JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+            var list = new List<(int, string, long)>();
+            if (doc.RootElement.GetProperty("response").TryGetProperty("games", out var games))
+                foreach (var g in games.EnumerateArray())
+                    list.Add((g.GetProperty("appid").GetInt32(),
+                              g.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                              g.TryGetProperty("rtime_last_played", out var t) ? t.GetInt64() : 0));
+            return (list, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"Não foi possível falar com a Steam: {ex.Message}");
+        }
+    }
+
+    // --- artwork for games without a local copy ---
+
+    /// <summary>Downloads a game's artwork from Steam's image servers into Jinky's folder (once).</summary>
+    public static string? DownloadArt(int id, string kind)
+    {
+        var file = kind switch { "hero" => "library_hero.jpg", "logo" => "logo.png", _ => "library_600x900.jpg" };
+        var folder = Path.Combine(Settings.Folder, "art");
+        var path = Path.Combine(folder, $"{id}_{file}");
+        var missing = path + ".missing";
+        if (File.Exists(path)) return path;
+        if (File.Exists(missing) && DateTime.UtcNow - File.GetLastWriteTimeUtc(missing) < TimeSpan.FromDays(7)) return null;
+        Directory.CreateDirectory(folder);
+        foreach (var url in new[]
+                 {
+                     $"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{id}/{file}",
+                     $"https://cdn.akamai.steamstatic.com/steam/apps/{id}/{file}",
+                 })
+        {
+            try
+            {
+                using var response = Http.GetAsync(url).GetAwaiter().GetResult();
+                if (!response.IsSuccessStatusCode) continue;
+                File.WriteAllBytes(path, response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
+                return path;
+            }
+            catch (Exception)
+            {
+                // try the next server
+            }
+        }
+        File.WriteAllText(missing, "");
+        return null;
     }
 
     /// <summary>Starts a game the way the Steam library does (inside Big Picture when it is open).</summary>

@@ -206,7 +206,7 @@ class HomeScreen(
 
     /** Recently played games from the PC (null = not loaded / not available). */
     fun setGames(list: List<LibraryGame>?, pcIp: String, port: Int) {
-        games = list
+        games = list?.filter { it.state == LibraryGame.State.INSTALLED }
         art = pcIp to port
         val keep = selected
         rebuildRow()

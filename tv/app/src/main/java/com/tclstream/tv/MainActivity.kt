@@ -31,6 +31,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var helpScreen: HelpScreen
     private lateinit var libraryScreen: LibraryScreen
     private lateinit var launchScreen: LaunchScreen
+    private lateinit var hint: TextView
     private var launching: LibraryGame? = null  // a game starting on the PC, picture not revealed yet
     private var launchedAt = 0L
     private var gamesFrom: String? = null  // PC whose games the home row shows ("ip:port")
@@ -89,6 +90,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } else {
                 // (the session starts a moment after the request; don't cancel in between)
                 if (launching != null && android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) stopLaunching()
+                if (android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) installing = false
                 updateHome()
             }
             updateUiInput()
@@ -159,10 +161,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             libraryScreen = LibraryScreen(this@MainActivity,
                 onPlay = { game -> homeHost?.let { playGame(it, game) } },
+                onInstall = { game -> homeHost?.let { installGame(it, game) } },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
+            hint = TextView(this@MainActivity).apply {
+                visibility = View.GONE
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                val d = resources.displayMetrics.density
+                setPadding((22 * d).toInt(), (12 * d).toInt(), (22 * d).toInt(), (12 * d).toInt())
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(0xE60D131D.toInt()); cornerRadius = 99 * d
+                }
+            }
+            addView(hint, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = (48 * resources.displayMetrics.density).toInt()
+            })
             // 5% margins keep text inside the TV's safe area.
             val margin = (resources.displayMetrics.widthPixels * 0.05).toInt()
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
@@ -329,6 +345,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             LibraryScreen.launch(host.ip, host.updatePort, game)?.let { Log.w(TAG, "launch ${game.name}: $it") }
         }.start()
     }
+
+    /**
+     * Installing: Steam only installs after the user confirms in its own window, so this opens a
+     * console session (Big Picture) where Steam's install prompt appears, to confirm with A. The
+     * download then continues on the PC and shows on the game's cover in the Biblioteca.
+     */
+    private fun installGame(host: HomeHost, game: LibraryGame) {
+        if (host.status != HomeHost.Status.READY) return
+        installing = true
+        launchedAt = android.os.SystemClock.elapsedRealtime()
+        sessionTitle = "Instalando ${game.name}"
+        sessionDesktop = false
+        showPage(Page.HOME)
+        homeScreen.visibility = View.GONE
+        startScreen.setShown(true)
+        receiver?.connect(host.ip, false)
+        Thread {
+            LibraryScreen.install(host.ip, host.updatePort, game)?.let { Log.w(TAG, "install ${game.name}: $it") }
+        }.start()
+        showHint("Confirme a instalação com A.  Depois: Voltar  →  Voltar ao início.")
+    }
+
+    private var installing = false
+
+    /** A short note at the bottom of the screen (over the game), gone after a few seconds. */
+    private fun showHint(text: String) {
+        hint.text = text
+        hint.visibility = View.VISIBLE
+        hint.alpha = 0f
+        hint.animate().alpha(1f).setStartDelay(2500).setDuration(300).start()
+        ui.removeCallbacks(hideHint)
+        ui.postDelayed(hideHint, 14_000)
+    }
+
+    private val hideHint = Runnable { hint.animate().alpha(0f).setStartDelay(0).setDuration(300).withEndAction { hint.visibility = View.GONE }.start() }
 
     private fun stopLaunching() {
         launching = null
@@ -509,6 +560,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (r.endReason() == END_GAME_CLOSED) {
                     // The game was closed: back to the home screen, like a console.
                     stopLaunching()
+                    r.disconnect()
+                    return
+                }
+                if (installing) {
+                    // Closing Big Picture after confirming an install: back to the home screen.
+                    installing = false
                     r.disconnect()
                     return
                 }

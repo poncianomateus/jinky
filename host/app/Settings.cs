@@ -13,6 +13,9 @@ public sealed class Settings
     /// <summary>When console mode is off: still send the sound only to the TV.</summary>
     public bool SoundOnlyOnTv { get; set; } = true;
 
+    /// <summary>Steam Web API key: lets the TV list (and install) the account's games.</summary>
+    public string? SteamApiKey { get; set; }
+
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Jinky");
 

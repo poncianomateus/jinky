@@ -169,6 +169,12 @@
                         <DockPanel Margin="0,0,0,10"><TextBlock Text="Tela capturada" Foreground="{StaticResource Muted}"/><TextBlock Text="{Binding Desktop}" HorizontalAlignment="Right"/></DockPanel>
                         <DockPanel Margin="0,0,0,10"><TextBlock Text="Controle virtual" Foreground="{StaticResource Muted}"/><TextBlock Text="{Binding GamepadDriver}" HorizontalAlignment="Right"/></DockPanel>
                         <DockPanel><TextBlock Text="Controles conectados" Foreground="{StaticResource Muted}"/><TextBlock Text="{Binding PadsConnected}" HorizontalAlignment="Right"/></DockPanel>
+                        <TextBlock Text="Biblioteca da Steam na TV" FontWeight="SemiBold" Margin="0,18,0,2"/>
+                        <TextBlock Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontSize="13"
+                                   Text="Cole a chave da API da Steam (steamcommunity.com/dev/apikey) para instalar pela TV os jogos da sua conta."/>
+                        <TextBox Style="{StaticResource Field}" Margin="0,8,0,6"
+                                 Text="{Binding SteamApiKey, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="{Binding SteamKeyStatus}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontSize="12"/>
                     </StackPanel>
                 </Border>
             </Grid>

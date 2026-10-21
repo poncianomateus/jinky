@@ -147,6 +147,49 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { Jinky.StartWithWindows.Set(value); Notify(); }
     }
 
+    // --- Steam library (games to install from the TV) ---
+
+    string _steamKeyStatus = "";
+    public string SteamKeyStatus { get => _steamKeyStatus; private set { _steamKeyStatus = value; Notify(); } }
+
+    /// <summary>Saved as soon as a full key (32 characters) is pasted; no engine restart needed.</summary>
+    public string SteamApiKey
+    {
+        get => _settings.SteamApiKey ?? "";
+        set
+        {
+            var key = value.Trim();
+            if (key == (_settings.SteamApiKey ?? "")) return;
+            if (key.Length is not (0 or 32))
+            {
+                SteamKeyStatus = "A chave tem 32 caracteres; cole ela inteira.";
+                return;
+            }
+            _settings.SteamApiKey = key.Length == 0 ? null : key;
+            _settings.Save();
+            Notify();
+            CheckSteamKey();
+        }
+    }
+
+    /// <summary>Checks the saved key in the background and shows what it found.</summary>
+    public void CheckSteamKey()
+    {
+        var key = _settings.SteamApiKey;
+        if (string.IsNullOrEmpty(key))
+        {
+            SteamKeyStatus = "Sem chave: a TV mostra só os jogos instalados.";
+            return;
+        }
+        SteamKeyStatus = "Verificando com a Steam…";
+        Task.Run(() =>
+        {
+            var (count, error) = SteamLibrary.CheckKey(key);
+            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                SteamKeyStatus = error ?? $"✓ {count} jogos na sua conta aparecem na Biblioteca da TV.");
+        });
+    }
+
     // --- engine events --------------------------------------------------------------------------
 
     readonly HashSet<int> _activePads = new();
