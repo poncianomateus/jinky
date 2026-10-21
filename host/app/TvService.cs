@@ -180,6 +180,7 @@ public sealed class TvService : IDisposable
                             logo = g.LogoPath is not null || g.State != GameState.Installed,
                             state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
                             progress = g.Progress,
+                            family = g.Family,
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");

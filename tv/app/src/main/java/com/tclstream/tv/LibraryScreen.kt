@@ -31,6 +31,7 @@ data class LibraryGame(
     val hasCover: Boolean,
     val state: State = State.INSTALLED,
     val progress: Double = 1.0,  // download progress while DOWNLOADING
+    val family: Boolean = false,  // shared by another member of the Steam family
 ) {
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 }
@@ -58,6 +59,7 @@ class LibraryScreen(
         clipToPadding = false
         setPadding(dp(8), dp(12), dp(8), dp(24))  // room for the focused cover to grow
         addView(grid, LayoutParams(-1, -2))
+        viewTreeObserver.addOnScrollChangedListener { updateCovers() }
     }
     private val back = smallButton("Voltar").apply {
         setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -69,6 +71,10 @@ class LibraryScreen(
     private val bars = HashMap<Int, View>()  // game id -> progress bar fill (downloads)
     private var games = HashMap<Int, LibraryGame>()
     private var focusedId = -1
+    // Covers load only near the visible part of the grid (hundreds of family games would not fit
+    // in a Fire TV's memory) and are let go again far from it.
+    private val tileGames = mutableListOf<Pair<FrameLayout, LibraryGame>>()
+    private val coverLoaded = HashSet<FrameLayout>()
 
     // While something downloads, refresh the progress every few seconds.
     private val poll = object : Runnable {
@@ -105,6 +111,8 @@ class LibraryScreen(
         grid.removeAllViews()
         tiles = emptyList()
         bars.clear()
+        tileGames.clear()
+        coverLoaded.clear()
         caption.text = ""
         detail.text = ""
         showMessage("Carregando seus jogos…")
@@ -139,7 +147,8 @@ class LibraryScreen(
         games = HashMap(list.associateBy { it.id })
         val all = mutableListOf<View>()
         val here = list.filter { it.state != LibraryGame.State.NOT_INSTALLED }
-        val toInstall = list.filter { it.state == LibraryGame.State.NOT_INSTALLED }
+        val toInstall = list.filter { it.state == LibraryGame.State.NOT_INSTALLED && !it.family }
+        val family = list.filter { it.state == LibraryGame.State.NOT_INSTALLED && it.family }
         fun section(title: String, part: List<LibraryGame>) {
             if (part.isEmpty()) return
             grid.addView(text(18f, 0xFFAAB6C8.toInt(), bold = true).apply { text = title },
@@ -150,16 +159,16 @@ class LibraryScreen(
                     val tile = tile(game)
                     all += tile
                     row.addView(tile, LinearLayout.LayoutParams(dp(TILE_W), dp(TILE_H)).apply { if (c > 0) marginStart = dp(GAP) })
-                    if (game.hasCover) ArtLoader.load(pcIp, port, game.id, "cover", 2) { bmp ->
-                        if (bmp != null) showCover(tile, bmp)
-                    }
+                    if (game.hasCover) tileGames += tile to game
                 }
                 grid.addView(row, LinearLayout.LayoutParams(-2, -2).apply { if (r > 0) topMargin = dp(GAP) })
             }
         }
         section("Instalados", here)
         section("Para instalar  ·  ${toInstall.size} jogos da sua conta", toInstall)
+        section("Da família  ·  ${family.size} jogos compartilhados com você", family)
         tiles = all
+        scroll.post { updateCovers() }
         all.firstOrNull()?.requestFocus()
         main.removeCallbacks(poll)
         if (bars.isNotEmpty()) main.postDelayed(poll, 4000)
@@ -219,6 +228,31 @@ class LibraryScreen(
         }
     }
 
+    /** Loads covers within a screen of the visible area; frees those far away. */
+    private fun updateCovers() {
+        val (ip, port) = pc ?: return
+        val h = scroll.height.takeIf { it > 0 } ?: return
+        val top = scroll.scrollY - h
+        val bottom = scroll.scrollY + 2 * h
+        for ((tile, game) in tileGames) {
+            val row = tile.parent as? View ?: continue
+            val y = row.top
+            val near = y + row.height >= top && y <= bottom
+            if (near && tile !in coverLoaded) {
+                coverLoaded += tile
+                ArtLoader.load(ip, port, game.id, "cover", 2) { bmp ->
+                    if (bmp != null && tile in coverLoaded) showCover(tile, bmp)
+                }
+            } else if (!near && tile in coverLoaded && (y > bottom + 2 * h || y + row.height < top - 2 * h)) {
+                coverLoaded -= tile
+                coverImage(tile)?.setImageDrawable(null)
+            }
+        }
+    }
+
+    private fun coverImage(tile: FrameLayout) = (0 until tile.childCount).map { tile.getChildAt(it) }
+        .firstOrNull { it.getTag(R.id.cover) == true } as? ImageView
+
     private fun addProgress(tile: FrameLayout, game: LibraryGame) {
         val track = FrameLayout(context).apply {
             background = GradientDrawable().apply { setColor(0x66000000); cornerRadius = dp(3).toFloat() }
@@ -247,7 +281,8 @@ class LibraryScreen(
         detail.text = when (g.state) {
             LibraryGame.State.INSTALLED -> lastPlayedText(g.lastPlayed) + "   ·   A: jogar"
             LibraryGame.State.DOWNLOADING -> "Baixando no PC: ${(g.progress * 100).toInt()}%"
-            LibraryGame.State.NOT_INSTALLED -> "Na sua conta, não instalado   ·   A: instalar (a Steam pede confirmação)"
+            LibraryGame.State.NOT_INSTALLED ->
+                (if (g.family) "Compartilhado pela família" else "Na sua conta") + ", não instalado   ·   A: instalar (a Steam pede confirmação)"
         }
     }
 
@@ -270,8 +305,7 @@ class LibraryScreen(
     }
 
     private fun showCover(tile: FrameLayout, bmp: android.graphics.Bitmap) {
-        val image = (0 until tile.childCount).map { tile.getChildAt(it) }
-            .firstOrNull { it.getTag(R.id.cover) == true } as? ImageView ?: return
+        val image = coverImage(tile) ?: return
         image.setImageBitmap(bmp)
         // A landscape banner (games without a portrait cover) is shown whole on the dark card.
         if (bmp.width > bmp.height) {
@@ -331,7 +365,8 @@ class LibraryScreen(
                         "notInstalled" -> LibraryGame.State.NOT_INSTALLED
                         else -> LibraryGame.State.INSTALLED
                     },
-                    g.optDouble("progress", 1.0))
+                    g.optDouble("progress", 1.0),
+                    g.optBoolean("family"))
             }
         }
 

@@ -186,7 +186,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             var (count, error) = SteamLibrary.CheckKey(key);
             System.Windows.Application.Current?.Dispatcher.Invoke(() =>
-                SteamKeyStatus = error ?? $"✓ {count} jogos na sua conta aparecem na Biblioteca da TV.");
+                SteamKeyStatus = error ?? $"✓ {count} jogos (seus e da família) aparecem na Biblioteca da TV.");
         });
     }
 

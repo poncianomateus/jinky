@@ -11,13 +11,13 @@ namespace Jinky;
 public enum GameState { Installed, Downloading, NotInstalled }
 
 public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath,
-                               GameState State = GameState.Installed, double Progress = 1);
+                               GameState State = GameState.Installed, double Progress = 1, bool Family = false);
 
 /// <summary>
 /// The games in Steam on this PC, for the TV's Biblioteca: names and install state from the
 /// library manifests (with download progress), "last played" from the user's Steam config,
 /// artwork from Steam's own local cache. With a Steam Web API key, also the games the account owns
-/// but hasn't installed.
+/// but hasn't installed, and those of the other members of its Steam family (shared library).
 /// </summary>
 public static partial class SteamLibrary
 {
@@ -68,11 +68,14 @@ public static partial class SteamLibrary
         var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            foreach (var (id, name, last) in Owned(apiKey!, steam).OrderBy(o => o.Name, StringComparer.CurrentCultureIgnoreCase))
+            // The account's own games first, then the family's (alphabetical within each).
+            foreach (var (id, name, last, family) in Owned(apiKey!, steam)
+                         .OrderBy(o => o.Family).ThenBy(o => o.Name, StringComparer.CurrentCultureIgnoreCase))
             {
                 if (games.ContainsKey(id) || !IsGame(id, name)) continue;
-                list.Add(new SteamGame(id, name, lastPlayed.GetValueOrDefault(id, last), Cover(steam, id),
-                                       Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"), GameState.NotInstalled, 0));
+                games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id, last), Cover(steam, id),
+                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"), GameState.NotInstalled, 0, family);
+                list.Add(games[id]);
             }
         }
         return list;
@@ -90,7 +93,8 @@ public static partial class SteamLibrary
 
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
     static readonly object OwnedLock = new();
-    static (string Key, DateTime At, List<(int Id, string Name, long Last)> Games)? _owned;
+    static (string Key, DateTime At, List<(int Id, string Name, long Last, bool Family)> Games)? _owned;
+    const long SteamId64Base = 76561197960265728;
 
     /// <summary>The Steam account most recently signed in on this PC (SteamID64).</summary>
     public static string? SteamId(string steam)
@@ -104,8 +108,30 @@ public static partial class SteamLibrary
         return any.Success ? any.Groups[1].Value : null;
     }
 
-    /// <summary>The account's games (cached for 10 minutes). Empty on any error.</summary>
-    static List<(int Id, string Name, long Last)> Owned(string apiKey, string steam)
+    /// <summary>Account ids of the other members of this account's Steam family (from Steam's own config).</summary>
+    static List<long> FamilyMembers(string steam, string mySteamId)
+    {
+        var result = new List<long>();
+        var me = long.Parse(mySteamId) - SteamId64Base;
+        var config = Path.Combine(steam, "userdata", me.ToString(), "config", "localconfig.vdf");
+        if (!File.Exists(config)) return result;
+        var text = File.ReadAllText(config, Encoding.UTF8);
+        var at = text.IndexOf("\"FamilyGroup\"", StringComparison.Ordinal);
+        if (at < 0) return result;
+        // The block runs to its closing brace; members are its "accountid" entries.
+        int depth = 0, end = at;
+        for (var i = text.IndexOf('{', at); i >= 0 && i < text.Length; i++)
+        {
+            if (text[i] == '{') depth++;
+            else if (text[i] == '}' && --depth == 0) { end = i; break; }
+        }
+        foreach (Match m in Regex.Matches(text[at..end], "\"accountid\"\\s+\"(\\d+)\""))
+            if (long.TryParse(m.Groups[1].Value, out var id) && id != me && !result.Contains(id)) result.Add(id);
+        return result;
+    }
+
+    /// <summary>The account's games and its family's (cached for 10 minutes). Empty on any error.</summary>
+    static List<(int Id, string Name, long Last, bool Family)> Owned(string apiKey, string steam)
     {
         lock (OwnedLock)
         {
@@ -126,31 +152,44 @@ public static partial class SteamLibrary
         return (games?.Count ?? 0, error);
     }
 
-    static (List<(int, string, long)>? Games, string? Error) FetchOwned(string apiKey, string steam)
+    static (List<(int, string, long, bool)>? Games, string? Error) FetchOwned(string apiKey, string steam)
     {
         var id = SteamId(steam);
         if (id is null) return (null, "Entre na sua conta na Steam deste PC.");
         try
         {
-            var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={Uri.EscapeDataString(apiKey.Trim())}" +
-                      $"&steamid={id}&include_appinfo=1&include_played_free_games=1&format=json";
-            using var response = Http.GetAsync(url).GetAwaiter().GetResult();
-            if (response.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized)
-                return (null, "A Steam recusou a chave. Confira se ela foi copiada inteira.");
-            response.EnsureSuccessStatusCode();
-            using var doc = JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
-            var list = new List<(int, string, long)>();
-            if (doc.RootElement.GetProperty("response").TryGetProperty("games", out var games))
-                foreach (var g in games.EnumerateArray())
-                    list.Add((g.GetProperty("appid").GetInt32(),
-                              g.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                              g.TryGetProperty("rtime_last_played", out var t) ? t.GetInt64() : 0));
+            var mine = OwnedBy(apiKey, id, out var refused);
+            if (refused) return (null, "A Steam recusou a chave. Confira se ela foi copiada inteira.");
+            var list = mine.Select(g => (g.Id, g.Name, g.Last, false)).ToList();
+            // Family members' games are shared with this account (Steam Families). A member whose
+            // game list is private simply adds nothing.
+            var seen = list.Select(g => g.Item1).ToHashSet();
+            foreach (var member in FamilyMembers(steam, id))
+                foreach (var g in OwnedBy(apiKey, (member + SteamId64Base).ToString(), out _))
+                    if (seen.Add(g.Id)) list.Add((g.Id, g.Name, 0, true));
             return (list, null);
         }
         catch (Exception ex)
         {
             return (null, $"Não foi possível falar com a Steam: {ex.Message}");
         }
+    }
+
+    static List<(int Id, string Name, long Last)> OwnedBy(string apiKey, string steamId, out bool refused)
+    {
+        var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={Uri.EscapeDataString(apiKey.Trim())}" +
+                  $"&steamid={steamId}&include_appinfo=1&include_played_free_games=1&format=json";
+        using var response = Http.GetAsync(url).GetAwaiter().GetResult();
+        refused = response.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized;
+        if (!response.IsSuccessStatusCode) return [];
+        using var doc = JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var list = new List<(int, string, long)>();
+        if (doc.RootElement.GetProperty("response").TryGetProperty("games", out var games))
+            foreach (var g in games.EnumerateArray())
+                list.Add((g.GetProperty("appid").GetInt32(),
+                          g.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                          g.TryGetProperty("rtime_last_played", out var t) ? t.GetInt64() : 0));
+        return list;
     }
 
     // --- artwork for games without a local copy ---
