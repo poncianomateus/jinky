@@ -131,11 +131,13 @@ static void test_name_and_session_messages() {
     NameMessage long_name{1, std::string(100, 'x') + "é"};
     CHECK(long_name.write(buf) == NameMessage::kHeader + NameMessage::kMaxName);
 
-    for (auto t : {PacketType::Displaced, PacketType::SessionEnd}) {
+    // Every host<->TV control message must survive a round trip (a type left out of the
+    // parser is silently dropped by the other side).
+    for (auto t : {PacketType::Displaced, PacketType::SessionEnd, PacketType::GameReady, PacketType::CloseGame}) {
         uint8_t c[ControlMessage::kSize];
-        ControlMessage{t, 3, 0}.write(c);
+        ControlMessage{t, 3, 1}.write(c);
         auto m = ControlMessage::read(c);
-        CHECK(m && m->type == t);
+        CHECK(m && m->type == t && m->value == 1);
     }
 }
 
