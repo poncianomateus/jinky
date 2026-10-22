@@ -648,7 +648,7 @@ int main(int argc, char** argv) {
                     TCL_INFO("receiver", "capture-to-display latency: {:.1f} ms", msg->value / 1000.0);
                     tcl::emit_event("latency", std::format("\"ms\":{:.1f}", msg->value / 1000.0));
                 } else if (msg->type == PacketType::CloseGame) {
-                    tcl::SteamGameWatch::close_foreground_game();
+                    game_watch.close_game();
                 } else if (msg->type == PacketType::Bye) {
                     TCL_INFO("session", "receiver left");
                     tcl::emit_event("disconnected", "\"reason\":\"left\"");

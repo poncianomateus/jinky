@@ -66,6 +66,10 @@ public static partial class SteamLibrary
                                           installed ? GameState.Installed : GameState.Downloading, progress);
             }
         }
+        // "Non-Steam games" added to the Steam library: already on the PC, played through Steam.
+        if (SteamId(steam) is { } me)
+            foreach (var s in SteamShortcuts.Read(steam, me))
+                games[s.Id] = new SteamGame(s.Id, s.Name, s.LastPlayed, s.Cover, s.Hero, s.Logo);
         var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         // Games to install: straight from the Steam client when its reading is on (exactly its
         // Library), else from the Web API with a key.
@@ -233,9 +237,15 @@ public static partial class SteamLibrary
         return null;
     }
 
-    /// <summary>Starts a game the way the Steam library does (inside Big Picture when it is open).</summary>
+    /// <summary>
+    /// Starts a game the way the Steam library does (inside Big Picture when it is open); negative
+    /// ids are non-Steam shortcuts.
+    /// </summary>
     public static void Launch(int id) =>
-        Process.Start(new ProcessStartInfo($"steam://rungameid/{id}") { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo($"steam://rungameid/{(id < 0 ? SteamShortcuts.GameId(id) : (ulong)id)}")
+        {
+            UseShellExecute = true,
+        });
 
     static IEnumerable<string> LibraryFolders(string steam)
     {

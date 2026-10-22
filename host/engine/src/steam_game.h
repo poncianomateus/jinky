@@ -1,5 +1,6 @@
-// A game the TV started itself from Jinky's library, followed through Steam: is it on screen yet,
-// is something waiting for the player (a launcher, a Steam prompt), has it been closed?
+// A game the TV started itself from Jinky's library, followed on the PC: is it on screen yet, is
+// something waiting for the player (a launcher, a Steam prompt), has it been closed? Works for
+// Steam games and for the "non-Steam games" added to the Steam library (emulators, other stores).
 #pragma once
 
 #include <chrono>
@@ -21,17 +22,21 @@ public:
 
     // The Steam app running now (0 = none), as Steam itself reports it.
     static uint32_t running_app_id();
-    // Closes the game in front (only a process installed by Steam). Returns true if it did.
-    static bool close_foreground_game();
+    // Quits the game (the one being followed, else the full-screen program in front; never Steam,
+    // the desktop or Jinky). Returns true if it did.
+    bool close_game();
 
 private:
-    static bool game_in_front();
+    // The full-screen program in front, if it looks like a game (not Steam, the desktop, Jinky).
+    static uint32_t game_in_front();
     // A window in front that isn't Big Picture, the desktop or Jinky (launcher, Steam dialog...).
     static void* prompt_in_front();
+    static bool alive(uint32_t pid);
 
     bool started_ = false;
     bool ready_ = false;
     bool attention_ = false;
+    uint32_t game_pid_ = 0;   // the game's process once it was seen full screen
     void* prompt_ = nullptr;  // the waiting window and since when it has been in front
     std::chrono::steady_clock::time_point began_{}, running_since_{}, gone_since_{}, prompt_since_{};
 };
