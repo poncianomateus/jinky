@@ -31,8 +31,9 @@ public static partial class SteamLibrary
     }
 
     /// <summary>
-    /// Installed and downloading games (most recently played first), then — with an API key — the
-    /// account's games that aren't installed (alphabetical). Empty if Steam is not installed.
+    /// Installed and downloading games (most recently played first), then the games to install —
+    /// as the Steam client lists them, or with an API key from the Web API (alphabetical). Empty if
+    /// Steam is not installed.
     /// </summary>
     public static List<SteamGame> Games(string? apiKey = null)
     {
@@ -66,10 +67,16 @@ public static partial class SteamLibrary
             }
         }
         var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
-        if (!string.IsNullOrWhiteSpace(apiKey))
+        // Games to install: straight from the Steam client when its reading is on (exactly its
+        // Library), else from the Web API with a key.
+        var client = SteamClient.Library();
+        IEnumerable<(int Id, string Name, long Last, bool Family)>? toInstall =
+            client?.Where(a => !a.Installed).Select(a => (a.Id, a.Name, a.LastPlayed, a.Family));
+        if (toInstall is null && !string.IsNullOrWhiteSpace(apiKey)) toInstall = Owned(apiKey!, steam);
+        if (toInstall is not null)
         {
             // The account's own games first, then the family's (alphabetical within each).
-            foreach (var (id, name, last, family) in Owned(apiKey!, steam)
+            foreach (var (id, name, last, family) in toInstall
                          .OrderBy(o => o.Family).ThenBy(o => o.Name, StringComparer.CurrentCultureIgnoreCase))
             {
                 if (games.ContainsKey(id) || !IsGame(id, name)) continue;

@@ -172,21 +172,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Checks the saved key in the background and shows what it found.</summary>
+    /// <summary>
+    /// Read the library straight from the Steam client (exactly its Library) instead of the Web API.
+    /// Turning it on writes Steam's developer flag file; it takes effect after Steam restarts.
+    /// </summary>
+    public bool SteamDirect
+    {
+        get => SteamLibrary.SteamPath() is { } s && SteamClient.Enabled(s);
+        set
+        {
+            if (SteamLibrary.SteamPath() is not { } steam) return;
+            var error = SteamClient.SetEnabled(steam, value);
+            Notify();
+            if (error is not null) SteamKeyStatus = error;
+            else CheckSteamKey();
+        }
+    }
+
+    /// <summary>Shows where the TV's list of games to install comes from, checked in the background.</summary>
     public void CheckSteamKey()
     {
         var key = _settings.SteamApiKey;
-        if (string.IsNullOrEmpty(key))
-        {
-            SteamKeyStatus = "Sem chave: a TV mostra só os jogos instalados.";
-            return;
-        }
+        var direct = SteamDirect;
         SteamKeyStatus = "Verificando com a Steam…";
         Task.Run(() =>
         {
-            var (count, error) = SteamLibrary.CheckKey(key);
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
-                SteamKeyStatus = error ?? $"✓ {count} jogos (seus e da família) aparecem na Biblioteca da TV.");
+            string status;
+            if (direct && SteamClient.Library() is { } apps)
+                status = $"✓ Lendo direto da Steam: {apps.Count} jogos (seus e da família), como na sua biblioteca.";
+            else
+            {
+                var fallback = direct ? "Leitura direta ligada: reinicie a Steam para ativar. " : "";
+                if (string.IsNullOrEmpty(key))
+                    status = fallback + "Sem chave: a TV mostra só os jogos instalados.";
+                else
+                {
+                    var (count, error) = SteamLibrary.CheckKey(key);
+                    status = fallback + (error ?? $"✓ Pela API: {count} jogos (seus e da família) na Biblioteca da TV.");
+                }
+            }
+            System.Windows.Application.Current?.Dispatcher.Invoke(() => SteamKeyStatus = status);
         });
     }
 
