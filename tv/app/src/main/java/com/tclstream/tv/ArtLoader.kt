@@ -22,13 +22,17 @@ object ArtLoader {
     private val failed = HashSet<String>()
 
     /** [done] runs on the main thread with the image, or null if the PC has none. */
-    fun load(pcIp: String, port: Int, id: Int, kind: String, sample: Int, done: (Bitmap?) -> Unit) {
-        val key = "$pcIp/$id/$kind/$sample"
+    fun load(pcIp: String, port: Int, id: Int, kind: String, sample: Int, done: (Bitmap?) -> Unit) =
+        loadUrl("http://$pcIp:$port/library/art?id=$id&kind=$kind", sample, done)
+
+    /** Any image URL (store screenshots, trailer thumbnails), same cache. */
+    fun loadUrl(url: String, sample: Int, done: (Bitmap?) -> Unit) {
+        val key = "$url#$sample"
         cache.get(key)?.let { done(it); return }
         if (synchronized(failed) { key in failed }) { done(null); return }
         pool.execute {
             val bmp = try {
-                val c = URL("http://$pcIp:$port/library/art?id=$id&kind=$kind").openConnection() as HttpURLConnection
+                val c = URL(url).openConnection() as HttpURLConnection
                 c.connectTimeout = 4000
                 c.readTimeout = 8000
                 val bytes = if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null

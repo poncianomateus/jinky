@@ -204,6 +204,25 @@ public sealed class TvService : IDisposable
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
                 }
+                else if (request.Is("GET", "/library/details") && int.TryParse(request.Query("id"), out var detailsId))
+                {
+                    // The game page: store description and media, plus this PC's numbers for it.
+                    var store = SteamStore.Get(detailsId);
+                    var local = SteamClient.Library()?.FirstOrDefault(a => a.Id == detailsId);
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        description = store?.Description ?? "",
+                        genres = store?.Genres ?? [],
+                        developer = store?.Developer ?? "",
+                        released = store?.Released ?? "",
+                        metacritic = store?.Metacritic ?? 0,
+                        screenshots = store?.Screenshots.Select(m => new { thumb = m.Thumb, full = m.Full }) ?? [],
+                        trailers = store?.Trailers.Select(t => new { name = t.Name, thumb = t.Thumb, hls = t.Hls }) ?? [],
+                        minutes = local?.Minutes ?? 0,
+                        sizeBytes = local?.SizeBytes ?? 0,
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
                 else if (request.Is("POST", "/library/install") && int.TryParse(request.Query("id"), out var installId) &&
                          _known.TryGetValue(installId, out var installName))
                 {

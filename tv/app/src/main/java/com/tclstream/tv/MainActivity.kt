@@ -30,6 +30,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var helpScreen: HelpScreen
     private lateinit var libraryScreen: LibraryScreen
+    private lateinit var gameScreen: GameScreen
+    private var gameOrigin = Page.HOME  // where Back returns from a game's page
     private lateinit var launchScreen: LaunchScreen
     private lateinit var hint: TextView
     private var launching: LibraryGame? = null  // a game starting on the PC, picture not revealed yet
@@ -38,7 +40,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var wasInSession = false
@@ -127,7 +129,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             startScreen = StartScreen(this@MainActivity)
             addView(startScreen, FrameLayout.LayoutParams(-1, -1))
             homeScreen = HomeScreen(this@MainActivity,
-                onPlayGame = ::playGame,
+                onPlayGame = { _, game -> openGame(game, Page.HOME) },
                 onPlay = { host, desktop ->
                     sessionTitle = when {
                         host.status == HomeHost.Status.BUSY -> "Jogo em andamento"
@@ -160,10 +162,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             libraryScreen = LibraryScreen(this@MainActivity,
-                onPlay = { game -> homeHost?.let { playGame(it, game) } },
-                onInstall = { game -> homeHost?.let { installGame(it, game) } },
+                onPlay = { game -> openGame(game, Page.LIBRARY) },
+                onInstall = { game -> openGame(game, Page.LIBRARY) },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
+            gameScreen = GameScreen(this@MainActivity,
+                onPlay = { game -> homeHost?.let { playGame(it, game) } },
+                onInstall = { game -> homeHost?.let { installGame(it, game) } }).apply { visibility = View.GONE }
+            addView(gameScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             hint = TextView(this@MainActivity).apply {
@@ -296,6 +302,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             settingsScreen.visibility == View.VISIBLE -> Page.SETTINGS
             helpScreen.visibility == View.VISIBLE -> Page.HELP
             libraryScreen.visibility == View.VISIBLE -> Page.LIBRARY
+            gameScreen.visibility == View.VISIBLE -> Page.GAME
             else -> null
         }
         if (p != null) page = p
@@ -303,6 +310,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settingsScreen.visibility = if (p == Page.SETTINGS) View.VISIBLE else View.GONE
         helpScreen.visibility = if (p == Page.HELP) View.VISIBLE else View.GONE
         libraryScreen.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
+        gameScreen.visibility = if (p == Page.GAME) View.VISIBLE else View.GONE
+        if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
             // Screens fade in instead of popping up.
@@ -311,6 +320,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.SETTINGS -> settingsScreen
                 Page.HELP -> helpScreen
                 Page.LIBRARY -> libraryScreen
+                Page.GAME -> gameScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -321,8 +331,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.SETTINGS -> settingsScreen.focusFirst()
             Page.HELP -> helpScreen.focusFirst()
             Page.LIBRARY -> libraryScreen.focusFirst()
+            Page.GAME -> gameScreen.focusFirst()
         }
         updateUiInput()
+    }
+
+    /** A game's page (artwork, details, screenshots, trailers; Jogar / Instalar from there). */
+    private fun openGame(game: LibraryGame, from: Page) {
+        val host = homeHost ?: return
+        if (host.status != HomeHost.Status.READY) return
+        gameOrigin = from
+        showPage(Page.GAME)
+        gameScreen.show(game, host.ip, host.updatePort)
+        gameScreen.focusFirst()
     }
 
     /**
@@ -517,6 +538,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateUiInput() {
         val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
             helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
+            gameScreen.visibility == View.VISIBLE ||
             menu.isOpen
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
@@ -658,7 +680,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onBackPressed() {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
+        if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
+        else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
         else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (settingsScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (homeScreen.visibility == View.VISIBLE) finish()

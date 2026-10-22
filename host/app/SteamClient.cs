@@ -15,7 +15,7 @@ namespace Jinky;
 /// </summary>
 public static class SteamClient
 {
-    public sealed record App(int Id, string Name, long LastPlayed, bool Installed, bool Family);
+    public sealed record App(int Id, string Name, long LastPlayed, bool Installed, bool Family, long Minutes, long SizeBytes);
 
     const string DebugUrl = "http://127.0.0.1:8080/json";
     const string FlagFile = ".cef-enable-remote-debugging";
@@ -29,6 +29,7 @@ public static class SteamClient
         JSON.stringify(collectionStore.allGamesCollection.allApps
           .filter(a => a.BIsOwned() && a.appid > 0 && a.appid <= 2147483647)  // not "non-Steam game" shortcuts
           .map(a => ({ id: a.appid, name: a.display_name, last: a.rt_last_time_played || 0,
+                       minutes: a.minutes_playtime_forever || 0, size: Number(a.size_on_disk || 0),
                        installed: !!(a.per_client_data && a.per_client_data[0] && a.per_client_data[0].installed),
                        family: !!a.owner_account_id })))
         """;
@@ -85,7 +86,9 @@ public static class SteamClient
                 a.GetProperty("name").GetString() ?? "",
                 a.GetProperty("last").GetInt64(),
                 a.GetProperty("installed").GetBoolean(),
-                a.GetProperty("family").GetBoolean())).ToList();
+                a.GetProperty("family").GetBoolean(),
+                a.GetProperty("minutes").GetInt64(),
+                (long)a.GetProperty("size").GetDouble())).ToList();
         }
         catch (Exception ex)
         {
