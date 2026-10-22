@@ -65,7 +65,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
                "nvEncGetEncodePresetConfigEx"))
         return false;
 
-    NV_ENC_CONFIG enc = preset.presetCfg;
+    config_ = preset.presetCfg;
+    NV_ENC_CONFIG& enc = config_;
     enc.profileGUID = hevc ? NV_ENC_HEVC_PROFILE_MAIN_GUID : NV_ENC_H264_PROFILE_HIGH_GUID;
     enc.gopLength = NVENC_INFINITE_GOPLENGTH;
     enc.frameIntervalP = 1;  // IPPP, no B-frames
@@ -107,7 +108,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
         h.h264VUIParameters = vui;
     }
 
-    NV_ENC_INITIALIZE_PARAMS init{};
+    init_ = {};
+    NV_ENC_INITIALIZE_PARAMS& init = init_;
     init.version = NV_ENC_INITIALIZE_PARAMS_VER;
     init.encodeGUID = codec_guid;
     init.presetGUID = preset_guid;
@@ -170,6 +172,24 @@ bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_
     }
     api_.nvEncUnmapInputResource(encoder_, map.mappedResource);
     return ok;
+}
+
+bool NvencEncoder::set_bitrate(uint32_t kbps) {
+    if (!encoder_ || kbps == cfg_.bitrate_kbps) return encoder_ != nullptr;
+    NV_ENC_CONFIG enc = config_;
+    enc.rcParams.averageBitRate = enc.rcParams.maxBitRate = kbps * 1000;
+    enc.rcParams.vbvBufferSize = enc.rcParams.vbvInitialDelay = kbps * 1000 / cfg_.fps;
+    NV_ENC_RECONFIGURE_PARAMS re{};
+    re.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    re.reInitEncodeParams = init_;
+    re.reInitEncodeParams.encodeConfig = &enc;
+    // No reset and no keyframe: the next frame is simply coded at the new rate.
+    re.resetEncoder = 0;
+    re.forceIDR = 0;
+    if (!check(api_.nvEncReconfigureEncoder(encoder_, &re), "nvEncReconfigureEncoder")) return false;
+    config_ = enc;
+    cfg_.bitrate_kbps = kbps;
+    return true;
 }
 
 std::string NvencEncoder::description() const {

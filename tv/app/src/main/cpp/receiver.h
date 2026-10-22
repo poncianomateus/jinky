@@ -89,6 +89,9 @@ public:
 
     // Codecs this device decodes in hardware (tclproto::CodecSupport), announced in every Hello.
     void set_codec_support(uint32_t mask) { codec_support_ = mask; }
+    // Video actually arriving, in kbit/s (last second), for the menu.
+    uint32_t video_kbps() const { return video_kbps_; }
+
     // Average capture-to-display latency measured by the decoder side, forwarded to the host log.
     void report_latency_us(uint32_t us) { latency_us_ = us; }
 
@@ -125,6 +128,8 @@ private:
     // Handles AuthRequired / PairChallenge / PairResult; true if the packet was one of them.
     bool handle_auth(std::span<const uint8_t> packet, const tclproto::Endpoint& from);
     void send_time_request();
+    void send_nacks(int64_t now_us);
+    void send_net_report();
     void on_time_response(const tclproto::TimeSync& t);
 
     static constexpr size_t kMaxQueuedFrames = 4;
@@ -200,6 +205,13 @@ private:
     std::atomic<uint32_t> host_ip_{0};
     std::atomic<uint64_t> packets_{0}, frames_ok_{0}, frames_lost_{0}, frames_dropped_{0}, idr_requests_{0};
     std::atomic<int64_t> last_packet_ms_{0};
+    bool host_silent_ = false;  // no packet for 5 s (Wi-Fi dropped, PC restarted): keep calling it
+    int64_t last_broadcast_hello_ms_ = 0;
+    // Network report (net thread): counters at the previous report.
+    uint64_t report_packets_ = 0, report_missing_ = 0, report_lost_ = 0, report_bytes_ = 0;
+    uint64_t video_bytes_ = 0;
+    std::atomic<uint32_t> video_kbps_{0};
+    std::atomic<uint64_t> packets_resent_asked_{0}, frames_recovered_{0};
     // Arrival jitter of completed frames (network thread only)
     int64_t last_frame_us_ = 0, gap_max_us_ = 0, last_jitter_log_ms_ = 0;
     uint64_t late_frames_ = 0, frames_in_window_ = 0;

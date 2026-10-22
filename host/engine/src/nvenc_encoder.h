@@ -37,6 +37,10 @@ public:
     // Encodes the current content of the input texture. `out` receives one Annex-B access unit.
     bool encode(bool force_idr, uint64_t timestamp, std::vector<uint8_t>& out, bool& is_keyframe);
 
+    // Changes the rate on the fly (automatic quality); no keyframe, no new session.
+    bool set_bitrate(uint32_t kbps);
+    uint32_t bitrate_kbps() const { return cfg_.bitrate_kbps; }
+
     std::string description() const;
     const std::string& error() const { return error_; }
 
@@ -49,6 +53,8 @@ private:
     NV_ENC_REGISTERED_PTR registered_ = nullptr;
     NV_ENC_OUTPUT_PTR bitstream_ = nullptr;
     EncoderConfig cfg_;
+    NV_ENC_INITIALIZE_PARAMS init_{};  // kept for nvEncReconfigureEncoder
+    NV_ENC_CONFIG config_{};
     std::string error_;
 };
 

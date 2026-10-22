@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdio>
+#include <random>
 #include <cstdlib>
 #include <string>
 
@@ -79,17 +80,31 @@ int input_test() {
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--input-test") return input_test();
-    // --takeover (last argument): ask for the session like a TV the user just opened.
+    // --takeover: ask for the session like a TV the user just opened.
+    // --port N: the engine's port. --loss P: drop P% of video packets on purpose; the probe then
+    // asks for them again like a TV does, to exercise resends.
     bool takeover = false;
-    if (argc > 1 && std::string(argv[argc - 1]) == "--takeover") {
-        takeover = true;
-        --argc;
+    uint16_t port = kDefaultMediaPort;
+    double loss = 0;
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--takeover") takeover = true;
+        else if (a == "--port" && i + 1 < argc) port = uint16_t(std::atoi(argv[++i]));
+        else if (a == "--loss" && i + 1 < argc) loss = std::atof(argv[++i]) / 100.0;
+        else args.push_back(a);
     }
-    const std::string host_ip = argc > 1 ? argv[1] : "127.0.0.1";
-    const int seconds = argc > 2 ? std::atoi(argv[2]) : 5;
-    FILE* out = argc > 3 ? std::fopen(argv[3], "wb") : nullptr;
+    const std::string host_ip = args.size() > 0 ? args[0] : "127.0.0.1";
+    const int seconds = args.size() > 1 ? std::atoi(args[1].c_str()) : 5;
+    FILE* out = args.size() > 2 ? std::fopen(args[2].c_str(), "wb") : nullptr;
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<double> dice(0, 1);
+    uint64_t dropped = 0;
+    uint32_t session = 0;
+    auto last_idr = steady_clock::now(), last_report = steady_clock::now();
+    uint64_t rep_packets = 0, rep_missing = 0, rep_lost = 0;
 
-    auto host = Endpoint::parse(host_ip, kDefaultMediaPort);
+    auto host = Endpoint::parse(host_ip, port);
     UdpSocket sock;
     if (!host || !sock.open(0)) {
         std::fprintf(stderr, "setup failed: %s\n", sock.error().c_str());
@@ -124,9 +139,40 @@ int main(int argc, char** argv) {
         }
         Endpoint from;
         const int n = sock.recv_from(buf, from, 20);
+        const int64_t now = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
+        for (const auto& nk : assembler.poll(now)) {
+            uint8_t nb[NackMessage::kMaxSize];
+            sock.send_to(*host, std::span<const uint8_t>(nb, NackMessage{session, nk.frame_id, nk.ranges}.write(nb)));
+        }
+        if (steady_clock::now() - last_report >= 1s) {
+            // Like a TV: what share of the video had to be asked for again (automatic quality).
+            const auto& st = assembler.stats();
+            const uint64_t pk = st.packets_received - rep_packets, miss = st.packets_missing - rep_missing;
+            NetReport r{pk ? uint32_t(miss * 1000 / (pk + miss)) : 0, uint32_t(st.frames_lost - rep_lost), uint32_t(pk)};
+            rep_packets = st.packets_received;
+            rep_missing = st.packets_missing;
+            rep_lost = st.frames_lost;
+            uint8_t rb[ControlMessage::kSize];
+            ControlMessage{PacketType::NetReport, session, r.pack()}.write(rb);
+            sock.send_to(*host, rb);
+            last_report = steady_clock::now();
+        }
+        if (assembler.waiting_for_keyframe() && steady_clock::now() - last_idr > 100ms) {
+            uint8_t idr[ControlMessage::kSize];
+            ControlMessage{PacketType::RequestIdr, session, 0}.write(idr);
+            sock.send_to(*host, idr);
+            last_idr = steady_clock::now();
+        }
         if (n <= 0) continue;
         auto h = MediaHeader::read(std::span<const uint8_t>(buf, size_t(n)));
-        if (h && h->type == PacketType::Video) assembler.push(*h, std::span<const uint8_t>(buf + MediaHeader::kSize, size_t(n) - MediaHeader::kSize));
+        if (h && h->type == PacketType::Video) {
+            session = h->session_id;
+            if (loss > 0 && dice(rng) < loss) {
+                dropped++;
+                continue;
+            }
+            assembler.push(*h, std::span<const uint8_t>(buf + MediaHeader::kSize, size_t(n) - MediaHeader::kSize), now);
+        }
     }
     uint8_t bye[ControlMessage::kSize];
     ControlMessage{PacketType::Bye, 0, 0}.write(bye);
@@ -138,6 +184,10 @@ int main(int argc, char** argv) {
                 (unsigned long long)frames, (unsigned long long)keyframes, double(frames) / seconds,
                 bytes * 8.0 / seconds / 1e6, (unsigned long long)s.frames_lost,
                 (unsigned long long)s.packets_received);
+    if (loss > 0)
+        std::printf("dropped on purpose %llu, asked again %llu, frames saved by a resend %llu\n",
+                    (unsigned long long)dropped, (unsigned long long)s.packets_missing,
+                    (unsigned long long)s.frames_recovered);
     const bool ok = first_ok && frames > 0;
     std::puts(ok ? "PROBE OK" : "PROBE FAILED");
     return ok ? 0 : 1;

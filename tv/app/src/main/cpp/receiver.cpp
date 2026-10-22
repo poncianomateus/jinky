@@ -93,6 +93,7 @@ void Receiver::apply_connect_requests() {
     if (disconnect_requested_.exchange(false)) {
         if (host_ && session_wanted_) send_control(PacketType::Bye, 0);
         session_wanted_ = false;
+        host_silent_ = false;
         host_.reset();
         host_known_ = false;
         have_session_ = false;
@@ -107,6 +108,7 @@ void Receiver::apply_connect_requests() {
         host_ = tclproto::Endpoint{ip, host_port_};
         host_known_ = true;
         host_ip_ = ip;
+        host_silent_ = false;
         last_packet_ms_ = now_ms();
         desktop_ = connect_desktop_.load();
         game_ = connect_game_.load();
@@ -140,7 +142,9 @@ bool Receiver::handle_auth(std::span<const uint8_t> packet, const tclproto::Endp
     const auto type = tclproto::peek_type(packet);
     if (type == PacketType::AuthRequired) {
         auto ar = tclproto::AuthRequired::read(packet);
-        if (!ar || (host_ && from != *host_ && state_ == kActive && host_known_)) return true;
+        // While our PC is quiet, only it may answer from a new address (not another PC in the house).
+        const bool moved = host_silent_ && ar && ar->host_id == host_id_;
+        if (!ar || (host_ && from != *host_ && state_ == kActive && host_known_ && !moved)) return true;
         std::lock_guard lock(auth_mu_);
         host_ = from;
         host_known_ = true;
@@ -287,6 +291,43 @@ void Receiver::on_time_response(const tclproto::TimeSync& t) {
     clock_synced_ = true;
 }
 
+void Receiver::send_nacks(int64_t now_us) {
+    // Resend timing follows the measured round trip: ask again after about two of them.
+    tclproto::FrameAssembler::Timing t;
+    const int64_t rtt = clock_synced_ ? rtt_us_.load() : 10'000;
+    t.retry_us = std::clamp<int64_t>(rtt * 3 / 2 + 2'000, 6'000, 40'000);
+    t.give_up_us = std::clamp<int64_t>(t.reorder_us + t.retry_us * t.max_tries + rtt, 60'000, 150'000);
+    assembler_.set_timing(t);
+    const auto nacks = assembler_.poll(now_us);
+    packets_resent_asked_ = assembler_.stats().packets_missing;
+    frames_recovered_ = assembler_.stats().frames_recovered;
+    if (nacks.empty() || !host_) return;
+    uint8_t buf[tclproto::NackMessage::kMaxSize];
+    for (const auto& n : nacks) {
+        const size_t len = tclproto::NackMessage{session_id_, n.frame_id, n.ranges}.write(buf);
+        sock_.send_to(*host_, std::span<const uint8_t>(buf, len));
+    }
+}
+
+void Receiver::send_net_report() {
+    // Once a second: what fraction of the video had to be asked for again, and frames lost for
+    // good. The PC lowers or raises the picture quality from this.
+    const auto& st = assembler_.stats();
+    const uint64_t packets = st.packets_received - report_packets_;
+    const uint64_t missing = st.packets_missing - report_missing_;
+    const uint64_t lost = st.frames_lost - report_lost_;
+    report_packets_ = st.packets_received;
+    report_missing_ = st.packets_missing;
+    report_lost_ = st.frames_lost;
+    video_kbps_ = uint32_t((video_bytes_ - report_bytes_) * 8 / 1000);
+    report_bytes_ = video_bytes_;
+    tclproto::NetReport r;
+    r.packets = uint32_t(packets);
+    r.lost_permille = packets ? uint32_t(std::min<uint64_t>(1000, missing * 1000 / (packets + missing))) : 0;
+    r.frames_unrecovered = uint32_t(lost);
+    send_control(PacketType::NetReport, r.pack());
+}
+
 void Receiver::net_loop() {
     uint8_t buf[2048];
     int64_t last_hello = 0, last_idr_req = 0, last_stats = 0, last_sync = 0;
@@ -325,6 +366,17 @@ void Receiver::net_loop() {
         // Hello doubles as discovery (broadcast until the host answers) and keepalive.
         // A displaced TV stays silent until the user presses OK on it: otherwise, when the other TV
         // stops playing, this one would silently grab the session (console mode for an empty room).
+        if (state_ == kActive && host_silent_ && now - last_broadcast_hello_ms_ >= 2000) {
+            // The PC went quiet: keep calling it directly (below), and broadcast too in case its
+            // address changed.
+            uint8_t b[tclproto::ControlMessage::kSize];
+            tclproto::ControlMessage{PacketType::Hello, session_id_,
+                                     codec_support_ | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+                                         (game_ ? tclproto::kHelloGame : 0u)}
+                .write(b);
+            sock_.send_to(tclproto::Endpoint::broadcast(host_port_), b);
+            last_broadcast_hello_ms_ = now;
+        }
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
             send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
@@ -369,8 +421,10 @@ void Receiver::net_loop() {
         if (host_ && now - last_stats >= 1000) {
             send_control(PacketType::Stats, uint32_t(presented_.load()));
             if (latency_us_) send_control(PacketType::LatencyReport, latency_us_);
+            if (!host_silent_) send_net_report();
             last_stats = now;
         }
+        send_nacks(now_us());
         // Sync quickly at first, then keep tracking drift.
         if (host_ && now - last_sync >= (sample_count_ < kSyncSamples ? 100 : 1000)) {
             send_time_request();
@@ -381,18 +435,23 @@ void Receiver::net_loop() {
             idr_requests_++;
             last_idr_req = now;
         }
-        // Host gone quiet: forget it and go back to broadcasting, so a restarted host is found again.
-        if (host_ && now - last_packet_ms_ > 5000) {
-            LOGW("host %s silent for 5 s", host_->to_string().c_str());
-            host_.reset();
-            host_known_ = false;
+        // Host gone quiet (Wi-Fi dropped, PC restarted): keep calling it, and broadcast as well.
+        if (host_ && !host_silent_ && now - last_packet_ms_ > 5000) {
+            LOGW("host %s silent for 5 s; calling it again", host_->to_string().c_str());
+            host_silent_ = true;
+            last_broadcast_hello_ms_ = 0;
             clock_synced_ = false;
             sample_count_ = sample_next_ = 0;
         }
 
         tclproto::Endpoint from;
-        const int n = sock_.recv_from(buf, from, 20);
+        // Short waits while a frame has holes, so resend requests go out on time.
+        const int n = sock_.recv_from(buf, from, assembler_.has_gaps() ? 2 : 20);
         if (n <= 0) continue;
+        if (host_silent_ && host_ && from.ip == host_->ip) {
+            LOGI("host %s is back", host_->to_string().c_str());
+            host_silent_ = false;
+        }
         const std::span<const uint8_t> packet(buf, size_t(n));
         if (handle_auth(packet, from)) continue;
         if (tclproto::peek_type(packet) == PacketType::Rumble) {
@@ -434,7 +493,14 @@ void Receiver::net_loop() {
         }
         auto h = tclproto::MediaHeader::read(std::span<const uint8_t>(buf, size_t(n)));
         if (!h) continue;
-        if (host_ && from != *host_) continue;  // only one host per session
+        if (host_ && from != *host_) {
+            if (!host_silent_) continue;  // only one host per session
+            // It went quiet and now speaks from another address (new IP after a Wi-Fi drop).
+            LOGI("host moved to %s", from.to_string().c_str());
+            host_ = from;
+            host_ip_ = from.ip;
+            host_silent_ = false;
+        }
 
         if (!host_) {
             host_ = from;
@@ -447,6 +513,7 @@ void Receiver::net_loop() {
             session_id_ = h->session_id;
             have_session_ = true;
             assembler_.reset();
+            report_packets_ = report_missing_ = report_lost_ = 0;
             {
                 std::lock_guard lock(mu_);
                 queue_.clear();
@@ -468,9 +535,11 @@ void Receiver::net_loop() {
             continue;
         }
         packets_++;
+        video_bytes_ += size_t(n);
         last_packet_ms_ = now_ms();
         assembler_.push(*h, std::span<const uint8_t>(buf + tclproto::MediaHeader::kSize,
-                                                     size_t(n) - tclproto::MediaHeader::kSize));
+                                                     size_t(n) - tclproto::MediaHeader::kSize),
+                        now_us());
         if (assembler_.stats().frames_lost != frames_lost_) {
             LOGW("network: %llu frame(s) lost (packets so far %llu)",
                  (unsigned long long)(assembler_.stats().frames_lost - frames_lost_), (unsigned long long)packets_.load());
@@ -709,6 +778,8 @@ std::string Receiver::status() const {
     s << "\ncontrole: estados enviados " << inputs_sent_;
     s << "\npacotes: " << packets_ << "  quadros recebidos: " << frames_ok_ << "  perdidos: " << frames_lost_
       << "  descartados: " << frames_dropped_ << "  pedidos de keyframe: " << idr_requests_;
+    s << "\nreenvio: pacotes pedidos de novo " << packets_resent_asked_ << "  quadros salvos " << frames_recovered_
+      << "  vídeo " << video_kbps_ / 1000.0 << " Mbit/s";
     return s.str();
 }
 

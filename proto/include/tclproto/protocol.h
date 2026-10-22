@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace tclproto {
 
@@ -43,6 +44,9 @@ enum class PacketType : uint8_t {
     // Game sessions (kHelloGame)
     GameReady = 22,  // host -> TV: reveal the picture; value = GameReadyReason
     CloseGame = 23,  // TV -> host: quit the game that is running (menu "Fechar jogo")
+    // Network quality
+    Nack = 24,       // TV -> host: video fragments that never arrived, to send again (NackMessage)
+    NetReport = 25,  // TV -> host: once a second, how the network did (value = NetReport::pack())
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
     Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
@@ -91,6 +95,41 @@ enum SessionEndReason : uint32_t {
 // setting).
 inline constexpr uint32_t kHelloBitrateShift = 16;
 inline constexpr uint32_t hello_bitrate_mbps(uint32_t value) { return (value >> kHelloBitrateShift) & 0xFF; }
+
+// What the TV saw of the network in the last second, for the PC's automatic quality.
+// Packed into ControlMessage.value: bits 0..9 video packets that had to be asked for again, per
+// mille; 10..17 frames lost for good (a keyframe was needed); 18..31 video packets received / 4.
+struct NetReport {
+    uint32_t lost_permille = 0;
+    uint32_t frames_unrecovered = 0;
+    uint32_t packets = 0;
+
+    uint32_t pack() const;
+    static NetReport unpack(uint32_t value);
+};
+
+// A TV asking for video fragments again. Wi-Fi drops a packet now and then; resending it costs a
+// few milliseconds, while a new keyframe takes longer, looks blurry and is itself easy to hit.
+// Layout: magic(4) version(1) type(1) count(1) reserved(1) session(4) frame_id(4), then `count`
+// ranges of first(2) n(2). n = kWholeFrame asks for every fragment (none of the frame arrived).
+struct NackMessage {
+    struct Range {
+        uint16_t first = 0;
+        uint16_t count = 0;
+        bool operator==(const Range&) const = default;
+    };
+    static constexpr uint16_t kWholeFrame = 0xFFFF;
+    static constexpr size_t kHeader = 16;
+    static constexpr size_t kMaxRanges = 64;
+    static constexpr size_t kMaxSize = kHeader + 4 * kMaxRanges;
+
+    uint32_t session_id = 0;
+    uint32_t frame_id = 0;
+    std::vector<Range> ranges;  // at most kMaxRanges are written
+
+    size_t write(std::span<uint8_t> out) const;  // out must hold kMaxSize; returns bytes written
+    static std::optional<NackMessage> read(std::span<const uint8_t> in);
+};
 
 // A PC's answer to Discover. Layout: magic(4) version(1) type(1) state(1) name_len(1) host_id(8)
 // mac(6) busy_len(1) reserved(1) name busy_with [tv_version_code(4) update_port(2)].

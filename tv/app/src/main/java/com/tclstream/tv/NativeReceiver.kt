@@ -16,6 +16,8 @@ class NativeReceiver : AutoCloseable {
     fun connect(ip: String, desktop: Boolean, game: Boolean = false) = nativeConnect(handle, ip, desktop, game)
     /** Game session: -1 still starting, 0 the game is on screen, 1 a launcher/prompt waits for the player. */
     fun gameReady(): Int = nativeGameReady(handle)
+    /** Video arriving right now (last second), kbit/s; the PC adjusts it to the network. */
+    fun videoKbps(): Int = nativeVideoKbps(handle)
     /** Why the PC ended the session: 0 Big Picture closed, 1 game closed. */
     fun endReason(): Int = nativeEndReason(handle)
     fun closeGame() = nativeCloseGame(handle)
@@ -101,6 +103,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeStop(handle: Long)
         @JvmStatic external fun nativeConnect(handle: Long, ip: String, desktop: Boolean, game: Boolean)
         @JvmStatic external fun nativeGameReady(handle: Long): Int
+        @JvmStatic external fun nativeVideoKbps(handle: Long): Int
         @JvmStatic external fun nativeEndReason(handle: Long): Int
         @JvmStatic external fun nativeCloseGame(handle: Long)
         @JvmStatic external fun nativeDisconnect(handle: Long)

@@ -48,6 +48,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var wakingUntil = 0L
     private val updater by lazy { Updater(this) }
     private var searchStartMs = 0L
+    private var lastPictureMs = 0L  // last time this session showed a picture (0 = not yet)
     private val pairingStore by lazy { PairingStore(this) }
     private var pairing: PairingSession? = null
     private var pairingCode: String? = null
@@ -530,6 +531,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
         homeHost = host
+        lastPictureMs = 0L
         host?.let(::loadGames)
         homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
     }
@@ -609,6 +611,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val p = pipeline
         val host = r?.hostAddress()
         val picture = p != null && p.lastPresentMs != 0L && now - p.lastPresentMs < 3000
+        if (picture) lastPictureMs = now
         if (launching != null) {
             // The game's own screen stays up until the game is in front on the PC.
             startScreen.setShown(false)
@@ -631,6 +634,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             startError != null -> StartScreen.Model(
                 "Sem acesso à rede", "A TV não conseguiu usar a rede: $startError",
                 listOf("Rede da TV" to S.ACTIVE), warning = true)
+            lastPictureMs != 0L && p?.stage != VideoPipeline.Stage.STALLED && p?.stage != VideoPipeline.Stage.ERROR -> StartScreen.Model(
+                // The picture was there and stopped: almost always the Wi-Fi. The game keeps running
+                // on the PC (console mode waits for this TV), and the picture comes back by itself.
+                "Reconectando", "A conexão com o PC oscilou. O jogo continua lá; a imagem volta sozinha assim que a rede normalizar.",
+                listOf("PC encontrado" to S.DONE, "Recebendo o vídeo" to S.ACTIVE, "Mostrando a imagem" to S.PENDING),
+                warning = now - lastPictureMs > 20_000)
             host == null -> {
                 val long = now - searchStartMs > 15_000
                 StartScreen.Model(
@@ -660,7 +669,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val p = pipeline
         val latency = p?.latency?.last?.totalAvgMs?.takeIf { !it.isNaN() }?.let { "%.0f ms".format(it) } ?: "— ms"
         val codec = p?.decoderName?.substringBefore(" · ")?.takeIf { it == "HEVC" || it == "H.264" } ?: "vídeo"
-        val quality = if (settings.bitrateMbps == 0) "qualidade do PC" else "${settings.bitrateMbps} Mbit/s"
+        // What actually arrives: the PC lowers it by itself when the Wi-Fi struggles.
+        val kbps = receiver?.videoKbps() ?: 0
+        val quality = if (kbps > 0) "%.0f Mbit/s (automático)".format(kbps / 1000.0) else "qualidade automática"
         return "Latência $latency  ·  1080p60  ·  $codec  ·  $quality"
     }
 

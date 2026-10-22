@@ -91,12 +91,12 @@ class SettingsScreen(
 
     fun refresh() {
         val mbps = settings.bitrateMbps
-        quality.text = twoLines("Qualidade da imagem:  " + if (mbps == 0) "a do PC" else "$mbps Mbit/s",
+        quality.text = twoLines("Qualidade máxima:  " + if (mbps == 0) "a do PC" else "$mbps Mbit/s",
             when {
-                mbps == 0 -> "Usa o que está configurado no PC"
+                mbps == 0 -> "A do PC; o Jinky baixa sozinho se o Wi-Fi oscilar"
                 mbps <= 20 -> "Mais estável em Wi-Fi fraco"
-                mbps >= 50 -> "Máxima nitidez; pede rede boa ou cabo"
-                else -> "Equilíbrio entre nitidez e estabilidade"
+                mbps >= 50 -> "Máxima nitidez; o Jinky baixa sozinho se a rede não aguentar"
+                else -> "Equilíbrio; o Jinky baixa sozinho se o Wi-Fi oscilar"
             })
         codec.text = twoLines("Formato do vídeo:  " + if (settings.forceH264) "H.264" else "automático",
             if (settings.forceH264) "O mais compatível, para defeitos na imagem"

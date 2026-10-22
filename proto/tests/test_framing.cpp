@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <random>
 #include <vector>
 
@@ -35,10 +36,10 @@ static std::vector<Datagram> make_frame(uint32_t id, size_t size, bool key) {
     return out;
 }
 
-static void feed(FrameAssembler& a, const Datagram& d) {
+static void feed(FrameAssembler& a, const Datagram& d, int64_t now_us = 0) {
     auto h = MediaHeader::read(d);
     CHECK(h.has_value());
-    if (h) a.push(*h, std::span<const uint8_t>(d).subspan(MediaHeader::kSize));
+    if (h) a.push(*h, std::span<const uint8_t>(d).subspan(MediaHeader::kSize), now_us);
 }
 
 static void test_header_roundtrip() {
@@ -290,6 +291,7 @@ static void test_waits_for_first_keyframe() {
 }
 
 static void test_loss_blocks_until_keyframe() {
+    // A frame that never completes, even after asking again: lost, resync on the next keyframe.
     int delivered = 0;
     FrameAssembler a([&](FrameAssembler::Frame&&) { ++delivered; });
     for (auto& d : make_frame(0, 3000, true)) feed(a, d);
@@ -297,14 +299,163 @@ static void test_loss_blocks_until_keyframe() {
     feed(a, f1[0]);  // frame 1 partially lost
     for (auto& d : make_frame(2, 3000, false)) feed(a, d);
     CHECK(delivered == 1);
+    CHECK(!a.waiting_for_keyframe() && a.has_gaps());  // frame 2 waits while frame 1 is asked for
+
+    int64_t t = 0;
+    for (; t <= 200'000; t += 1000) a.poll(t);
+    CHECK(delivered == 1);
     CHECK(a.waiting_for_keyframe());
     CHECK(a.stats().frames_lost == 1 && a.stats().frames_discarded == 1);
 
-    feed(a, f1[1]);  // late fragment of abandoned frame
+    feed(a, f1[1], t);  // late fragment of abandoned frame
     CHECK(a.stats().packets_stale == 1);
 
-    for (auto& d : make_frame(3, 3000, true)) feed(a, d);
+    for (auto& d : make_frame(3, 3000, true)) feed(a, d, t);
     CHECK(delivered == 2 && !a.waiting_for_keyframe());
+}
+
+static void test_nack_recovers_lost_fragment() {
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    for (auto& d : make_frame(0, 3000, true)) feed(a, d);
+    auto f1 = make_frame(1, 5000, false);  // 5 fragments; #1 and #2 lost
+    feed(a, f1[0]);
+    feed(a, f1[3]);
+    feed(a, f1[4]);
+    for (auto& d : make_frame(2, 3000, false)) feed(a, d);
+    CHECK(got.size() == 1);
+
+    CHECK(a.poll(1000).empty());  // could still be packets out of order
+    auto n = a.poll(4000);
+    CHECK(n.size() == 1);
+    if (n.size() == 1) {
+        CHECK(n[0].frame_id == 1);
+        CHECK(n[0].ranges.size() == 1 && n[0].ranges[0] == (NackMessage::Range{1, 2}));
+    }
+    CHECK(a.poll(5000).empty());  // not again before the retry interval
+    CHECK(a.stats().packets_missing == 2);
+
+    feed(a, f1[1], 9000);
+    feed(a, f1[2], 9000);
+    CHECK(got.size() == 3 && got[1] == 1 && got[2] == 2);
+    CHECK(a.stats().frames_recovered == 1 && a.stats().frames_lost == 0 && !a.has_gaps());
+}
+
+static void test_nack_whole_frame_and_tail() {
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    for (auto& d : make_frame(0, 3000, true)) feed(a, d);
+    auto f1 = make_frame(1, 3000, false);  // never arrives at all
+    for (auto& d : make_frame(2, 3000, false)) feed(a, d);
+    CHECK(a.poll(1000).empty());
+    auto n = a.poll(5000);
+    CHECK(n.size() == 1 && n[0].frame_id == 1 && n[0].ranges.size() == 1 &&
+          n[0].ranges[0] == (NackMessage::Range{0, NackMessage::kWholeFrame}));
+    for (auto& d : f1) feed(a, d, 8000);
+    CHECK(got.size() == 3);
+
+    // The last fragment of the newest frame is lost and nothing follows (static screen): asked
+    // for once the frame has been quiet a little while.
+    auto f3 = make_frame(3, 3000, false);
+    feed(a, f3[0], 10'000);
+    feed(a, f3[1], 10'000);
+    CHECK(a.poll(11'000).empty());
+    CHECK(a.poll(16'000).empty());  // quiet: gap noticed now; give reordering a moment
+    n = a.poll(19'000);
+    CHECK(n.size() == 1 && n[0].frame_id == 3 && n[0].ranges[0] == (NackMessage::Range{2, 1}));
+    feed(a, f3[2], 20'000);
+    CHECK(got.size() == 4);
+}
+
+static void test_keyframe_skips_missing_frames() {
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    for (auto& d : make_frame(0, 3000, true)) feed(a, d);
+    feed(a, make_frame(1, 3000, false)[0]);  // incomplete
+    for (auto& d : make_frame(2, 3000, true)) feed(a, d);  // a keyframe: no need to wait for 1
+    CHECK(got.size() == 2 && got[1] == 2 && !a.has_gaps() && !a.waiting_for_keyframe());
+}
+
+// A lossy Wi-Fi in miniature: 60 fps of frames, 2% of packets (first sends and resends alike)
+// dropped, some delivered late; the "host" answers resend requests after a round trip. Every frame
+// must come out, in order, without ever needing a keyframe.
+static void test_lossy_network_simulation() {
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<double> u(0, 1);
+    struct InFlight { int64_t at; Datagram d; };
+    std::vector<InFlight> wire;
+    std::map<uint32_t, std::vector<Datagram>> history;
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    FrameAssembler::Timing t;
+    t.retry_us = 12'000;
+    t.give_up_us = 80'000;
+    a.set_timing(t);
+    const int64_t rtt = 8'000;
+    auto send = [&](const Datagram& d, int64_t now) {
+        if (u(rng) < 0.02) return;                                   // lost
+        const int64_t delay = rtt / 2 + (u(rng) < 0.01 ? 4'000 : 0);  // a few arrive late
+        wire.push_back({now + delay, d});
+    };
+    const int frames = 600;
+    int64_t now = 0;
+    for (int64_t step = 0; step < (frames + 20) * 16'667 / 500; ++step, now += 500) {
+        const int64_t frame = now / 16'667;
+        if (now % 16'667 < 500 && frame < frames) {
+            auto dg = make_frame(uint32_t(frame), 1000 + size_t(u(rng) * 60'000), frame == 0);
+            history[uint32_t(frame)] = dg;
+            for (auto& d : dg) send(d, now);
+        }
+        std::stable_sort(wire.begin(), wire.end(), [](const InFlight& x, const InFlight& y) { return x.at < y.at; });
+        while (!wire.empty() && wire.front().at <= now) {
+            feed(a, wire.front().d, now);
+            wire.erase(wire.begin());
+        }
+        for (const auto& n : a.poll(now)) {
+            auto& dg = history[n.frame_id];
+            for (const auto& r : n.ranges) {
+                const size_t end = r.count == NackMessage::kWholeFrame ? dg.size() : std::min<size_t>(dg.size(), r.first + r.count);
+                for (size_t i = r.first; i < end; ++i) send(dg[i], now + rtt / 2);
+            }
+        }
+    }
+    CHECK(int(got.size()) == frames);
+    bool in_order = true;
+    for (size_t i = 0; i < got.size(); ++i) in_order = in_order && got[i] == i;
+    CHECK(in_order);
+    CHECK(a.stats().frames_lost == 0 && a.stats().frames_recovered > 0);
+    std::printf("simulation: %zu frames, %llu packets asked again, %llu frames saved by a resend\n", got.size(),
+                (unsigned long long)a.stats().packets_missing, (unsigned long long)a.stats().frames_recovered);
+}
+
+static void test_nack_and_report_messages() {
+    NackMessage m{7, 1234, {{1, 2}, {9, NackMessage::kWholeFrame}}};
+    uint8_t buf[NackMessage::kMaxSize];
+    const size_t len = m.write(buf);
+    CHECK(len == NackMessage::kHeader + 8);
+    CHECK(peek_type(std::span<const uint8_t>(buf, len)) == PacketType::Nack);
+    auto r = NackMessage::read(std::span<const uint8_t>(buf, len));
+    CHECK(r && r->session_id == 7 && r->frame_id == 1234 && r->ranges == m.ranges);
+    CHECK(!NackMessage::read(std::span<const uint8_t>(buf, len - 1)));
+
+    NetReport rep{25, 3, 4000};
+    auto back = NetReport::unpack(rep.pack());
+    CHECK(back.lost_permille == 25 && back.frames_unrecovered == 3 && back.packets == 4000);
+    ControlMessage c{PacketType::NetReport, 1, rep.pack()};
+    uint8_t cbuf[ControlMessage::kSize];
+    c.write(cbuf);
+    CHECK(ControlMessage::read(cbuf).has_value());
+
+    // Resending one fragment rebuilds exactly the datagram sent the first time.
+    std::vector<uint8_t> frame(3000, 0x5A);
+    MediaHeader h;
+    h.frame_id = 3;
+    std::vector<Datagram> all;
+    fragment_frame(h, frame, [&](std::span<const uint8_t> d) { all.emplace_back(d.begin(), d.end()); });
+    uint8_t one[MediaHeader::kSize + kMaxPayload];
+    const size_t n = write_fragment(h, frame, 2, one);
+    CHECK(n == all[2].size() && std::equal(all[2].begin(), all[2].end(), one));
+    CHECK(write_fragment(h, frame, 3, one) == 0);
 }
 
 static void test_sequence_wraparound() {
@@ -332,6 +483,11 @@ int main() {
     test_waits_for_first_keyframe();
     test_loss_blocks_until_keyframe();
     test_sequence_wraparound();
+    test_nack_recovers_lost_fragment();
+    test_nack_whole_frame_and_tail();
+    test_keyframe_skips_missing_frames();
+    test_nack_and_report_messages();
+    test_lossy_network_simulation();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;

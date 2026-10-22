@@ -6,6 +6,7 @@
 #include <timeapi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <deque>
@@ -28,6 +29,7 @@
 #include "log.h"
 #include "netinfo.h"
 #include "nvenc_encoder.h"
+#include "rate_control.h"
 #include "pairing.h"
 #include "steam_game.h"
 #include "tclproto/auth.h"
@@ -303,7 +305,9 @@ int main(int argc, char** argv) {
     std::atomic<uint64_t> audio_peer{0};
     std::atomic<uint32_t> audio_session{0};
     tcl::ConsoleMode console;
-    auto publish_peer = [&] {
+    // keep_console: the TV went silent (Wi-Fi dropped) rather than leaving; console mode (Big
+    // Picture, 60 Hz, muted PC) stays on for a while so it can come straight back to the game.
+    auto publish_peer = [&](bool keep_console = false) {
         {
             std::lock_guard lock(rx_mu);
             input_peer = peer;
@@ -318,6 +322,7 @@ int main(int argc, char** argv) {
                 console.enter(capture.display_name(), true);
                 return;
             }
+            if (keep_console && console.active()) return;
             console.leave();  // no-op unless a console session just ended
             // "Área de trabalho": the PC stays as it is; only its sound moves to the TV.
             if (opt.audio && !tcl::AudioCapture::set_pc_muted(peer.has_value()))
@@ -381,6 +386,35 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> bitstream;
     const uint32_t default_bitrate_kbps = opt.enc.bitrate_kbps;
 
+    // Recently sent video frames (about a second), so fragments a TV missed can be sent again.
+    struct SentFrame {
+        tclproto::MediaHeader header;
+        std::vector<uint8_t> data;
+        int resends = 0;
+    };
+    std::mutex sent_mu;
+    std::array<SentFrame, 64> sent;  // by frame_id % size
+    std::atomic<uint64_t> packets_resent{0};
+    auto resend = [&](const tclproto::Endpoint& to, const tclproto::NackMessage& nack) {
+        std::lock_guard lock(sent_mu);
+        SentFrame& f = sent[nack.frame_id % sent.size()];
+        if (f.data.empty() || f.header.frame_id != nack.frame_id || f.header.session_id != nack.session_id) return;
+        if (++f.resends > 4) return;  // asked over and over: that frame is beyond saving
+        const size_t count = tclproto::fragment_count(f.data.size());
+        uint8_t buf[tclproto::MediaHeader::kSize + tclproto::kMaxPayload];
+        for (const auto& r : nack.ranges) {
+            const size_t end = r.count == tclproto::NackMessage::kWholeFrame ? count : std::min<size_t>(count, r.first + r.count);
+            for (size_t i = r.first; i < end; ++i) {
+                if (const size_t n = tclproto::write_fragment(f.header, f.data, i, buf)) {
+                    sock.send_to(to, std::span<const uint8_t>(buf, n));
+                    packets_resent++;
+                }
+            }
+        }
+    };
+    tcl::RateControl rate;
+    steady_clock::time_point console_linger_until{};
+
     // Network receive thread. Controller input and clock-sync requests are answered the moment
     // they arrive; the main loop can be busy for up to a frame (waiting for the desktop, encoding),
     // which used to add 0-17 ms to every button press.
@@ -412,6 +446,17 @@ int main(int argc, char** argv) {
                     gamepads.apply(*in);
                     last_input = steady_clock::now().time_since_epoch().count();
                 }
+                continue;
+            }
+            if (type == PacketType::Nack) {
+                // Answered at once: the TV holds the frames after the gap until it is filled.
+                auto nack = tclproto::NackMessage::read(packet);
+                std::optional<tclproto::Endpoint> to;
+                {
+                    std::lock_guard lock(rx_mu);
+                    if (nack && input_peer && from == *input_peer) to = input_peer;
+                }
+                if (to) resend(*to, *nack);
                 continue;
             }
             if (type == PacketType::TimeRequest) {
@@ -617,6 +662,11 @@ int main(int argc, char** argv) {
                             return 1;
                         }
                     }
+                    // A new session starts at the chosen quality; automatic quality works below it.
+                    rate.reset(opt.enc.bitrate_kbps);
+                    if (encoder.bitrate_kbps() != opt.enc.bitrate_kbps && !encoder.set_bitrate(opt.enc.bitrate_kbps))
+                        TCL_WARN("encoder", "{}", encoder.error());
+                    console_linger_until = {};
                     TCL_INFO("encoder", "active: {}", encoder.description());
                     tcl::emit_event("codec", "\"codec\":" + tcl::json_str(opt.enc.codec == tcl::VideoCodec::HEVC ? "HEVC" : "H.264") +
                                                  ",\"bitrate_kbps\":" + std::to_string(opt.enc.bitrate_kbps));
@@ -647,6 +697,20 @@ int main(int argc, char** argv) {
                 } else if (msg->type == PacketType::LatencyReport) {
                     TCL_INFO("receiver", "capture-to-display latency: {:.1f} ms", msg->value / 1000.0);
                     tcl::emit_event("latency", std::format("\"ms\":{:.1f}", msg->value / 1000.0));
+                } else if (msg->type == PacketType::NetReport) {
+                    const auto r = tclproto::NetReport::unpack(msg->value);
+                    if (r.lost_permille || r.frames_unrecovered)
+                        TCL_INFO("receiver", "network: {:.1f}% of video packets asked again, {} frame(s) lost",
+                                 r.lost_permille / 10.0, r.frames_unrecovered);
+                    if (const uint32_t kbps = rate.on_report(r)) {
+                        if (encoder.set_bitrate(kbps)) {
+                            TCL_INFO("encoder", "automatic quality: {} kbit/s (chosen {})", kbps, rate.ceiling());
+                            tcl::emit_event("bitrate", "\"kbps\":" + std::to_string(kbps) + ",\"ceiling_kbps\":" +
+                                                           std::to_string(rate.ceiling()));
+                        } else {
+                            TCL_WARN("encoder", "{}", encoder.error());
+                        }
+                    }
                 } else if (msg->type == PacketType::CloseGame) {
                     game_watch.close_game();
                 } else if (msg->type == PacketType::Bye) {
@@ -662,8 +726,17 @@ int main(int argc, char** argv) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
             tcl::emit_event("disconnected", "\"reason\":\"silent\"");
             peer.reset();
-            publish_peer();
+            if (console.active()) {
+                TCL_INFO("console", "keeping console mode for 90 s in case the TV comes back");
+                console_linger_until = steady_clock::now() + 90s;
+            }
+            publish_peer(true);
             gamepads.unplug_all();
+        }
+        if (!peer && console_linger_until != steady_clock::time_point{} && steady_clock::now() >= console_linger_until) {
+            TCL_INFO("console", "the TV did not come back");
+            console_linger_until = {};
+            publish_peer();
         }
         // The TV repeats every pad's state every 50 ms; silence means the pad or app is gone.
         gamepads.expire(3s);
@@ -808,6 +881,13 @@ int main(int argc, char** argv) {
         tclproto::fragment_frame(h, bitstream, [&](std::span<const uint8_t> d) {
             if (!sock.send_to(*peer, d)) TCL_WARN("net", "{}", sock.error());
         });
+        {
+            std::lock_guard lock(sent_mu);
+            SentFrame& f = sent[h.frame_id % sent.size()];
+            f.header = h;
+            f.data.assign(bitstream.begin(), bitstream.end());
+            f.resends = 0;
+        }
         frames_sent++;
         bytes_sent += bitstream.size();
         {
@@ -827,13 +907,15 @@ int main(int argc, char** argv) {
 
         if (now - last_stats >= 2s) {
             const double secs = duration<double>(now - last_stats).count();
-            tcl::emit_event("stats", std::format("\"fps\":{:.1f},\"mbps\":{:.1f},\"encode_ms\":{:.2f}", frames_sent / secs,
-                                                 bytes_sent * 8 / secs / 1e6,
-                                                 frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0));
-            TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s, encode avg {:.2f} max {:.2f} ms, send gap max {:.1f} ms, late sends {}",
-                     frames_sent / secs, bytes_sent * 8 / secs / 1e6,
+            const uint64_t resent = packets_resent.exchange(0);
+            tcl::emit_event("stats", std::format("\"fps\":{:.1f},\"mbps\":{:.1f},\"encode_ms\":{:.2f},\"target_mbps\":{:.1f},\"resent\":{}",
+                                                 frames_sent / secs, bytes_sent * 8 / secs / 1e6,
+                                                 frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0,
+                                                 encoder.bitrate_kbps() / 1000.0, resent));
+            TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s (target {:.0f}), encode avg {:.2f} max {:.2f} ms, send gap max {:.1f} ms, late sends {}, packets resent {}",
+                     frames_sent / secs, bytes_sent * 8 / secs / 1e6, encoder.bitrate_kbps() / 1000.0,
                      frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0, encode_us_max / 1000.0,
-                     send_gap_max_us / 1000.0, late_sends);
+                     send_gap_max_us / 1000.0, late_sends, resent);
             frames_sent = bytes_sent = encode_us_total = encode_us_max = send_gap_max_us = late_sends = 0;
             if (opt.audio && peer) {
                 const double db = audio.take_peak_dbfs();

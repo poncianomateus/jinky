@@ -74,15 +74,16 @@ Três canais separados:
 | Canal | Transporte | Uso |
 |---|---|---|
 | Controle | TCP + TLS 1.3 (certificados gerados no pareamento) | Pareamento, lista de jogos, iniciar/parar sessão, pedir quadro-chave, estatísticas, diagnóstico |
-| Vídeo/Áudio | UDP | Quadros H.264/HEVC fragmentados + FEC; pacotes Opus |
+| Vídeo/Áudio | UDP | Quadros H.264/HEVC fragmentados, com reenvio seletivo (NACK); áudio PCM |
 | Entrada | UDP (com reenvio do estado completo) | Botões, analógicos, gatilhos |
 
 Pontos-chave do canal de vídeo:
 
 - Cada quadro tem `frame_id`, carimbo de tempo de captura e é fragmentado em pacotes de tamanho ≤ MTU (~1400 B).
-- **FEC Reed–Solomon** por quadro (percentual ajustável) recupera perdas pequenas sem reenvio.
-- Quadro irrecuperável → receptor descarta até o próximo quadro de referência e pede **quadro-chave** (ou *reference frame invalidation*) pelo canal de controle.
-- Receptor envia estatísticas (perda, jitter, tempo de decodificação) a cada ~500 ms; host ajusta bitrate.
+- **Reenvio seletivo (NACK)**: a TV entrega os quadros sempre em ordem; um quadro com buracos segura os seguintes enquanto ela pede só os fragmentos que faltam (`Nack`, após ~3 ms de tolerância a pacotes fora de ordem, até 3 vezes, no ritmo do RTT medido). O PC guarda ~1 s de quadros enviados e responde na thread de recepção. Em LAN isso custa um RTT (poucos ms), bem menos que um quadro-chave. (FEC Reed–Solomon fica como evolução, se as medições pedirem.)
+- Quadro irrecuperável (tempo esgotado, ~60–150 ms) → receptor descarta até o próximo quadro de referência e pede **quadro-chave**. Um quadro-chave completo dispensa a espera pelos anteriores.
+- **Qualidade automática**: a TV envia `NetReport` a cada 1 s (fração de pacotes pedidos de novo, quadros perdidos, pacotes recebidos). O PC baixa o bitrate via `nvEncReconfigureEncoder` (sem quadro-chave) — até 60% do escolhido com perda moderada, até 8 Mbit/s com quadros perdidos — e sobe 15% a cada 5 s após 10 s de rede calma, nunca acima do escolhido.
+- **Queda de Wi-Fi**: a TV não esquece o PC; continua chamando-o (direto + broadcast) e mostra "Reconectando". O PC mantém o modo console (Big Picture, 60 Hz, som) por 90 s esperando a volta.
 - Autenticação: só dispositivos pareados (PIN mostrado na TV, digitado/confirmado no PC) abrem sessão. Pacotes UDP carregam um identificador de sessão negociado no canal TLS.
 
 ## 5. Máquina de estados da sessão (receptor)
@@ -103,7 +104,7 @@ Cada quadro passa por marcos medidos dos dois lados:
 | 1 | Captura funcionando | PC | DXGI entregou quadro novo |
 | 2 | Codificador ativo | PC | NVENC devolveu bitstream; codec/perfil conhecidos |
 | 3 | Enviado | PC | Contador de pacotes |
-| 4 | Recebido e remontado | TV | Quadro completo (ou recuperado via FEC) |
+| 4 | Recebido e remontado | TV | Quadro completo (ou recuperado via reenvio) |
 | 5 | Decodificador criado | TV | `MediaCodec.configure/start` sem erro, codec de hardware confirmado |
 | 6 | Quadro decodificado | TV | Buffer de saída liberado |
 | 7 | **Quadro apresentado** | TV | `OnFrameRenderedListener` / *frame callback* da Surface |
@@ -147,7 +148,7 @@ Só depois disso começam interface, pareamento, áudio e controle.
 | Decodificadores de TV/Fire Stick com comportamentos próprios | Diagnóstico de hardware + tabela de ajustes por aparelho |
 | ViGEmBus sem manutenção ativa | Funciona hoje; isolar atrás de interface para trocar depois |
 | Jogos em tela cheia exclusiva / telas protegidas (UAC) | Tratar perda de acesso da Desktop Duplication e recriar |
-| Wi-Fi da TV instável | Recomendar cabo/5 GHz; FEC e bitrate adaptativo |
+| Wi-Fi da TV instável | Recomendar cabo/5 GHz; reenvio seletivo e bitrate adaptativo (feitos na 0.5.0) |
 
 ## 11. Ferramentas de desenvolvimento necessárias
 

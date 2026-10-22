@@ -35,7 +35,7 @@ bool is_control(PacketType t) {
     return t == PacketType::Hello || t == PacketType::RequestIdr || t == PacketType::Stats ||
            t == PacketType::Bye || t == PacketType::LatencyReport || t == PacketType::Displaced ||
            t == PacketType::SessionEnd || t == PacketType::Discover || t == PacketType::GameReady ||
-           t == PacketType::CloseGame;
+           t == PacketType::CloseGame || t == PacketType::NetReport;
 }
 
 // Upper bound on a single encoded frame; anything larger is treated as corrupt.
@@ -281,6 +281,47 @@ std::optional<NameMessage> NameMessage::read(std::span<const uint8_t> in) {
     NameMessage m;
     m.session_id = get_u32(p + 8);
     m.name.assign(reinterpret_cast<const char*>(p + kHeader), len);
+    return m;
+}
+
+uint32_t NetReport::pack() const {
+    return std::min<uint32_t>(lost_permille, 1000) | std::min<uint32_t>(frames_unrecovered, 255) << 10 |
+           std::min<uint32_t>(packets / 4, 0x3FFF) << 18;
+}
+
+NetReport NetReport::unpack(uint32_t value) {
+    return NetReport{value & 0x3FF, (value >> 10) & 0xFF, (value >> 18) * 4};
+}
+
+size_t NackMessage::write(std::span<uint8_t> out) const {
+    const size_t count = std::min(ranges.size(), kMaxRanges);
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::Nack);
+    p[6] = uint8_t(count);
+    p[7] = 0;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, frame_id);
+    for (size_t i = 0; i < count; ++i) {
+        put_u16(p + kHeader + i * 4, ranges[i].first);
+        put_u16(p + kHeader + i * 4 + 2, ranges[i].count);
+    }
+    return kHeader + count * 4;
+}
+
+std::optional<NackMessage> NackMessage::read(std::span<const uint8_t> in) {
+    if (in.size() < kHeader) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::Nack)) return std::nullopt;
+    const size_t count = p[6];
+    if (count > kMaxRanges || in.size() < kHeader + count * 4) return std::nullopt;
+    NackMessage m;
+    m.session_id = get_u32(p + 8);
+    m.frame_id = get_u32(p + 12);
+    m.ranges.resize(count);
+    for (size_t i = 0; i < count; ++i)
+        m.ranges[i] = {get_u16(p + kHeader + i * 4), get_u16(p + kHeader + i * 4 + 2)};
     return m;
 }
 
