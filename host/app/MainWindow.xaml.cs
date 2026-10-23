@@ -21,7 +21,7 @@ public partial class MainWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         int on = 1;
         DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, ref on, sizeof(int));
-        int caption = 0x00140E0A;  // #0A0E14 as COLORREF (0x00BBGGRR)
+        int caption = 0x000D0907;  // #07090D as COLORREF (0x00BBGGRR)
         DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, ref caption, sizeof(int));
     }
 

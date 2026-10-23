@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -65,6 +65,9 @@ public sealed class Engine : IDisposable
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // The engine prints UTF-8 (TV names can have accents); the default would be the ANSI code page.
+            StandardOutputEncoding = new System.Text.UTF8Encoding(false),
+            StandardErrorEncoding = new System.Text.UTF8Encoding(false),
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
         var p = new Process { StartInfo = psi, EnableRaisingEvents = true };

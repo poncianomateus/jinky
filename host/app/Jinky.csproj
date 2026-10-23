@@ -28,7 +28,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\mark-256.png" />
+    <Resource Include="Assets\tile-256.png" />
+    <Resource Include="Assets\wordmark-white.png" />
+    <!-- Montserrat and JetBrains Mono (OFL), static cuts made by tools/branding/make_logos.py. -->
+    <Resource Include="Assets\Fonts\*.ttf" />
+    <Content Include="Assets\Fonts\OFL-*.txt" Link="licenses\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\jinky.ico" Link="jinky.ico" CopyToOutputDirectory="PreserveNewest" />
     <!-- The C++ streaming engine (built by host/engine) ships next to Jinky.exe. -->
     <None Include="..\..\build\host\Release\jinky-engine.exe" Link="jinky-engine.exe"

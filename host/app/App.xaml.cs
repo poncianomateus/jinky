@@ -132,10 +132,10 @@ public partial class App : Application
         var iconPath = Path.Combine(AppContext.BaseDirectory, "jinky.ico");
         _tray = new Forms.NotifyIcon
         {
-            Icon = File.Exists(iconPath) ? new System.Drawing.Icon(iconPath) : System.Drawing.SystemIcons.Application,
+            Icon = File.Exists(iconPath) ? new System.Drawing.Icon(iconPath, Forms.SystemInformation.SmallIconSize) : System.Drawing.SystemIcons.Application,
             Text = "Jinky",
             Visible = true,
-            ContextMenuStrip = new Forms.ContextMenuStrip(),
+            ContextMenuStrip = new Forms.ContextMenuStrip { Renderer = new TrayMenuRenderer(), ShowImageMargin = false },
         };
         _tray.ContextMenuStrip.Items.Add("Abrir o Jinky", null, (_, _) => ShowWindow());
         _tray.ContextMenuStrip.Items.Add(new Forms.ToolStripSeparator());
@@ -176,5 +176,34 @@ public partial class App : Application
         _tray?.Dispose();
         _instance?.Dispose();
         base.OnExit(e);
+    }
+}
+
+/// <summary>The tray menu in the app's dark colours instead of the light Windows Forms default.</summary>
+sealed class TrayMenuRenderer() : Forms.ToolStripProfessionalRenderer(new Colors())
+{
+    static readonly System.Drawing.Color Text = System.Drawing.Color.FromArgb(0xF5, 0xF7, 0xFC);
+
+    protected override void OnRenderItemText(Forms.ToolStripItemTextRenderEventArgs e)
+    {
+        e.TextColor = Text;
+        base.OnRenderItemText(e);
+    }
+
+    sealed class Colors : Forms.ProfessionalColorTable
+    {
+        static readonly System.Drawing.Color Surface = System.Drawing.Color.FromArgb(0x10, 0x14, 0x1F);
+        static readonly System.Drawing.Color Raised = System.Drawing.Color.FromArgb(0x23, 0x28, 0x3A);
+        public override System.Drawing.Color ToolStripDropDownBackground => Surface;
+        public override System.Drawing.Color MenuBorder => Raised;
+        public override System.Drawing.Color MenuItemBorder => Raised;
+        public override System.Drawing.Color MenuItemSelected => Raised;
+        public override System.Drawing.Color MenuItemSelectedGradientBegin => Raised;
+        public override System.Drawing.Color MenuItemSelectedGradientEnd => Raised;
+        public override System.Drawing.Color SeparatorDark => Raised;
+        public override System.Drawing.Color SeparatorLight => Surface;
+        public override System.Drawing.Color ImageMarginGradientBegin => Surface;
+        public override System.Drawing.Color ImageMarginGradientMiddle => Surface;
+        public override System.Drawing.Color ImageMarginGradientEnd => Surface;
     }
 }

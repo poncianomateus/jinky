@@ -22,3 +22,5 @@ dist/
 build/
 third_party/redist/*.exe
 
+
+__pycache__/

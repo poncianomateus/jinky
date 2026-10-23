@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -52,7 +52,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool HasUpdate => _update is not null;
     public bool CanInstallUpdate => _update is not null && !_installing;
     public string UpdateNotes => _update?.Notes ?? "";
-    public string VersionText => $"versão {Updater.Current}";
+    public string VersionText => $"v{Updater.Current}";
     public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}");
 
     public void SetUpdate(UpdateInfo? update)
@@ -253,17 +253,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Add(e.Str("reason") == "silent" ? "A TV parou de responder · sessão encerrada" : "TV desconectou", e.Str("reason") == "silent");
                 break;
             case "pair_request":
-                Pairing = new PairingRequest(e.Str("id") ?? "", e.Str("name") ?? "TV", e.Str("code") ?? "000000");
+                Pairing = new PairingRequest(e.Str("id") ?? "", CleanName(e.Str("name")), e.Str("code") ?? "000000");
                 Add($"{Pairing.Name} pediu para parear");
                 PairingRequested?.Invoke();
                 break;
             case "paired":
                 Pairing = null;
-                Add($"{e.Str("name")} pareada · já pode jogar");
+                Add($"{CleanName(e.Str("name"))} pareada · já pode jogar");
                 break;
             case "pair_rejected":
                 Pairing = null;
-                Add($"Pareamento de {e.Str("name")} recusado", warning: true);
+                Add($"Pareamento de {CleanName(e.Str("name"))} recusado", warning: true);
                 break;
             case "pair_expired":
                 Pairing = null;
@@ -272,11 +272,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 PairedTvs.Clear();
                 if (e.Data.TryGetProperty("tvs", out var tvs))
                     foreach (var tv in tvs.EnumerateArray())
-                        PairedTvs.Add(new PairedTvItem(tv.GetProperty("id").GetString() ?? "", tv.GetProperty("name").GetString() ?? "TV"));
+                        PairedTvs.Add(new PairedTvItem(tv.GetProperty("id").GetString() ?? "", CleanName(tv.GetProperty("name").GetString())));
                 Notify(nameof(NoPairedTvs));
                 break;
             case "tv_name":
-                _tvName = e.Str("name");
+                _tvName = CleanName(e.Str("name"));
                 if (IsStreaming) StatusDetail = $"TV conectada · {_tvName}";
                 break;
             case "handoff":
@@ -331,6 +331,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     static string Host(string? endpoint) => endpoint?.Split(':')[0] ?? "?";
+
+    /// <summary>A TV's name for display: no invisible marks (some devices put U+200E in their name).</summary>
+    static string CleanName(string? name)
+    {
+        var clean = new string((name ?? "").Where(c => char.GetUnicodeCategory(c) is not
+            (UnicodeCategory.Format or UnicodeCategory.Control)).ToArray()).Trim();
+        return clean.Length > 0 ? clean : "TV";
+    }
 
     void Add(string text, bool warning = false)
     {
