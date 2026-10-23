@@ -5,7 +5,7 @@
 // real gamepad: Android's `hid` tool (over adb) creates a virtual HID device there, so the TV app
 // sees a controller exactly as it would on a TV — buttons, D-pad, sticks and triggers.
 //
-// Usage: jinky-padbridge
+// Usage: jinky-padbridge [emulator-serial]   (default emulator-5554; never a TV on the network)
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
@@ -121,9 +121,11 @@ std::string json(const Report& r) {
     return s + "]}\n";
 }
 
-// `adb -e shell hid -`: Android's HID tool reading commands from our pipe.
+// `adb -s <emulator> shell hid -`: Android's HID tool reading commands from our pipe. Always the
+// emulator by its serial: "-e" would also pick a TV connected to adb over the network.
 class Emulator {
 public:
+    explicit Emulator(std::string serial) : serial_(std::move(serial)) {}
     ~Emulator() { stop(); }
 
     bool send(const std::string& line) {
@@ -141,7 +143,7 @@ private:
     bool start() {
         const char* local = std::getenv("LOCALAPPDATA");
         if (!local) return false;
-        std::string cmd = "\"" + std::string(local) + "\\Android\\Sdk\\platform-tools\\adb.exe\" -e shell hid -";
+        std::string cmd = "\"" + std::string(local) + "\\Android\\Sdk\\platform-tools\\adb.exe\" -s " + serial_ + " shell hid -";
         SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
         HANDLE read = nullptr, write = nullptr;
         if (!CreatePipe(&read, &write, &sa, 0)) return false;
@@ -177,15 +179,16 @@ private:
         stdin_ = process_ = nullptr;
     }
 
+    std::string serial_;
     HANDLE stdin_ = nullptr, process_ = nullptr;
 };
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     std::puts("jinky-padbridge: your DualSense becomes a controller inside the Android TV emulator (Ctrl+C to stop)");
-    Emulator emulator;
+    Emulator emulator(argc > 1 ? argv[1] : "emulator-5554");
     while (true) {
         Pad pad = open_dualsense();
         if (pad.handle == INVALID_HANDLE_VALUE) {

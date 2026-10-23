@@ -316,7 +316,17 @@ class HomeScreen(
 
     // --- the row ---
 
+    private fun isDescendant(v: View): Boolean {
+        var p = v.parent
+        while (p != null) {
+            if (p === rowItems) return true
+            p = p.parent
+        }
+        return false
+    }
+
     private fun rebuildRow() {
+        rowGlide?.cancel()
         rowItems.removeAllViews()
         sizeAnims.values.forEach { it.cancel() }
         sizeAnims.clear()
@@ -464,6 +474,8 @@ class HomeScreen(
     }
 
     private fun rowTarget(tile: View): Int {
+        // The row may have been rebuilt meanwhile (games arrived, a pin changed): stay put.
+        if (!isDescendant(tile)) return row.scrollX
         val r = Rect()
         tile.getDrawingRect(r)
         rowItems.offsetDescendantRectToMyCoords(tile, r)

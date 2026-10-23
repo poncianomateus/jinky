@@ -38,22 +38,24 @@ if ($Build) {
     Pop-Location
 }
 
-$running = (& $adb devices) -match '^emulator-\d+\s+device'
-if (-not $running) {
+# Always address the emulator by its serial: "-e" would also match a TV connected over the network.
+function Emulator { ((& $adb devices) -match '^emulator-\d+\s+device' | Select-Object -First 1) -replace '\s+device$', '' }
+$serial = Emulator
+if (-not $serial) {
     Write-Host "== Starting the emulator"
     Start-Process $emulator -ArgumentList "-avd $avd -no-snapshot-save -no-boot-anim -netdelay none -netspeed full"
-    & $adb wait-for-device
-    do { Start-Sleep 2 } until ((& $adb -e shell getprop sys.boot_completed 2>$null) -match '1')
+    do { Start-Sleep 2; $serial = Emulator } until ($serial)
+    do { Start-Sleep 2 } until ((& $adb -s $serial shell getprop sys.boot_completed 2>$null) -match '1')
 }
 
 Write-Host "== Installing Jinky"
-& $adb -e install -r $apk | Out-Null
-& $adb -e shell am start -n com.jinky.tv/com.tclstream.tv.MainActivity | Out-Null
+& $adb -s $serial install -r $apk | Out-Null
+& $adb -s $serial shell am start -n com.jinky.tv/com.tclstream.tv.MainActivity | Out-Null
 Write-Host "== Jinky is open in the emulator window (arrows, Enter = OK, Esc = Back)"
 
 # A DualSense on the PC drives the emulator too (it doesn't pass host controllers through).
 $bridge = "$root\build\host\Release\jinky-padbridge.exe"
 if ((Test-Path $bridge) -and -not (Get-Process jinky-padbridge -ErrorAction SilentlyContinue)) {
-    Start-Process $bridge -WindowStyle Minimized
+    Start-Process $bridge -ArgumentList $serial -WindowStyle Minimized
     Write-Host "== DualSense bridge on: D-pad/stick = arrows, Cross = OK, Circle = Back, Options = Menu"
 }
