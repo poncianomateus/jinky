@@ -15,9 +15,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * Shared look of the Jinky TV screens (home, settings, help, library): dark ground, brand header,
- * big focusable buttons that light up in the accent color. Navigable with the remote and with a
- * controller (D-pad/stick to move, A/OK to choose).
+ * Shared look of the Jinky TV screens (home, settings, help, library): ink ground, the Jinky logo,
+ * big focusable buttons that turn white when focused, like a console. Navigable with the remote
+ * and with a controller (D-pad/stick to move, A/OK to choose).
  */
 abstract class TvPage(context: Context) : FrameLayout(context) {
 
@@ -38,12 +38,12 @@ abstract class TvPage(context: Context) : FrameLayout(context) {
     protected fun brandHeader(page: String? = null) = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        addView(ImageView(context).apply { setImageResource(R.drawable.ic_jinky) }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark) },
-            LinearLayout.LayoutParams(dp(62), dp(32)).apply { marginStart = dp(12) })
+        addView(ImageView(context).apply { setImageResource(R.drawable.jinky_tile) }, LinearLayout.LayoutParams(dp(28), dp(28)))
+        addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark_white) },
+            LinearLayout.LayoutParams(dp(57), dp(19)).apply { marginStart = dp(9) })
         if (page != null) {
-            addView(text(22f, StartScreen.MUTED).apply { text = "·  $page" },
-                LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(16) })
+            addView(text(14f, Jinky.MUTED, bold = true).apply { text = page },
+                LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(18) })
         }
     }
 
@@ -60,29 +60,32 @@ abstract class TvPage(context: Context) : FrameLayout(context) {
     protected fun bigButton() = Button(context).apply {
         isAllCaps = false
         gravity = Gravity.START or Gravity.CENTER_VERTICAL
-        setPadding(dp(28), dp(20), dp(28), dp(20))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        setTextColor(focusColors(0xFF06101F.toInt(), Color.WHITE))
-        setLineSpacing(0f, 1.15f)
-        background = states(StartScreen.ACCENT, 0xFF121821.toInt(), 18)
+        setPadding(dp(20), dp(14), dp(20), dp(14))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        typeface = Jinky.font(context, 700)
+        setTextColor(focusColors(Jinky.INK, Jinky.TEXT))
+        setLineSpacing(0f, 1.2f)
+        background = states(Jinky.TEXT, Jinky.SURFACE, 12)
+        stateListAnimator = null
     }
 
     protected fun smallButton(label: String) = Button(context).apply {
         text = label
         isAllCaps = false
         gravity = Gravity.START or Gravity.CENTER_VERTICAL
-        setPadding(dp(28), dp(16), dp(28), dp(16))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-        setLineSpacing(0f, 1.1f)
-        setTextColor(focusColors(0xFF06101F.toInt(), Color.WHITE))
-        background = states(StartScreen.ACCENT, 0xFF121821.toInt(), 16)
+        setPadding(dp(18), dp(10), dp(18), dp(10))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        typeface = Jinky.font(context, 700)
+        setLineSpacing(0f, 1.15f)
+        setTextColor(focusColors(Jinky.INK, Jinky.TEXT))
+        background = states(Jinky.TEXT, Jinky.SURFACE, 99)
+        stateListAnimator = null
     }
 
     protected fun states(focused: Int, normal: Int, radius: Int) = StateListDrawable().apply {
         addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply { setColor(focused); cornerRadius = dp(radius).toFloat() })
         addState(intArrayOf(), GradientDrawable().apply {
-            setColor(normal); cornerRadius = dp(radius).toFloat(); setStroke(dp(1), 0xFF222C3B.toInt())
+            setColor(normal); cornerRadius = dp(radius).toFloat(); setStroke(dp(1), Jinky.LINE)
         })
     }
 
@@ -92,7 +95,14 @@ abstract class TvPage(context: Context) : FrameLayout(context) {
     protected fun text(sp: Float, color: Int, bold: Boolean = false) = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         setTextColor(color)
-        typeface = Typeface.create("sans-serif-medium", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        typeface = Jinky.font(context, if (bold) 800 else 500)
+    }
+
+    /** Numbers (clock, hours, percentages) in the monospaced face. */
+    protected fun mono(sp: Float, color: Int, weight: Int = 500) = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        setTextColor(color)
+        typeface = Jinky.mono(context, weight)
     }
 
     /** Puts focus on the first button when the page is opened. */

@@ -162,6 +162,7 @@ public sealed class TvService : IDisposable
                 else if (request.Is("GET", "/library"))
                 {
                     var games = SteamLibrary.Games(SteamApiKey?.Invoke());
+                    var running = SteamLibrary.RunningGame();
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
                     {
@@ -181,6 +182,8 @@ public sealed class TvService : IDisposable
                             state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
                             progress = g.Progress,
                             family = g.Family,
+                            minutes = g.Minutes,
+                            running = running != 0 && g.Id == running,
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");

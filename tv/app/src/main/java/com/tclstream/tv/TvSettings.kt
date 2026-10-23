@@ -21,6 +21,18 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("show_stats", false)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()
 
+    /** Games pinned to the front of the home row, in the order they were pinned. */
+    var pinned: List<Int>
+        get() = prefs.getString("pinned", "")!!.split(',').mapNotNull { it.toIntOrNull() }
+        set(v) = prefs.edit().putString("pinned", v.joinToString(",")).apply()
+
+    /** Pins [id] (at the end), or unpins it. Returns true if it is pinned now. */
+    fun togglePin(id: Int): Boolean {
+        val now = pinned
+        pinned = if (id in now) now - id else now + id
+        return id !in now
+    }
+
     companion object {
         val BITRATES = listOf(0, 15, 20, 30, 40, 50, 60)
     }

@@ -129,8 +129,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
             startScreen = StartScreen(this@MainActivity)
             addView(startScreen, FrameLayout.LayoutParams(-1, -1))
-            homeScreen = HomeScreen(this@MainActivity,
-                onPlayGame = { _, game -> openGame(game, Page.HOME) },
+            homeScreen = HomeScreen(this@MainActivity, settings,
+                onPlayGame = { host, game -> playGame(host, game) },
+                onOpenGame = { _, game -> openGame(game, Page.HOME) },
                 onPlay = { host, desktop ->
                     sessionTitle = when {
                         host.status == HomeHost.Status.BUSY -> "Jogo em andamento"
@@ -148,9 +149,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 },
                 onUpdate = { host -> updater.update(host.ip, host.updatePort) },
                 onSettings = { showPage(Page.SETTINGS) },
-                onLibrary = { host ->
+                onLibrary = { host, search ->
                     showPage(Page.LIBRARY)
-                    libraryScreen.load(host.ip, host.updatePort)
+                    libraryScreen.load(host.ip, host.updatePort, search)
                 })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
@@ -162,9 +163,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
-            libraryScreen = LibraryScreen(this@MainActivity,
-                onPlay = { game -> openGame(game, Page.LIBRARY) },
-                onInstall = { game -> openGame(game, Page.LIBRARY) },
+            libraryScreen = LibraryScreen(this@MainActivity, settings,
+                onOpen = { game -> openGame(game, Page.LIBRARY) },
+                onPlay = { game -> homeHost?.let { playGame(it, game) } },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
             gameScreen = GameScreen(this@MainActivity,
@@ -328,7 +329,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
-            if (p == Page.HOME) homeScreen.animateIn()
+            if (p == Page.HOME) {
+                homeScreen.refreshRow()  // pins may have changed in the Biblioteca
+                homeScreen.animateIn()
+            }
         }
         if (p != null && p != before) when (p) {
             Page.HOME -> homeScreen.focusFirst()
@@ -507,7 +511,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** The name the user gave this TV (e.g. "Fire TV da sala"), or its model. */
     private fun deviceName(): String =
-        android.provider.Settings.Global.getString(contentResolver, "device_name")?.takeIf { it.isNotBlank() }
+        android.provider.Settings.Global.getString(contentResolver, "device_name")
+            // Some devices (the Android emulator) pad the name with invisible direction marks.
+            ?.filter { Character.getType(it) != Character.FORMAT.toInt() }?.trim()?.takeIf { it.isNotBlank() }
             ?: "${Build.MANUFACTURER} ${Build.MODEL}"
 
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =

@@ -11,7 +11,8 @@ namespace Jinky;
 public enum GameState { Installed, Downloading, NotInstalled }
 
 public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath,
-                               GameState State = GameState.Installed, double Progress = 1, bool Family = false);
+                               GameState State = GameState.Installed, double Progress = 1, bool Family = false,
+                               int Minutes = 0);
 
 /// <summary>
 /// The games in Steam on this PC, for the TV's Biblioteca: names and install state from the
@@ -40,6 +41,13 @@ public static partial class SteamLibrary
         var steam = SteamPath();
         if (steam is null) return [];
         var lastPlayed = LastPlayed(steam);
+        var playtime = Playtime(steam);
+        // The Steam client (when its reading is on) knows every game's play time; newer Steam
+        // versions no longer keep it in the local config.
+        var client = SteamClient.Library();
+        if (client is not null)
+            foreach (var a in client)
+                if (a.Minutes > 0) playtime[a.Id] = Math.Max(playtime.GetValueOrDefault(a.Id), (int)a.Minutes);
         var games = new Dictionary<int, SteamGame>();
         foreach (var library in LibraryFolders(steam))
         {
@@ -63,7 +71,8 @@ public static partial class SteamLibrary
                 else if (!installed) progress = 0;
                 games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id), Cover(steam, id),
                                           Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"),
-                                          installed ? GameState.Installed : GameState.Downloading, progress);
+                                          installed ? GameState.Installed : GameState.Downloading, progress,
+                                          Minutes: playtime.GetValueOrDefault(id));
             }
         }
         // "Non-Steam games" added to the Steam library: already on the PC, played through Steam.
@@ -73,7 +82,6 @@ public static partial class SteamLibrary
         var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         // Games to install: straight from the Steam client when its reading is on (exactly its
         // Library), else from the Web API with a key.
-        var client = SteamClient.Library();
         IEnumerable<(int Id, string Name, long Last, bool Family)>? toInstall =
             client?.Where(a => !a.Installed).Select(a => (a.Id, a.Name, a.LastPlayed, a.Family));
         if (toInstall is null && !string.IsNullOrWhiteSpace(apiKey)) toInstall = Owned(apiKey!, steam);
@@ -85,7 +93,8 @@ public static partial class SteamLibrary
             {
                 if (games.ContainsKey(id) || !IsGame(id, name)) continue;
                 games[id] = new SteamGame(id, name, lastPlayed.GetValueOrDefault(id, last), Cover(steam, id),
-                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"), GameState.NotInstalled, 0, family);
+                                          Art(steam, id, "library_hero.jpg"), Art(steam, id, "logo.png"), GameState.NotInstalled, 0, family,
+                                          playtime.GetValueOrDefault(id));
                 list.Add(games[id]);
             }
         }
@@ -283,6 +292,33 @@ public static partial class SteamLibrary
         return result;
     }
 
+    /// <summary>appid -> minutes played, from the same Steam account config.</summary>
+    static Dictionary<int, int> Playtime(string steam)
+    {
+        var result = new Dictionary<int, int>();
+        try
+        {
+            var config = Directory.EnumerateDirectories(Path.Combine(steam, "userdata"))
+                .Select(d => Path.Combine(d, "config", "localconfig.vdf"))
+                .Where(File.Exists)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+            if (config is null) return result;
+            foreach (Match m in AppPlaytime().Matches(File.ReadAllText(config, Encoding.UTF8)))
+                if (int.TryParse(m.Groups[1].Value, out var id) && int.TryParse(m.Groups[2].Value, out var minutes))
+                    result[id] = Math.Max(minutes, result.GetValueOrDefault(id));
+        }
+        catch (Exception)
+        {
+            // No account data: no play times.
+        }
+        return result;
+    }
+
+    /// <summary>The Steam game running on this PC right now (0 = none).</summary>
+    public static int RunningGame() =>
+        Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "RunningAppID", 0) is int id ? id : 0;
+
     /// <summary>Portrait cover from Steam's cache, else its banner.</summary>
     static string? Cover(string steam, int id) =>
         Art(steam, id, "library_600x900.jpg") ?? Art(steam, id, "library_capsule.jpg") ??
@@ -310,4 +346,8 @@ public static partial class SteamLibrary
     // "730" { ... "LastPlayed" "1700000000" ... } (no nested braces before LastPlayed)
     [GeneratedRegex("\"(\\d+)\"\\s*\\{[^{}]*?\"LastPlayed\"\\s+\"(\\d+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex AppLastPlayed();
+
+    // "730" { ... "Playtime" "1234" ... } (minutes; no nested braces before Playtime)
+    [GeneratedRegex("\"(\\d+)\"\\s*\\{[^{}]*?\"Playtime\"\\s+\"(\\d+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex AppPlaytime();
 }

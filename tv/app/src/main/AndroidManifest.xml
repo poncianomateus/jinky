@@ -15,8 +15,8 @@
         android:allowBackup="false"
         android:appCategory="game"
         android:isGame="true"
-        android:banner="@drawable/banner"
-        android:icon="@drawable/ic_jinky"
+        android:banner="@drawable/banner_jinky"
+        android:icon="@drawable/jinky_icon"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
         android:usesCleartextTraffic="true">

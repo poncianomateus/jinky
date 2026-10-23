@@ -55,9 +55,9 @@ class StartScreen(context: Context) : FrameLayout(context) {
         val brand = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(ImageView(context).apply { setImageResource(R.drawable.ic_jinky) }, LinearLayout.LayoutParams(dp(64), dp(64)))
-            addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark) },
-                LinearLayout.LayoutParams(dp(97), dp(50)).apply { marginStart = dp(16) })
+            addView(ImageView(context).apply { setImageResource(R.drawable.jinky_tile) }, LinearLayout.LayoutParams(dp(64), dp(64)))
+            addView(ImageView(context).apply { setImageResource(R.drawable.jinky_wordmark_white) },
+                LinearLayout.LayoutParams(dp(120), dp(40)).apply { marginStart = dp(16) })
         }
         column.addView(brand, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(44) })
         column.addView(title, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
@@ -125,12 +125,12 @@ class StartScreen(context: Context) : FrameLayout(context) {
 
     companion object {
         // Jinky palette (same as the PC app and brand assets)
-        const val GROUND = 0xFF0A0E14.toInt()
-        const val SURFACE = 0xFF10161F.toInt()
-        const val LINE = 0xFF263041.toInt()
-        const val ACCENT = 0xFF4C93FF.toInt()
-        const val MUTED = 0xFF9FAABB.toInt()
-        const val HINT = 0xFF7D899C.toInt()
+        const val GROUND = Jinky.INK
+        const val SURFACE = Jinky.SURFACE
+        const val LINE = Jinky.LINE
+        const val ACCENT = Jinky.BLUE
+        const val MUTED = Jinky.MUTED
+        const val HINT = Jinky.DIM
         const val WARN = 0xFFFFC979.toInt()
         const val DONE = 0xFF3DDC97.toInt()
         const val DONE_BG = 0xFF133A2A.toInt()
