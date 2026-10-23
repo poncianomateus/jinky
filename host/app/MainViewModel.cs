@@ -194,6 +194,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var key = _settings.SteamApiKey;
         var direct = SteamDirect;
+        var blocked = SteamLibrary.SteamPath() is { } steam && SteamClient.Blocked(steam);
         SteamKeyStatus = "Verificando com a Steam…";
         Task.Run(() =>
         {
@@ -202,7 +203,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 status = $"✓ Lendo direto da Steam: {apps.Count} jogos (seus e da família), como na sua biblioteca.";
             else
             {
-                var fallback = direct ? "Leitura direta ligada: reinicie a Steam para ativar. " : "";
+                var fallback = direct ? "Leitura direta ligada: reinicie a Steam para ativar. "
+                    : blocked ? "Outro complemento instalado na Steam bloqueou a leitura direta; ligue de novo para liberar. " : "";
                 if (string.IsNullOrEmpty(key))
                     status = fallback + "Sem chave: a TV mostra só os jogos instalados.";
                 else

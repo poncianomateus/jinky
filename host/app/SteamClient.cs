@@ -40,12 +40,23 @@ public static class SteamClient
     /// <summary>Whether the user turned the reading on (the flag file exists).</summary>
     public static bool Enabled(string steam) => File.Exists(Path.Combine(steam, FlagFile));
 
+    /// <summary>
+    /// Whether something else put a folder link where the flag file goes, so Steam never sees the
+    /// flag. Some Steam add-ons do this on purpose to keep Steam's developer interface shut.
+    /// </summary>
+    public static bool Blocked(string steam) => IsLink(Path.Combine(steam, FlagFile));
+
+    static bool IsLink(string path) =>
+        Directory.Exists(path) && new DirectoryInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint);
+
     /// <summary>Turns the reading on or off. Takes effect when Steam restarts.</summary>
     public static string? SetEnabled(string steam, bool on)
     {
         var flag = Path.Combine(steam, FlagFile);
         try
         {
+            // Removing a link deletes only the link itself, never what it points to.
+            if (on && IsLink(flag)) Directory.Delete(flag, recursive: false);
             if (on && !File.Exists(flag)) File.WriteAllBytes(flag, []);
             if (!on && File.Exists(flag)) File.Delete(flag);
             return null;
