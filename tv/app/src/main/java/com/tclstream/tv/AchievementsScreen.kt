@@ -77,7 +77,7 @@ class AchievementsScreen(
     init {
         addView(hero, LayoutParams(-1, dp(180)))
         addView(View(context).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x9907090D.toInt(), Jinky.INK))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Jinky.ink(0x99), Jinky.INK))
         }, LayoutParams(-1, dp(180)))
 
         val top = LinearLayout(context).apply {
@@ -162,7 +162,7 @@ class AchievementsScreen(
         countSub.text = ""
         showMessage("Carregando conquistas…")
         refreshTracking()
-        ArtLoader.load(pcIp, port, g.id, "hero", 2) { bmp ->
+        if (Jinky.showArt) ArtLoader.load(pcIp, port, g.id, "hero", 2) { bmp ->
             if (game?.id == g.id && bmp != null) {
                 hero.setImageBitmap(bmp)
                 hero.alpha = 0f
@@ -211,7 +211,7 @@ class AchievementsScreen(
         ring.animateTo(fraction)
         ringText.text = "${(fraction * 100).toInt()}%"
         countText.text = "${d.unlocked} de ${d.total}"
-        countSub.text = "conquistas"
+        countSub.text = if (d.progressHidden) "progresso privado na Steam" else "conquistas"
         rarityRows.removeAllViews()
         for (r in Rarity.values()) {
             val all = d.items.count { it.rarity == r }
@@ -405,7 +405,7 @@ class AchievementsScreen(
     private fun card() = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(13), dp(13), dp(13), dp(13))
-        background = Jinky.rounded(0xF010141F.toInt(), dp(13).toFloat())
+        background = Jinky.rounded(Jinky.surface(0xF0), dp(13).toFloat())
     }
 
     private fun chipBackground(on: Boolean) = StateListDrawable().apply {

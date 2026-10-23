@@ -93,7 +93,8 @@ abstract class TvPage(context: Context) : FrameLayout(context) {
         arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(focused, normal))
 
     protected fun text(sp: Float, color: Int, bold: Boolean = false) = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        // The retro theme's pixel face runs wide: a little smaller keeps words whole.
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (bold && Jinky.theme.pixelFont) sp * 0.74f else sp)
         setTextColor(color)
         typeface = Jinky.font(context, if (bold) 800 else 500)
     }

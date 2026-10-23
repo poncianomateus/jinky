@@ -32,6 +32,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var libraryScreen: LibraryScreen
     private lateinit var gameScreen: GameScreen
     private lateinit var achievementsScreen: AchievementsScreen
+    private lateinit var profileScreen: ProfileScreen
     private lateinit var toast: AchievementToast
     private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
     private var achievementsOverGame = false        // the achievements page opened from the menu
@@ -47,7 +48,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var wasInSession = false
@@ -122,6 +123,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The chosen look and sounds, before any screen is built.
+        settings.applyLook()
+        UiSounds.init(this)
+        UiSounds.mode = settings.sounds
+        UiSounds.volume = settings.soundVolume
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Ask the TV for its low-latency mode (HDMI ALLM / Game Mode): skips picture post-processing.
         if (Build.VERSION.SDK_INT >= 30) {
@@ -167,6 +173,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onLibrary = { host, search ->
                     showPage(Page.LIBRARY)
                     libraryScreen.load(host.ip, host.updatePort, search)
+                },
+                onProfile = {
+                    homeHost?.let { h ->
+                        showPage(Page.PROFILE)
+                        profileScreen.show(h.ip, h.updatePort)
+                    }
                 })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
@@ -174,7 +186,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onChanged = { receiver?.setCodecSupport(helloCapabilities()) },
                 onSendDiagnostics = ::sendDiagnostics,
                 onForgetPc = ::forgetPc,
-                onHelp = { showPage(Page.HELP) }).apply { visibility = View.GONE }
+                onHelp = { showPage(Page.HELP) },
+                onLookChanged = ::lookChanged,
+                onTestToast = {
+                    toast.show(AchievementUnlock(0, 0, "Jinky", "teste", "Conquista de exemplo",
+                        "Assim aparece uma conquista durante o jogo.", "", 4.2, 12, 46))
+                }).apply { visibility = View.GONE }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
@@ -190,6 +207,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(gameScreen, FrameLayout.LayoutParams(-1, -1))
             achievementsScreen = AchievementsScreen(this@MainActivity, settings) { closeAchievements() }.apply { visibility = View.GONE }
             addView(achievementsScreen, FrameLayout.LayoutParams(-1, -1))
+            profileScreen = ProfileScreen(this@MainActivity) { showPage(Page.HOME) }.apply { visibility = View.GONE }
+            addView(profileScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             hint = TextView(this@MainActivity).apply {
@@ -236,7 +255,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(menu, FrameLayout.LayoutParams(-1, -1))
             toast = AchievementToast(this@MainActivity)
             addView(toast, FrameLayout.LayoutParams(-1, -1))
+            // The opening, like a console's boot (not when the screens were just rebuilt for a new look).
+            if (savedInstanceState == null && settings.boot != "off") {
+                val splash = BootSplash(this@MainActivity)
+                addView(splash, FrameLayout.LayoutParams(-1, -1))
+                splash.play(fast = settings.boot == "fast") { removeView(splash) }
+            }
         })
+        // A new look rebuilt the screens: back to where the user was choosing it.
+        if (savedInstanceState?.getBoolean(KEY_LOOK) == true) {
+            page = Page.SETTINGS
+            showPage(Page.SETTINGS)
+            // After the first layout, or the default focus would land on the first category.
+            settingsScreen.post { settingsScreen.openLook() }
+        }
+        // A soft tick whenever the focus moves on the TV's own screens.
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { old, new ->
+            if (old != null && new != null && uiShown()) UiSounds.play(UiSounds.Sound.MOVE)
+        }
         Log.i(TAG, "hardware:\n$hardwareReport")
         Log.i(TAG, "tuning: $tuning displayHz=$displayHz surfaceRate=$surfaceRate")
         if (displayHz > 0) selectRefreshRate(displayHz)
@@ -334,6 +370,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             libraryScreen.visibility == View.VISIBLE -> Page.LIBRARY
             gameScreen.visibility == View.VISIBLE -> Page.GAME
             achievementsScreen.visibility == View.VISIBLE -> Page.ACHIEVEMENTS
+            profileScreen.visibility == View.VISIBLE -> Page.PROFILE
             else -> null
         }
         if (p != null) page = p
@@ -343,6 +380,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         libraryScreen.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
         gameScreen.visibility = if (p == Page.GAME) View.VISIBLE else View.GONE
         achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
+        profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
         if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
@@ -354,6 +392,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.LIBRARY -> libraryScreen
                 Page.GAME -> gameScreen
                 Page.ACHIEVEMENTS -> achievementsScreen
+                Page.PROFILE -> profileScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -369,6 +408,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.LIBRARY -> libraryScreen.focusFirst()
             Page.GAME -> gameScreen.focusFirst()
             Page.ACHIEVEMENTS -> achievementsScreen.focusFirst()
+            Page.PROFILE -> profileScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -414,7 +454,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 unlockPolling = false
                 if (result == null) return@post
                 unlocksAfter = result.first
-                result.second.forEach { toast.show(it) }
+                if (settings.toasts) result.second.forEach { toast.show(it) }
             }
         }.start()
     }
@@ -496,6 +536,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 null
             }
             ui.post { homeScreen.setGames(games, host.ip, host.updatePort) }
+            // The Steam account for the profile button (the PC caches it).
+            val profile = try { SteamProfileData.fetch(host.ip, host.updatePort).first } catch (e: Exception) { null }
+            if (profile != null) ui.post { homeScreen.setProfile(profile.name, profile.avatar) }
         }.start()
     }
 
@@ -566,6 +609,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return true
         }
         if (gamepads?.onKeyEvent(event) == true) return true
+        // Interface sounds on the TV's own screens: OK confirms, Back goes back.
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && uiShown()) when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A -> UiSounds.play(UiSounds.Sound.SELECT)
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE -> UiSounds.play(UiSounds.Sound.BACK)
+        }
         // On the TV's own screens (home, menu) the controller's A works as OK.
         if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
             return super.dispatchKeyEvent(KeyEvent(event.downTime, event.eventTime, event.action,
@@ -611,13 +659,29 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
     }
 
+    /** One of the TV's own screens (or the menu) is in front, not the game. */
+    private fun uiShown() = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
+        helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
+        gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
+        profileScreen.visibility == View.VISIBLE || menu.isOpen
+
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
-        val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
-            helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
-            gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
-            menu.isOpen
+        val ui = uiShown()
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
+    }
+
+    /** A new theme or old-TV lines: rebuild every screen with the new look. */
+    private var lookPending = false
+    private fun lookChanged() {
+        settings.applyLook()
+        lookPending = true
+        recreate()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (lookPending) outState.putBoolean(KEY_LOOK, true)
     }
 
     /** Shows the Jinky start screen until the TV confirms a picture; explains each step meanwhile. */
@@ -775,7 +839,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onBackPressed() {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (achievementsScreen.visibility == View.VISIBLE) closeAchievements()
+        if (profileScreen.visibility == View.VISIBLE) showPage(Page.HOME)
+        else if (achievementsScreen.visibility == View.VISIBLE) closeAchievements()
         else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
         else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
         else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)
@@ -847,6 +912,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     companion object {
+        private const val KEY_LOOK = "look_changed"
         private const val TAG = "Jinky"
         private const val HOST_PORT = 47100
         private const val HELLO_BITRATE_SHIFT = 16  // tclproto::kHelloBitrateShift

@@ -34,7 +34,7 @@ class GameMenu(
 
     private val shade = View(context).apply {
         background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0x0007090D, 0x6607090D, 0xE607090D.toInt(), 0xFA07090D.toInt()))
+            intArrayOf(Jinky.ink(0x00), Jinky.ink(0x66), Jinky.ink(0xE6), Jinky.ink(0xFA)))
     }
     private val band = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
@@ -43,7 +43,7 @@ class GameMenu(
     private val trackCard = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(11), dp(9), dp(11), dp(9))
-        background = Jinky.rounded(0xF010141F.toInt(), dp(11).toFloat())
+        background = Jinky.rounded(Jinky.surface(0xF0), dp(11).toFloat())
     }
     private val trackRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val tiles = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
@@ -187,7 +187,7 @@ class GameMenu(
         tag = danger
         background = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), Jinky.rounded(Jinky.TEXT, dp(12).toFloat()))
-            addState(intArrayOf(), Jinky.rounded(0xF010141F.toInt(), dp(12).toFloat()))
+            addState(intArrayOf(), Jinky.rounded(Jinky.surface(0xF0), dp(12).toFloat()))
         }
         addView(ImageView(context).apply {
             setImageResource(icon)

@@ -21,6 +21,48 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("show_stats", false)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()
 
+    /** Look of the whole app: "jinky", "midnight" or "retro" (UiTheme keys). */
+    var theme: String
+        get() = prefs.getString("theme", "jinky")!!
+        set(v) = prefs.edit().putString("theme", v).apply()
+
+    /** Interface sounds: "theme" (the theme's own), "retro" (8-bit) or "off". */
+    var sounds: String
+        get() = prefs.getString("sounds", "theme")!!
+        set(v) = prefs.edit().putString("sounds", v).apply()
+
+    /** Interface sound volume, 0..100. */
+    var soundVolume: Int
+        get() = prefs.getInt("sound_volume", 70)
+        set(v) = prefs.edit().putInt("sound_volume", v.coerceIn(0, 100)).apply()
+
+    /** Opening animation: "theme", "fast" or "off". */
+    var boot: String
+        get() = prefs.getString("boot", "theme")!!
+        set(v) = prefs.edit().putString("boot", v).apply()
+
+    /** Game artwork behind the home screen and pages. */
+    var art: Boolean
+        get() = prefs.getBoolean("art", true)
+        set(v) = prefs.edit().putBoolean("art", v).apply()
+
+    /** Old-TV lines over artwork: 0 off, 1 subtle, 2 strong. */
+    var scanlines: Int
+        get() = prefs.getInt("scanlines", 1)
+        set(v) = prefs.edit().putInt("scanlines", v.coerceIn(0, 2)).apply()
+
+    /** "Conquista desbloqueada" over the game, and its sound. */
+    var toasts: Boolean
+        get() = prefs.getBoolean("toasts", true)
+        set(v) = prefs.edit().putBoolean("toasts", v).apply()
+
+    /** Applies the look settings to the drawing code (before building the screens). */
+    fun applyLook() {
+        Jinky.theme = UiTheme.of(theme)
+        Jinky.artBackgrounds = art
+        Jinky.scanlineLevel = scanlines
+    }
+
     /** Games pinned to the front of the home row, in the order they were pinned. */
     var pinned: List<Int>
         get() = prefs.getString("pinned", "")!!.split(',').mapNotNull { it.toIntOrNull() }

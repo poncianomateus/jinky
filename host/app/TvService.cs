@@ -249,10 +249,12 @@ public sealed class TvService : IDisposable
                 }
                 else if (request.Is("GET", "/achievements") && int.TryParse(request.Query("id"), out var achId))
                 {
-                    var list = await Task.Run(() => SteamAchievements.Get(achId, SteamApiKey?.Invoke()));
+                    var result = await Task.Run(() => SteamAchievements.Read(achId, SteamApiKey?.Invoke()));
+                    var list = result?.Items;
                     var json = System.Text.Json.JsonSerializer.Serialize(new
                     {
                         error = list is null ? SteamAchievements.LastError ?? "erro" : null,
+                        progressHidden = result?.ProgressHidden ?? false,
                         total = list?.Count ?? 0,
                         unlocked = list?.Count(a => a.Achieved) ?? 0,
                         items = (list ?? []).Select(a => new
@@ -261,6 +263,20 @@ public sealed class TvService : IDisposable
                             hidden = a.Hidden, achieved = a.Achieved, time = a.UnlockTime, percent = a.Percent,
                         }),
                     });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/profile"))
+                {
+                    var p = await Task.Run(() => SteamProfile.Get(SteamApiKey?.Invoke()));
+                    var json = p is null
+                        ? System.Text.Json.JsonSerializer.Serialize(new { error = SteamProfile.LastError ?? "erro" })
+                        : System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            name = p.Name, avatar = p.Avatar, level = p.Level, games = p.Games, minutes = p.Minutes,
+                            unlocked = p.Unlocked, total = p.Total, legendary = p.Legendary, epic = p.Epic, perfect = p.Perfect,
+                            recent = p.Recent.Select(r => new { gameId = r.GameId, game = r.Game, name = r.Name, icon = r.Icon, percent = r.Percent, time = r.Time }),
+                            played = p.Played.Select(g => new { id = g.Id, name = g.Name, minutes = g.Minutes, unlocked = g.Unlocked, total = g.Total }),
+                        });
                     await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if (request.Is("GET", "/achievements/unlocks"))

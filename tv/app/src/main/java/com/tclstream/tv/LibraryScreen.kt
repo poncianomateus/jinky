@@ -198,7 +198,7 @@ class LibraryScreen(
         val heroBox = FrameLayout(context).apply {
             addView(panelHero, LayoutParams(-1, -1))
             addView(View(context).apply {
-                background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x0010141F, Jinky.SURFACE))
+                background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Jinky.surface(0x00), Jinky.SURFACE))
             }, LayoutParams(-1, -1))
             addView(panelLogo, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(12), 0, dp(12), dp(4)) })
             addView(panelName, LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(12), 0, dp(12), dp(6)) })
@@ -434,7 +434,7 @@ class LibraryScreen(
         when (game.state) {
             LibraryGame.State.NOT_INSTALLED -> {
                 // Not on the PC yet: a little dimmer, with a download badge.
-                addView(View(context).apply { setBackgroundColor(0x6607090D) }, LayoutParams(-1, -1))
+                addView(View(context).apply { setBackgroundColor(Jinky.ink(0x66)) }, LayoutParams(-1, -1))
                 addView(badge("Instalar"), LayoutParams(-2, dp(16), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(7) })
             }
             LibraryGame.State.DOWNLOADING -> addProgress(this, game)
@@ -445,7 +445,7 @@ class LibraryScreen(
             setImageResource(R.drawable.ic_pin)
             setColorFilter(Jinky.TEXT)
             setPadding(dp(3), dp(3), dp(3), dp(3))
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xCC07090D.toInt()) }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Jinky.ink(0xCC)) }
         }, LayoutParams(dp(16), dp(16), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(5), dp(5), 0) })
         foreground = GradientDrawable().apply {
             setColor(Color.TRANSPARENT); cornerRadius = dp(9).toFloat(); setStroke(dp(2) + dp(1) / 2, Color.TRANSPARENT)
@@ -496,7 +496,7 @@ class LibraryScreen(
             scaleX = game.progress.toFloat().coerceIn(0.02f, 1f)
         }
         track.addView(fill, LayoutParams(-1, -1))
-        tile.addView(View(context).apply { setBackgroundColor(0x5507090D) }, LayoutParams(-1, -1))
+        tile.addView(View(context).apply { setBackgroundColor(Jinky.ink(0x55)) }, LayoutParams(-1, -1))
         tile.addView(track, LayoutParams(-1, dp(4), Gravity.BOTTOM).apply { setMargins(dp(7), 0, dp(7), dp(8)) })
         bars[game.id] = fill
     }
@@ -508,7 +508,7 @@ class LibraryScreen(
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 6.5f)
         typeface = Jinky.font(context, 800)
         setPadding(dp(7), 0, dp(7), 0)
-        background = Jinky.rounded(if (color == Jinky.INK) Jinky.TEXT else 0xDB07090D.toInt(), dp(8).toFloat())
+        background = Jinky.rounded(if (color == Jinky.INK) Jinky.TEXT else Jinky.ink(0xDB), dp(8).toFloat())
     }
 
     private fun showCover(tile: FrameLayout, bmp: android.graphics.Bitmap) {

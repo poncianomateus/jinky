@@ -55,6 +55,7 @@ class HomeScreen(
     private val onUpdate: (HomeHost) -> Unit,
     private val onSettings: () -> Unit,
     private val onLibrary: (HomeHost, search: Boolean) -> Unit,
+    private val onProfile: () -> Unit,
 ) : TvPage(context) {
 
     private sealed class Item {
@@ -75,6 +76,25 @@ class HomeScreen(
     private val updateNote = text(8.5f, Jinky.BLUE_SOFT)
     private val search = iconButton(R.drawable.ic_search)
     private val settings = iconButton(R.drawable.ic_settings)
+    private val avatarImage = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+    private val avatarInitial = text(11f, Jinky.TEXT, bold = true).apply { gravity = Gravity.CENTER }
+    private val profileButton = FrameLayout(context).apply {
+        id = View.generateViewId()
+        isFocusable = true
+        isClickable = true
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Jinky.BLUE_DEEP) }
+        clipToOutline = true
+        outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) = outline.setOval(0, 0, view.width, view.height)
+        }
+        addView(avatarInitial, LayoutParams(-1, -1))
+        addView(avatarImage, LayoutParams(-1, -1))
+        foreground = GradientDrawable().apply { shape = GradientDrawable.OVAL; setStroke(dp(2), Color.TRANSPARENT) }
+        setOnFocusChangeListener { v, has ->
+            (v.foreground as GradientDrawable).setStroke(dp(2) + dp(1) / 2, if (has) Color.WHITE else Color.TRANSPARENT)
+            v.animate().scaleX(if (has) 1.12f else 1f).scaleY(if (has) 1.12f else 1f).setDuration(160).start()
+        }
+    }
     private val libraryTab = tab("Biblioteca")
 
     private val rowItems = LinearLayout(context).apply {
@@ -141,11 +161,11 @@ class HomeScreen(
         addView(heroFront, LayoutParams(-1, -1))
         addView(View(context).apply {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xF707090D.toInt(), 0xBD07090D.toInt(), 0x2607090D, 0x4D07090D))
+                intArrayOf(Jinky.ink(0xF7), Jinky.ink(0xBD), Jinky.ink(0x26), Jinky.ink(0x4D)))
         }, LayoutParams(-1, -1))
         addView(View(context).apply {
             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0xE007090D.toInt(), 0x0007090D, 0x0007090D, 0xF207090D.toInt()))
+                intArrayOf(Jinky.ink(0xE0), Jinky.ink(0x00), Jinky.ink(0x00), Jinky.ink(0xF2)))
         }, LayoutParams(-1, -1))
         addView(View(context).apply { background = Jinky.scanlines(context) }, LayoutParams(-1, -1))
         showHero(null)
@@ -170,6 +190,7 @@ class HomeScreen(
                 addView(statusText)
             }, LinearLayout.LayoutParams(-2, dp(28)))
             addView(search, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
+            addView(profileButton, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
             addView(settings, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
             addView(clock, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(14) })
         }
@@ -196,6 +217,8 @@ class HomeScreen(
         for (b in listOf(primary, details, pinButton)) b.id = View.generateViewId()
         libraryTab.id = View.generateViewId()
         settings.setOnClickListener { onSettings() }
+        profileButton.setOnClickListener { onProfile() }
+        avatarInitial.text = "?"
         search.setOnClickListener { host?.let { onLibrary(it, true) } }
         libraryTab.setOnClickListener { host?.let { onLibrary(it, false) } }
         update.setOnClickListener { host?.let(onUpdate) }
@@ -276,6 +299,12 @@ class HomeScreen(
             selected = null
             if (isShown && (!touched || rowItems.hasFocus())) again.second.requestFocusFromTouch() else showItem(again.first)
         }
+    }
+
+    /** The Steam account's name and picture, for the profile button. */
+    fun setProfile(name: String, avatarUrl: String) {
+        avatarInitial.text = name.take(1).uppercase().ifEmpty { "?" }
+        if (avatarUrl.isNotBlank()) ArtLoader.loadUrl(avatarUrl, 2) { bmp -> if (bmp != null) avatarImage.setImageBitmap(bmp) }
     }
 
     /** Rebuilds the row (pins changed elsewhere), keeping the game the user was on. */
@@ -519,7 +548,7 @@ class HomeScreen(
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(6), 0, dp(7), 0)
-        background = Jinky.rounded(0xDB07090D.toInt(), dp(9).toFloat())
+        background = Jinky.rounded(Jinky.ink(0xDB), dp(9).toFloat())
         addView(View(context).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Jinky.GREEN) } },
             LinearLayout.LayoutParams(dp(4), dp(4)).apply { marginEnd = dp(4) })
         addView(text(6.5f, Jinky.TEXT, bold = true).apply { text = "NO PC" })
@@ -607,7 +636,7 @@ class HomeScreen(
     private val loadArt = Runnable {
         val g = (selected as? Item.Game)?.game ?: return@Runnable
         val (ip, port) = art ?: return@Runnable
-        ArtLoader.load(ip, port, g.id, "hero", 1) { bmp ->
+        if (Jinky.showArt) ArtLoader.load(ip, port, g.id, "hero", 1) { bmp ->
             if ((selected as? Item.Game)?.game?.id == g.id) showHero(bmp, "hero/${g.id}")
         }
         ArtLoader.load(ip, port, g.id, "logo", 1) { bmp ->
@@ -629,8 +658,9 @@ class HomeScreen(
         val incoming = if (heroTop === heroFront) heroBack else heroFront
         incoming.animate().cancel()
         if (bmp == null) {
-            incoming.setImageDrawable(GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFF102246.toInt(), 0xFF0A1122.toInt(), Jinky.INK)))
+            incoming.setImageDrawable(if (!Jinky.theme.art) android.graphics.drawable.ColorDrawable(Jinky.INK)
+                else GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(Jinky.theme.accentDeep and 0x00FFFFFF or 0x66000000, Jinky.SURFACE, Jinky.INK)))
         } else {
             incoming.setImageBitmap(bmp)
         }

@@ -125,12 +125,12 @@ class StartScreen(context: Context) : FrameLayout(context) {
 
     companion object {
         // Jinky palette (same as the PC app and brand assets)
-        const val GROUND = Jinky.INK
-        const val SURFACE = Jinky.SURFACE
-        const val LINE = Jinky.LINE
-        const val ACCENT = Jinky.BLUE
-        const val MUTED = Jinky.MUTED
-        const val HINT = Jinky.DIM
+        val GROUND get() = Jinky.INK
+        val SURFACE get() = Jinky.SURFACE
+        val LINE get() = Jinky.LINE
+        val ACCENT get() = Jinky.BLUE
+        val MUTED get() = Jinky.MUTED
+        val HINT get() = Jinky.DIM
         const val WARN = 0xFFFFC979.toInt()
         const val DONE = 0xFF3DDC97.toInt()
         const val DONE_BG = 0xFF133A2A.toInt()

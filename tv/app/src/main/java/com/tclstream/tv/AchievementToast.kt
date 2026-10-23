@@ -63,7 +63,7 @@ class AchievementToast(context: Context) : FrameLayout(context) {
         card.background = Jinky.rounded(0xF00A0D14.toInt(), dp(14).toFloat())
         card.clipToOutline = true
         card.outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(14).toFloat())
+            override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(14) * Jinky.theme.corners)
         }
         card.elevation = dp(12).toFloat()
         card.visibility = View.INVISIBLE
@@ -80,8 +80,16 @@ class AchievementToast(context: Context) : FrameLayout(context) {
         showing = true
         val r = u.rarity
         iconBox.background = Jinky.rounded(r.ground, dp(10).toFloat())
-        icon.setImageDrawable(null)
-        if (u.icon.isNotBlank()) ArtLoader.loadUrl(u.icon, 1) { bmp -> if (bmp != null) icon.setImageBitmap(bmp) }
+        // Until (or without) the game's own icon: a trophy in the rarity's colour.
+        icon.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        icon.setImageResource(R.drawable.ic_trophy)
+        icon.setColorFilter(r.color)
+        if (u.icon.isNotBlank()) ArtLoader.loadUrl(u.icon, 1) { bmp ->
+            if (bmp == null) return@loadUrl
+            icon.clearColorFilter()
+            icon.scaleType = ImageView.ScaleType.CENTER_CROP
+            icon.setImageBitmap(bmp)
+        }
         label.text = "CONQUISTA DESBLOQUEADA"
         label.setTextColor(r.soft)
         name.text = u.name
@@ -90,6 +98,7 @@ class AchievementToast(context: Context) : FrameLayout(context) {
         progress.setBackgroundColor(r.color)
         progress.scaleX = if (u.total > 0) u.unlocked.toFloat() / u.total else 1f
         card.visibility = View.VISIBLE
+        UiSounds.play(UiSounds.Sound.ACHIEVEMENT)
         card.alpha = 0f
         card.translationY = -dp(40).toFloat()
         card.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(OvershootInterpolator(1.2f)).withEndAction {
@@ -103,7 +112,7 @@ class AchievementToast(context: Context) : FrameLayout(context) {
     }
 
     private fun text(sp: Float, color: Int, weight: Int, mono: Boolean = false) = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (!mono && weight >= 800 && Jinky.theme.pixelFont) sp * 0.74f else sp)
         setTextColor(color)
         typeface = if (mono) Jinky.mono(context, weight) else Jinky.font(context, weight)
     }

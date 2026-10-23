@@ -135,11 +135,11 @@ class GameScreen(
         addView(hero, LayoutParams(-1, -1))
         addView(View(context).apply {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xF707090D.toInt(), 0xC707090D.toInt(), 0x1A07090D))
+                intArrayOf(Jinky.ink(0xF7), Jinky.ink(0xC7), Jinky.ink(0x1A)))
         }, LayoutParams(-1, -1))
         addView(View(context).apply {
             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0xBF07090D.toInt(), 0x0007090D, 0x0007090D, 0xF707090D.toInt(), 0xFA07090D.toInt()))
+                intArrayOf(Jinky.ink(0xBF), Jinky.ink(0x00), Jinky.ink(0x00), Jinky.ink(0xF7), Jinky.ink(0xFA)))
         }, LayoutParams(-1, -1))
         addView(View(context).apply { background = Jinky.scanlines(context) }, LayoutParams(-1, -1))
 
@@ -268,7 +268,7 @@ class GameScreen(
         timeLast.text = lastPlayed(g.lastPlayed)
         timeSize.text = ""
         showAchievementsLoading(g)
-        ArtLoader.load(pcIp, port, g.id, "hero", 1) { bmp ->
+        if (Jinky.showArt) ArtLoader.load(pcIp, port, g.id, "hero", 1) { bmp ->
             if (game?.id != g.id || bmp == null) return@load
             hero.setImageBitmap(bmp)
             hero.alpha = 0f
@@ -351,7 +351,11 @@ class GameScreen(
             achCounts.addView(text(8.5f, Jinky.MUTED).apply { text = "Nenhuma ainda" })
         }
         val rarest = unlocked.filter { it.percent >= 0 }.minByOrNull { it.percent }
-        achRarest.text = if (rarest != null) "Mais rara: ${rarest.name} · ${pct(rarest.percent)}" else "Aperte para ver todas"
+        achRarest.text = when {
+            list.progressHidden -> "Seu progresso está privado na Steam"
+            rarest != null -> "Mais rara: ${rarest.name} · ${pct(rarest.percent)}"
+            else -> "Aperte para ver todas"
+        }
     }
 
     private fun pct(p: Double) = (if (p < 10) String.format(java.util.Locale("pt", "BR"), "%.1f", p) else p.toInt().toString()) + "%"
@@ -395,7 +399,7 @@ class GameScreen(
         val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         addView(image, LayoutParams(-1, -1))
         if (trailer) {
-            addView(View(context).apply { setBackgroundColor(0x5907090D) }, LayoutParams(-1, -1))
+            addView(View(context).apply { setBackgroundColor(Jinky.ink(0x59)) }, LayoutParams(-1, -1))
             addView(FrameLayout(context).apply {
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Jinky.TEXT) }
                 addView(ImageView(context).apply { setImageResource(R.drawable.ic_play); setColorFilter(Jinky.INK) },

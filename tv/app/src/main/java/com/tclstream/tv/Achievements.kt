@@ -23,7 +23,8 @@ data class Achievement(
     val rarity get() = Rarity.of(percent)
 }
 
-data class AchievementList(val total: Int, val unlocked: Int, val items: List<Achievement>, val error: String?)
+data class AchievementList(val total: Int, val unlocked: Int, val items: List<Achievement>, val error: String?,
+                           val progressHidden: Boolean = false)
 
 /** An achievement unlocked while playing (for the toast over the game). */
 data class AchievementUnlock(
@@ -71,7 +72,7 @@ object AchievementsApi {
                 x.optDouble("percent", -1.0))
         }
         val error = if (o.isNull("error")) null else o.optString("error").ifBlank { null }
-        return AchievementList(o.optInt("total"), o.optInt("unlocked"), items, error)
+        return AchievementList(o.optInt("total"), o.optInt("unlocked"), items, error, o.optBoolean("progressHidden"))
     }
 
     /** Unlocks the PC noticed after [after] (its clock, ms; -1 = just learn the clock). */

@@ -22,18 +22,51 @@ import android.widget.TextView
  * The Jinky look (design v2): ink ground, Montserrat for words, JetBrains Mono for numbers, the
  * blue square pixel of the logo as the recurring mark, white focus like a console.
  */
+/** A look for the whole TV app; chosen in Configurações › Temas e sons (the app restarts its screens). */
+enum class UiTheme(
+    val key: String, val label: String,
+    val ink: Int, val surface: Int, val raised: Int, val line: Int,
+    val text: Int, val soft: Int, val muted: Int, val dim: Int,
+    val accent: Int, val accentSoft: Int, val accentDeep: Int,
+    val corners: Float,      // multiplies every corner radius (retro: almost square)
+    val scanlines: Int,      // strength of the old-TV lines (0 = none)
+    val pixelFont: Boolean,  // headings in a pixel face
+    val art: Boolean,        // game artwork behind the screens
+) {
+    JINKY("jinky", "Jinky", 0xFF07090D.toInt(), 0xFF10141F.toInt(), 0xFF171C2A.toInt(), 0xFF23283A.toInt(),
+        0xFFF5F7FC.toInt(), 0xFFC8CFDF.toInt(), 0xFFA6AEC2.toInt(), 0xFF7F889E.toInt(),
+        0xFF4F8BFF.toInt(), 0xFF8DB3FF.toInt(), 0xFF2856D9.toInt(), 1f, 6, false, true),
+    MIDNIGHT("midnight", "Meia-noite", 0xFF000000.toInt(), 0xFF0B0B0D.toInt(), 0xFF151518.toInt(), 0xFF26262B.toInt(),
+        0xFFF5F5F7.toInt(), 0xFFC9C9CF.toInt(), 0xFFA0A0A8.toInt(), 0xFF7A7A82.toInt(),
+        0xFF4F8BFF.toInt(), 0xFF8DB3FF.toInt(), 0xFF2856D9.toInt(), 1f, 0, false, false),
+    RETRO("retro", "Retrô 32-bit", 0xFF1A1430.toInt(), 0xFF241B45.toInt(), 0xFF2E2357.toInt(), 0xFF3A2E66.toInt(),
+        0xFFF2EEFF.toInt(), 0xFFD3CCF2.toInt(), 0xFFA99FD6.toInt(), 0xFF857BB5.toInt(),
+        0xFF7CF2C8.toInt(), 0xFFB8FFE6.toInt(), 0xFF2FA98A.toInt(), 0.15f, 26, true, true);
+
+    companion object {
+        fun of(key: String?) = values().firstOrNull { it.key == key } ?: JINKY
+    }
+}
+
 object Jinky {
-    const val INK = 0xFF07090D.toInt()
-    const val SURFACE = 0xFF10141F.toInt()
-    const val RAISED = 0xFF171C2A.toInt()
-    const val LINE = 0xFF23283A.toInt()
-    const val TEXT = 0xFFF5F7FC.toInt()
-    const val SOFT = 0xFFC8CFDF.toInt()
-    const val MUTED = 0xFFA6AEC2.toInt()
-    const val DIM = 0xFF7F889E.toInt()
-    const val BLUE = 0xFF4F8BFF.toInt()
-    const val BLUE_SOFT = 0xFF8DB3FF.toInt()
-    const val BLUE_DEEP = 0xFF2856D9.toInt()
+    /** The theme in use; set before the screens are built. */
+    var theme = UiTheme.JINKY
+    /** Game artwork behind the home screen and pages (Configurações; Meia-noite never shows it). */
+    var artBackgrounds = true
+    /** Old-TV lines: 0 off, 1 subtle, 2 strong. */
+    var scanlineLevel = 1
+
+    val INK get() = theme.ink
+    val SURFACE get() = theme.surface
+    val RAISED get() = theme.raised
+    val LINE get() = theme.line
+    val TEXT get() = theme.text
+    val SOFT get() = theme.soft
+    val MUTED get() = theme.muted
+    val DIM get() = theme.dim
+    val BLUE get() = theme.accent
+    val BLUE_SOFT get() = theme.accentSoft
+    val BLUE_DEEP get() = theme.accentDeep
     const val AMBER = 0xFFFFB547.toInt()
     const val VIOLET = 0xFF9B7BFF.toInt()
     const val GREEN = 0xFF3DDC97.toInt()
@@ -42,12 +75,28 @@ object Jinky {
     const val MINT = 0xFF7CF2C8.toInt()
     const val PINK = 0xFFFF8AD8.toInt()
     /** Card over artwork. */
-    const val GLASS = 0xE010141F.toInt()
+    val GLASS get() = (0xE0 shl 24) or (theme.surface and 0xFFFFFF)
+
+    /** The ground colour at [alpha] (0-255), for scrims over artwork. */
+    fun ink(alpha: Int) = (alpha shl 24) or (theme.ink and 0xFFFFFF)
+
+    /** The card colour at [alpha] (0-255). */
+    fun surface(alpha: Int) = (alpha shl 24) or (theme.surface and 0xFFFFFF)
+
+    /** Whether game artwork shows behind the screens. */
+    val showArt get() = theme.art && artBackgrounds
 
     private val fonts = HashMap<String, Typeface>()
 
-    /** Montserrat at [weight] (500 medium … 800 extra bold). */
-    fun font(context: Context, weight: Int = 600): Typeface = variable(context, "fonts/Montserrat.ttf", weight)
+    /** Montserrat at [weight] (500 medium … 800 extra bold); the retro theme's headings are pixels. */
+    fun font(context: Context, weight: Int = 600): Typeface =
+        if (theme.pixelFont && weight >= 800) pixel(context) else variable(context, "fonts/Montserrat.ttf", weight)
+
+    private fun pixel(context: Context): Typeface = synchronized(fonts) {
+        fonts.getOrPut("pixel") {
+            try { Typeface.createFromAsset(context.assets, "fonts/Silkscreen-Bold.ttf") } catch (e: Exception) { Typeface.DEFAULT_BOLD }
+        }
+    }
 
     /** JetBrains Mono at [weight]: clock, latency, hours, percentages. */
     fun mono(context: Context, weight: Int = 500): Typeface = variable(context, "fonts/JetBrainsMono.ttf", weight)
@@ -66,15 +115,21 @@ object Jinky {
 
     fun rounded(color: Int, radius: Float, strokeWidth: Int = 0, strokeColor: Int = 0) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = radius
+        cornerRadius = radius * theme.corners
         if (strokeWidth > 0) setStroke(strokeWidth, strokeColor)
     }
 
     /** Thin lines of an old TV over artwork (the retro touch), as a repeating texture. */
     fun scanlines(context: Context, alpha: Int = 6): Drawable {
-        val step = (2 * context.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-        val bmp = Bitmap.createBitmap(1, step, Bitmap.Config.ARGB_8888)
-        Canvas(bmp).drawRect(0f, 0f, 1f, 1f, Paint().apply { color = Color.argb(alpha, 255, 255, 255) })
+        val step = (if (theme.pixelFont) 3 else 2) * context.resources.displayMetrics.density
+        val bmp = Bitmap.createBitmap(1, step.toInt().coerceAtLeast(2), Bitmap.Config.ARGB_8888)
+        // The theme sets the strength; the user's setting scales it (off, subtle, strong).
+        val base = theme.scanlines * alpha / 6
+        val a = when (scanlineLevel) { 0 -> 0; 2 -> base * 2; else -> base }.coerceIn(0, 90)
+        // Retro: dark lines like a CRT; otherwise faint light ones.
+        val dark = theme.pixelFont
+        Canvas(bmp).drawRect(0f, 0f, 1f, if (dark) 1.5f * context.resources.displayMetrics.density else 1f,
+            Paint().apply { color = if (dark) Color.argb(a, 0, 0, 0) else Color.argb(a, 255, 255, 255) })
         return BitmapDrawable(context.resources, bmp).apply { setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
     }
 

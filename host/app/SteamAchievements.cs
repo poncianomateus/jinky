@@ -17,6 +17,11 @@ public static class SteamAchievements
 
     public sealed record Unlock(long At, int AppId, string Game, Item Item, int Unlocked, int Total);
 
+    /// <summary>The list, and whether Steam hid this account's progress (private profile or game).</summary>
+    public sealed record Result(List<Item> Items, bool ProgressHidden);
+
+    sealed class ProgressHiddenException() : Exception("progresso privado na Steam");
+
     sealed record SchemaEntry(string Id, string Name, string Description, string Icon, string IconGray, bool Hidden);
 
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(12) };
@@ -32,9 +37,12 @@ public static class SteamAchievements
     /// The game's achievements (empty if it has none), or null if they can't be read. [fresh] skips
     /// the short cache of the account's progress (the in-game watcher).
     /// </summary>
-    public static List<Item>? Get(int appId, string? apiKey, bool fresh = false)
+    public static List<Item>? Get(int appId, string? apiKey, bool fresh = false) => Read(appId, apiKey, fresh)?.Items;
+
+    /// <summary>Like Get, also telling whether the account's progress was hidden by Steam.</summary>
+    public static Result? Read(int appId, string? apiKey, bool fresh = false)
     {
-        if (appId <= 0) return [];  // non-Steam games have no achievements
+        if (appId <= 0) return new([], false);  // non-Steam games have no achievements
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             LastError = "sem chave da API da Steam no Jinky do PC";
@@ -50,16 +58,20 @@ public static class SteamAchievements
         try
         {
             var schema = Schema(appId, apiKey);
-            if (schema.Count == 0) return [];
+            if (schema.Count == 0) return new([], false);
             var percent = Percentages(appId);
-            var mine = Mine(appId, apiKey, me, fresh);
+            // A private profile or game (or one shared by the family) hides the progress, not the list.
+            var hidden = false;
+            Dictionary<string, (bool, long)> mine;
+            try { mine = Mine(appId, apiKey, me, fresh); }
+            catch (ProgressHiddenException) { mine = []; hidden = true; }
             LastError = null;
-            return schema.Select(s =>
+            return new(schema.Select(s =>
             {
                 var (achieved, time) = mine.GetValueOrDefault(s.Id);
                 return new Item(s.Id, s.Name, s.Description, s.Icon, s.IconGray, s.Hidden, achieved, time,
                                 percent.GetValueOrDefault(s.Id, -1));
-            }).ToList();
+            }).ToList(), hidden);
         }
         catch (Exception ex)
         {
@@ -130,9 +142,12 @@ public static class SteamAchievements
     {
         lock (Lock)
             if (!fresh && Players.TryGetValue(appId, out var c) && DateTime.UtcNow - c.At < TimeSpan.FromSeconds(20)) return c.Mine;
-        var json = Http.GetStringAsync(
+        using var response = Http.GetAsync(
             $"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key={apiKey}&steamid={steamId}&appid={appId}")
             .GetAwaiter().GetResult();
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden) throw new ProgressHiddenException();
+        response.EnsureSuccessStatusCode();
+        var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         using var doc = JsonDocument.Parse(json);
         var stats = doc.RootElement.GetProperty("playerstats");
         if (stats.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.False)
