@@ -264,6 +264,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         r.setIdentity(pairingStore.deviceId())
         pairingStore.hosts().forEach { (host, key) -> r.addPairedHost(host, key) }
         hostCache.all().forEach { r.addKnownAddress(it.ip) }
+        // Android emulator on the PC (for trying the screens there): the PC is 10.0.2.2, which
+        // broadcast discovery can't reach.
+        if (Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish") r.addKnownAddress("10.0.2.2")
         pairing = null
         pairingCode = null
         startError = r.start(HOST_PORT)

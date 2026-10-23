@@ -29,7 +29,7 @@ android {
 
         ndk {
             // TCL 55P7K and Fire TV Sticks run ARM; x86_64 is only for the emulator.
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64", "x86")  // x86: the Google TV emulator
         }
         externalNativeBuild {
             cmake {
