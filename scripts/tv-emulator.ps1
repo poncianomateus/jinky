@@ -5,7 +5,8 @@
   Usage:  powershell -ExecutionPolicy Bypass -File scripts\tv-emulator.ps1 [-Build]
           -Build  rebuilds the TV app first (otherwise the last build is installed)
 
-  Keys in the emulator window: arrows = D-pad, Enter = OK, Esc = Back.
+  Keys in the emulator window: arrows = D-pad, Enter = OK, Esc = Back. A DualSense works too,
+  through jinky-padbridge (started here; build it with the engine).
   Needs: SVM (AMD-V) enabled in the BIOS and the Android Emulator hypervisor driver installed.
 #>
 param([switch]$Build)
@@ -49,3 +50,10 @@ Write-Host "== Installing Jinky"
 & $adb -e install -r $apk | Out-Null
 & $adb -e shell am start -n com.jinky.tv/com.tclstream.tv.MainActivity | Out-Null
 Write-Host "== Jinky is open in the emulator window (arrows, Enter = OK, Esc = Back)"
+
+# A DualSense on the PC drives the emulator too (it doesn't pass host controllers through).
+$bridge = "$root\build\host\Release\jinky-padbridge.exe"
+if ((Test-Path $bridge) -and -not (Get-Process jinky-padbridge -ErrorAction SilentlyContinue)) {
+    Start-Process $bridge -WindowStyle Minimized
+    Write-Host "== DualSense bridge on: D-pad/stick = arrows, Cross = OK, Circle = Back, Options = Menu"
+}

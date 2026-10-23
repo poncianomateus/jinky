@@ -37,3 +37,8 @@ endif()
 # Loopback test receiver: validates the host's stream without a TV.
 add_executable(jinky-probe ../../tools/probe/probe.cpp)
 target_link_libraries(jinky-probe PRIVATE tclproto xinput)
+
+# Development aid: a DualSense driving the Android TV emulator (scripts/tv-emulator.ps1).
+add_executable(jinky-padbridge ../../tools/padbridge/padbridge.cpp)
+target_link_libraries(jinky-padbridge PRIVATE hid setupapi ws2_32)
+target_compile_features(jinky-padbridge PRIVATE cxx_std_20)
