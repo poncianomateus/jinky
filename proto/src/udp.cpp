@@ -107,6 +107,15 @@ bool UdpSocket::enable_broadcast() {
     return true;
 }
 
+bool UdpSocket::set_tos(int tos) {
+#ifdef _WIN32
+    (void)tos;
+    return false;
+#else
+    return setsockopt(fd_, IPPROTO_IP, IP_TOS, &tos, sizeof tos) == 0;
+#endif
+}
+
 void UdpSocket::close() {
     if (fd_ == kInvalid) return;
 #ifdef _WIN32

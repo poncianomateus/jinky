@@ -32,6 +32,8 @@ bool Receiver::start(uint16_t host_port) {
         error_ = sock_.error();
         return false;
     }
+    // Controller input and resend requests ride the Wi-Fi's highest-priority queue to the PC.
+    if (!sock_.set_tos(0xB8)) LOGW("could not set the packet priority (IP_TOS)");
     running_ = true;
     state_ = kActive;
     session_wanted_ = false;  // home screen until the user picks "Jogar" or "Área de trabalho"

@@ -27,6 +27,7 @@
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
+#include "net_tuning.h"
 #include "netinfo.h"
 #include "nvenc_encoder.h"
 #include "rate_control.h"
@@ -189,6 +190,9 @@ int main(int argc, char** argv) {
         Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
         if (SUCCEEDED(capture.device()->QueryInterface(IID_PPV_ARGS(&dxgi))) && FAILED(dxgi->SetGPUThreadPriority(7)))
             TCL_WARN("main", "could not raise GPU priority (needs admin); continuing at normal priority");
+        // When a game keeps the GPU at 100%, capture and encode would otherwise wait behind its frames.
+        if (tcl::raise_gpu_scheduling_priority()) TCL_INFO("main", "GPU scheduling priority: high");
+        else TCL_WARN("main", "could not raise the GPU scheduling priority class");
     }
 
     tcl::FrameCompositor compositor;  // desktop + mouse cursor
@@ -225,6 +229,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     TCL_INFO("net", "waiting for a receiver on UDP port {} (Ctrl+C to stop)", opt.port);
+    tcl::StreamNetTuning net_tuning;  // QoS marks and Wi-Fi scan pause while a TV is watching
 
     std::optional<tclproto::Endpoint> peer;
     bool peer_desktop = false;  // the TV chose "Área de trabalho": no console mode for this session
@@ -308,6 +313,8 @@ int main(int argc, char** argv) {
     // keep_console: the TV went silent (Wi-Fi dropped) rather than leaving; console mode (Big
     // Picture, 60 Hz, muted PC) stays on for a while so it can come straight back to the game.
     auto publish_peer = [&](bool keep_console = false) {
+        net_tuning.set_peer(sock.native_handle(), peer);
+        net_tuning.set_streaming(peer.has_value());
         {
             std::lock_guard lock(rx_mu);
             input_peer = peer;

@@ -37,6 +37,12 @@ public:
     // Waits up to timeout_ms. Returns bytes received, 0 on timeout, -1 on error.
     int recv_from(std::span<uint8_t> buf, Endpoint& from, int timeout_ms);
 
+    // DSCP/TOS byte of outgoing packets (Android/Linux; Windows marks traffic with QoS flows instead).
+    // 0xB8 = EF: Wi-Fi sends it in the highest-priority (voice) queue.
+    bool set_tos(int tos);
+    // OS socket handle, for platform tuning such as QoS.
+    uintptr_t native_handle() const { return uintptr_t(fd_); }
+
     const std::string& error() const { return error_; }
 
 private:

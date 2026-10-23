@@ -10,6 +10,7 @@ add_subdirectory(../../proto proto)
 
 add_executable(jinky-engine
     src/main.cpp
+    src/net_tuning.cpp
     src/audio_capture.cpp
     src/capture.cpp
     src/console_mode.cpp
@@ -26,7 +27,7 @@ add_executable(jinky-engine
 target_compile_features(jinky-engine PRIVATE cxx_std_20)
 target_compile_definitions(jinky-engine PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE JINKY_VERSION="${JINKY_VERSION}")
 target_include_directories(jinky-engine PRIVATE ../../third_party/nvenc ../../third_party/vigemclient/include)
-target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler bcrypt iphlpapi)
+target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler bcrypt iphlpapi qwave wlanapi)
 if(MSVC)
     target_compile_options(jinky-engine PRIVATE /W4 /permissive- /utf-8)
     # Third-party code is compiled as-is; don't hold it to our warning level.
