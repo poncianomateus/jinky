@@ -118,6 +118,18 @@ object Jinky {
         tag = sizeDp
     }
 
+    /** Battery of the first controller that reports one, in % (Android 12+), else null. */
+    fun padBattery(): Int? {
+        if (Build.VERSION.SDK_INT < 31) return null
+        for (id in InputDevice.getDeviceIds()) {
+            val d = InputDevice.getDevice(id) ?: continue
+            if ((d.sources and InputDevice.SOURCE_GAMEPAD) != InputDevice.SOURCE_GAMEPAD) continue
+            val b = d.batteryState
+            if (b.isPresent && !b.capacity.isNaN()) return (b.capacity * 100).toInt()
+        }
+        return null
+    }
+
     fun hours(minutes: Int): String = when {
         minutes <= 0 -> ""
         minutes < 60 -> "$minutes min"

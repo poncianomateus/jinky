@@ -31,6 +31,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var helpScreen: HelpScreen
     private lateinit var libraryScreen: LibraryScreen
     private lateinit var gameScreen: GameScreen
+    private lateinit var achievementsScreen: AchievementsScreen
+    private lateinit var toast: AchievementToast
+    private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
+    private var achievementsOverGame = false        // the achievements page opened from the menu
+    private var unlocksAfter = -1L                  // PC clock of the last unlock check (-1 = learn it)
+    private var unlockPolling = false
+    private var lastUnlockPoll = 0L
     private var gameOrigin = Page.HOME  // where Back returns from a game's page
     private lateinit var launchScreen: LaunchScreen
     private lateinit var hint: TextView
@@ -40,7 +47,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var wasInSession = false
@@ -86,10 +93,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
                 statusText.visibility = if (inSession && settings.showStats) View.VISIBLE else View.GONE
                 if (!inSession) gamesFrom = null  // "last played" changed: reload the home row
+                if (inSession) unlocksAfter = -1L
+                else {
+                    achievementsOverGame = false
+                    sessionGame = null
+                }
             }
             if (inSession) {
-                showPage(null)
+                // (the achievements page may be open over the game, from the menu)
+                if (!achievementsOverGame) showPage(null)
                 updateStartScreen()
+                pollUnlocks()
             } else {
                 // (the session starts a moment after the request; don't cancel in between)
                 if (launching != null && android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) stopLaunching()
@@ -139,6 +153,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         else -> "Steam Big Picture"
                     }
                     sessionDesktop = desktop
+                    sessionGame = null
                     receiver?.connect(host.ip, desktop)
                     homeScreen.visibility = View.GONE
                     startScreen.setShown(true)
@@ -168,10 +183,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onPlay = { game -> homeHost?.let { playGame(it, game) } },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(libraryScreen, FrameLayout.LayoutParams(-1, -1))
-            gameScreen = GameScreen(this@MainActivity,
+            gameScreen = GameScreen(this@MainActivity, settings,
                 onPlay = { game -> homeHost?.let { playGame(it, game) } },
-                onInstall = { game -> homeHost?.let { installGame(it, game) } }).apply { visibility = View.GONE }
+                onInstall = { game -> homeHost?.let { installGame(it, game) } },
+                onAchievements = { game -> openAchievements(game, overGame = false) }).apply { visibility = View.GONE }
             addView(gameScreen, FrameLayout.LayoutParams(-1, -1))
+            achievementsScreen = AchievementsScreen(this@MainActivity, settings) { closeAchievements() }.apply { visibility = View.GONE }
+            addView(achievementsScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             hint = TextView(this@MainActivity).apply {
@@ -206,11 +224,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onHome = {
                     // Ends the session (the PC goes back to normal) and shows the home screen.
                     stopLaunching()
+                    sessionGame = null
                     receiver?.disconnect()
                     hideMenu()
                 },
-                onExit = { finish() })
+                onExit = { finish() },
+                onAchievements = {
+                    hideMenu()
+                    sessionGame?.let { openAchievements(it, overGame = true) }
+                })
             addView(menu, FrameLayout.LayoutParams(-1, -1))
+            toast = AchievementToast(this@MainActivity)
+            addView(toast, FrameLayout.LayoutParams(-1, -1))
         })
         Log.i(TAG, "hardware:\n$hardwareReport")
         Log.i(TAG, "tuning: $tuning displayHz=$displayHz surfaceRate=$surfaceRate")
@@ -308,6 +333,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             helpScreen.visibility == View.VISIBLE -> Page.HELP
             libraryScreen.visibility == View.VISIBLE -> Page.LIBRARY
             gameScreen.visibility == View.VISIBLE -> Page.GAME
+            achievementsScreen.visibility == View.VISIBLE -> Page.ACHIEVEMENTS
             else -> null
         }
         if (p != null) page = p
@@ -316,6 +342,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         helpScreen.visibility = if (p == Page.HELP) View.VISIBLE else View.GONE
         libraryScreen.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
         gameScreen.visibility = if (p == Page.GAME) View.VISIBLE else View.GONE
+        achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
         if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
@@ -326,6 +353,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.HELP -> helpScreen
                 Page.LIBRARY -> libraryScreen
                 Page.GAME -> gameScreen
+                Page.ACHIEVEMENTS -> achievementsScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -340,6 +368,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.HELP -> helpScreen.focusFirst()
             Page.LIBRARY -> libraryScreen.focusFirst()
             Page.GAME -> gameScreen.focusFirst()
+            Page.ACHIEVEMENTS -> achievementsScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -350,8 +379,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (host.status != HomeHost.Status.READY) return
         gameOrigin = from
         showPage(Page.GAME)
-        gameScreen.show(game, host.ip, host.updatePort)
+        gameScreen.show(game, host.ip, host.updatePort, if (from == Page.HOME) "Início" else "Biblioteca")
         gameScreen.focusFirst()
+    }
+
+    /** A game's achievements: from its page, or over the game from the menu ([overGame]). */
+    private fun openAchievements(game: LibraryGame, overGame: Boolean) {
+        val host = homeHost ?: return
+        achievementsOverGame = overGame
+        showPage(Page.ACHIEVEMENTS)
+        achievementsScreen.show(game, host.ip, host.updatePort)
+    }
+
+    private fun closeAchievements() {
+        if (achievementsOverGame) {
+            achievementsOverGame = false
+            showPage(null)  // back to the game
+        } else {
+            showPage(Page.GAME)
+        }
+    }
+
+    /** While playing: asks the PC every few seconds for achievements just unlocked, and shows them. */
+    private fun pollUnlocks() {
+        val host = homeHost ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (unlockPolling || now - lastUnlockPoll < 5000 || host.updatePort == 0) return
+        lastUnlockPoll = now
+        unlockPolling = true
+        val after = unlocksAfter
+        Thread {
+            val result = try { AchievementsApi.unlocks(host.ip, host.updatePort, after) } catch (e: Exception) { null }
+            ui.post {
+                unlockPolling = false
+                if (result == null) return@post
+                unlocksAfter = result.first
+                result.second.forEach { toast.show(it) }
+            }
+        }.start()
     }
 
     /**
@@ -364,6 +429,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         launching = game
         launchedAt = android.os.SystemClock.elapsedRealtime()
         sessionTitle = game.name
+        sessionGame = game
         sessionDesktop = false
         showPage(Page.HOME)
         homeScreen.visibility = View.GONE
@@ -549,7 +615,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun updateUiInput() {
         val ui = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
             helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
-            gameScreen.visibility == View.VISIBLE ||
+            gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
             menu.isOpen
         if (gamepads?.menuOpen != ui) gamepads?.menuOpen = ui
     }
@@ -686,9 +752,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun showMenu() {
         if (menu.isOpen) return
-        menu.open(sessionTitle.ifEmpty { "Jinky" }, homeHost?.name ?: (receiver?.hostAddress() ?: ""), streamLine(),
-            canClose = !sessionDesktop, statsShown = statusText.visibility == View.VISIBLE)
+        val game = sessionGame
+        val host = homeHost
+        menu.open(sessionTitle.ifEmpty { "Jinky" }, streamLine(), canClose = !sessionDesktop,
+            statsShown = statusText.visibility == View.VISIBLE, game = game, art = host?.let { it.ip to it.updatePort })
         gamepads?.menuOpen = true
+        // The achievements the user follows in this game, once the PC answers.
+        if (game != null && host != null && settings.tracked(game.id).isNotEmpty()) Thread {
+            val list = try { AchievementsApi.fetch(host.ip, host.updatePort, game.id) } catch (e: Exception) { null }
+            val ids = settings.tracked(game.id)
+            val items = list?.items.orEmpty().filter { it.id in ids }
+            ui.post { if (menu.isOpen) menu.showTracked(items) }
+        }.start()
     }
 
     private fun hideMenu() {
@@ -700,7 +775,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onBackPressed() {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
+        if (achievementsScreen.visibility == View.VISIBLE) closeAchievements()
+        else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
         else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
         else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (settingsScreen.visibility == View.VISIBLE) showPage(Page.HOME)

@@ -97,7 +97,28 @@ public sealed class TvService : IDisposable
             return false;  // port busy: TVs just won't see updates or the library
         }
         _ = Task.Run(AcceptLoop);
+        _ = Task.Run(WatchAchievements);
         return true;
+    }
+
+    /// <summary>While a TV plays, looks for newly unlocked achievements every few seconds.</summary>
+    async Task WatchAchievements()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(10), _stop.Token); }
+            catch (OperationCanceledException) { return; }
+            if (Streaming?.Invoke() != true) continue;
+            try
+            {
+                var known = _known;
+                await Task.Run(() => SteamAchievements.Watch(SteamApiKey?.Invoke(), id => known.GetValueOrDefault(id, "")));
+            }
+            catch (Exception)
+            {
+                // Offline or Steam refused: try again next round.
+            }
+        }
     }
 
     async Task AcceptLoop()
@@ -223,6 +244,40 @@ public sealed class TvService : IDisposable
                         trailers = store?.Trailers.Select(t => new { name = t.Name, thumb = t.Thumb, hls = t.Hls }) ?? [],
                         minutes = local?.Minutes ?? 0,
                         sizeBytes = local?.SizeBytes ?? 0,
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/achievements") && int.TryParse(request.Query("id"), out var achId))
+                {
+                    var list = await Task.Run(() => SteamAchievements.Get(achId, SteamApiKey?.Invoke()));
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        error = list is null ? SteamAchievements.LastError ?? "erro" : null,
+                        total = list?.Count ?? 0,
+                        unlocked = list?.Count(a => a.Achieved) ?? 0,
+                        items = (list ?? []).Select(a => new
+                        {
+                            id = a.Id, name = a.Name, desc = a.Description, icon = a.Icon, iconGray = a.IconGray,
+                            hidden = a.Hidden, achieved = a.Achieved, time = a.UnlockTime, percent = a.Percent,
+                        }),
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/achievements/unlocks"))
+                {
+                    // after=-1: just learn the PC's clock (nothing from before this TV started asking).
+                    var after = long.TryParse(request.Query("after"), out var a) ? a : -1;
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var unlocks = after < 0 ? [] : SteamAchievements.UnlocksAfter(after);
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        now,
+                        unlocks = unlocks.Select(u => new
+                        {
+                            at = u.At, appId = u.AppId, game = u.Game, id = u.Item.Id, name = u.Item.Name,
+                            desc = u.Item.Description, icon = u.Item.Icon, percent = u.Item.Percent,
+                            unlocked = u.Unlocked, total = u.Total,
+                        }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
                 }

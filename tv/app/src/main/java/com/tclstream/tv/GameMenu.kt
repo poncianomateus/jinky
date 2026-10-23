@@ -2,20 +2,25 @@ package com.tclstream.tv
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
+import android.graphics.Outline
+import android.graphics.PorterDuff
 import android.graphics.drawable.GradientDrawable
-import android.util.TypedValue
+import android.graphics.drawable.StateListDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
-import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 
 /**
- * The menu over a game (View + Menu held on the controller, or Back on the remote), PS5 style: a
- * panel slides in from the right over the dimmed game, with what is playing, live stream numbers
- * and the actions.
+ * The quick menu over a game (design v2, like the PS5's control centre): the game keeps showing
+ * above, a dark band rises from the bottom with what is playing, live stream numbers, the
+ * controller's battery, the achievements being followed, and a row of big actions.
+ * "Fechar jogo" asks for a second press so a game is never closed by accident.
  */
 class GameMenu(
     context: Context,
@@ -24,99 +29,184 @@ class GameMenu(
     private val onToggleStats: () -> Unit,
     private val onHome: () -> Unit,
     private val onExit: () -> Unit,
+    private val onAchievements: () -> Unit,
 ) : TvPage(context) {
 
-    private val dim = View(context).apply { setBackgroundColor(0x99000000.toInt()) }
-    private val panel = LinearLayout(context).apply {
+    private val shade = View(context).apply {
+        background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(0x0007090D, 0x6607090D, 0xE607090D.toInt(), 0xFA07090D.toInt()))
+    }
+    private val band = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+    private val title = text(15f, Jinky.TEXT, bold = true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+    private val stats = mono(9f, Jinky.SOFT)
+    private val trackCard = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(32), dp(34), dp(32), dp(24))
-        background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-            intArrayOf(0xF20D131D.toInt(), 0xFA0A0E16.toInt()))
+        setPadding(dp(11), dp(9), dp(11), dp(9))
+        background = Jinky.rounded(0xF010141F.toInt(), dp(11).toFloat())
     }
-    private val playing = text(14f, 0xFF8FA0B8.toInt()).apply { letterSpacing = 0.12f }
-    private val title = text(28f, Color.WHITE, bold = true).apply { maxLines = 2 }
-    private val pc = text(16f, StartScreen.MUTED)
-    private val stats = text(15f, Color.WHITE).apply {
-        setPadding(dp(14), dp(8), dp(14), dp(8))
-        background = GradientDrawable().apply { setColor(0x1FFFFFFF); cornerRadius = dp(10).toFloat() }
-    }
-    private val resume = row()
-    private val closeGame = row()
-    private val statsRow = row()
-    private val home = row()
-    private val exit = row()
+    private val trackRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val tiles = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+    private val resume = tile(R.drawable.ic_play, "Continuar")
+    private val achievements = tile(R.drawable.ic_trophy, "Conquistas")
+    private val statsTile = tile(R.drawable.ic_gauge, "Desempenho")
+    private val home = tile(R.drawable.ic_home, "Início")
+    private val closeGame = tile(R.drawable.ic_power, "Fechar jogo", danger = true)
+    private val exit = tile(R.drawable.ic_exit, "Sair do Jinky")
+    private var armedClose = false
+    private var line = ""
 
     init {
         visibility = View.GONE
         setBackgroundColor(Color.TRANSPARENT)
-        addView(dim, LayoutParams(-1, -1))
-        panel.addView(playing.apply { text = "JOGANDO AGORA" })
-        panel.addView(title, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-        panel.addView(pc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
-        panel.addView(stats, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
-        panel.addView(View(context), LinearLayout.LayoutParams(1, dp(18)))
-        listOf(resume, closeGame, statsRow, home, exit).forEachIndexed { i, b ->
-            panel.addView(b, LinearLayout.LayoutParams(-1, -2).apply { if (i > 0) topMargin = dp(8) })
+        addView(shade, LayoutParams(-1, -1))
+
+        cover.clipToOutline = true
+        cover.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(6).toFloat())
         }
-        addView(panel, LayoutParams(dp(PANEL_W), -1, Gravity.END))
+        trackCard.addView(mono(6.5f, Jinky.MUTED, 700).apply { text = "ACOMPANHANDO"; letterSpacing = 0.2f })
+        trackCard.addView(trackRows, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
+
+        band.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            addView(cover, LinearLayout.LayoutParams(dp(38), dp(57)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(title)
+                addView(stats, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(11), 0, dp(11), dp(2)) })
+            addView(trackCard, LinearLayout.LayoutParams(dp(260), -2))
+        })
+        for (t in listOf(resume, achievements, statsTile, home, closeGame, exit))
+            tiles.addView(t, LinearLayout.LayoutParams(0, dp(80), 1f).apply { if (tiles.childCount > 0) marginStart = dp(8) })
+        band.addView(tiles, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        addView(band, LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(48), 0, dp(48), dp(32)) })
 
         resume.setOnClickListener { onResume() }
-        closeGame.setOnClickListener { onCloseGame() }
-        statsRow.setOnClickListener { onToggleStats() }
+        achievements.setOnClickListener { onAchievements() }
+        statsTile.setOnClickListener { onToggleStats() }
         home.setOnClickListener { onHome() }
         exit.setOnClickListener { onExit() }
+        closeGame.setOnClickListener {
+            if (!armedClose) {
+                armedClose = true
+                setLabel(closeGame, "Aperte de novo")
+                closeGame.postDelayed(disarm, 3000)
+            } else {
+                disarm.run()
+                onCloseGame()
+            }
+        }
+        closeGame.setOnFocusChangeListener { v, has -> focusLook(v, has); if (!has) disarm.run() }
     }
 
-    /** Open as far as input is concerned (the panel may still be sliding out). */
+    private val disarm = Runnable {
+        armedClose = false
+        setLabel(closeGame, "Fechar jogo")
+    }
+
+    /** Open as far as input is concerned (the band may still be sliding out). */
     var isOpen = false
         private set
 
-    /** [game]: what is playing; [canClose]: a game can be closed from here; [statsShown]: panel on. */
-    fun open(game: String, pcName: String, streamLine: String, canClose: Boolean, statsShown: Boolean) {
-        title.text = game
-        pc.text = pcName
-        stats.text = streamLine
-        resume.text = twoLines("Continuar jogando", "")
-        closeGame.text = twoLines("Fechar jogo", "Encerra o jogo no PC e volta ao início")
+    /**
+     * [game]: what is playing (null for Big Picture / desktop); [art]: PC address for its cover;
+     * [canClose]: a game can be closed from here; [statsShown]: the performance panel is on.
+     */
+    fun open(name: String, streamLine: String, canClose: Boolean, statsShown: Boolean, game: LibraryGame?, art: Pair<String, Int>?) {
+        title.text = name
+        line = streamLine
+        updateStats()
         closeGame.gone(!canClose)
-        statsRow.text = twoLines("Desempenho na tela", if (statsShown) "Ligado" else "Desligado")
-        home.text = twoLines("Voltar ao início", "O jogo continua aberto no PC")
-        exit.text = twoLines("Sair do Jinky", "")
+        achievements.gone(game == null || game.nonSteam)
+        setLabel(statsTile, if (statsShown) "Desempenho: ligado" else "Desempenho")
+        cover.setImageDrawable(Jinky.rounded(Jinky.RAISED, dp(6).toFloat()))
+        if (game != null && art != null) ArtLoader.load(art.first, art.second, game.id, "cover", 2) { bmp -> if (bmp != null) cover.setImageBitmap(bmp) }
+        trackCard.gone(true)
+        disarm.run()
         if (isOpen) return
         isOpen = true
         visibility = View.VISIBLE
-        dim.alpha = 0f
-        dim.animate().alpha(1f).setDuration(220).start()
-        panel.translationX = dp(PANEL_W).toFloat()
-        panel.animate().translationX(0f).setDuration(280).setInterpolator(DecelerateInterpolator(2f)).start()
-        resume.requestFocus()
+        shade.alpha = 0f
+        shade.animate().alpha(1f).setDuration(220).start()
+        band.translationY = dp(60).toFloat()
+        band.alpha = 0f
+        band.animate().translationY(0f).alpha(1f).setDuration(300).setInterpolator(DecelerateInterpolator(2f)).start()
+        resume.requestFocusFromTouch()
+    }
+
+    /** The achievements followed in this game (filled in once the PC answers). */
+    fun showTracked(items: List<Achievement>) {
+        trackRows.removeAllViews()
+        trackCard.gone(items.isEmpty())
+        for (a in items) {
+            trackRows.addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(View(context).apply { setBackgroundColor(a.rarity.color) }, LinearLayout.LayoutParams(dp(5), dp(5)).apply { marginEnd = dp(7) })
+                addView(text(9.5f, if (a.achieved) Jinky.MUTED else Jinky.TEXT, bold = true).apply {
+                    text = a.name
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(mono(8f, a.rarity.soft).apply {
+                    text = if (a.achieved) "✓" else if (a.percent >= 0) String.format(java.util.Locale("pt", "BR"), "%.1f%%", a.percent) else ""
+                }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6) })
+            }, LinearLayout.LayoutParams(-1, -2).apply { if (trackRows.childCount > 0) topMargin = dp(5) })
+        }
     }
 
     fun updateStream(streamLine: String) {
-        stats.text = streamLine
+        line = streamLine
+        updateStats()
+    }
+
+    private fun updateStats() {
+        val battery = Jinky.padBattery()
+        stats.text = if (battery != null) "$line   |   Controle $battery%" else line
     }
 
     fun close() {
         if (!isOpen) return
         isOpen = false
-        dim.animate().alpha(0f).setDuration(180).start()
-        panel.animate().translationX(dp(PANEL_W).toFloat()).setDuration(220).setInterpolator(DecelerateInterpolator())
+        disarm.run()
+        shade.animate().alpha(0f).setDuration(180).start()
+        band.animate().translationY(dp(40).toFloat()).alpha(0f).setDuration(200).setInterpolator(DecelerateInterpolator())
             .withEndAction { if (!isOpen) visibility = View.GONE }.start()
     }
 
-    private fun row() = Button(context).apply {
-        isAllCaps = false
-        gravity = Gravity.START or Gravity.CENTER_VERTICAL
-        setPadding(dp(22), dp(11), dp(22), dp(11))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        setLineSpacing(0f, 1.1f)
-        setTextColor(focusColors(0xFF06101F.toInt(), Color.WHITE))
-        background = states(Color.WHITE, 0x14FFFFFF, 14)
-        stateListAnimator = null
+    // --- tiles ---
+
+    private fun tile(icon: Int, label: String, danger: Boolean = false) = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        isFocusable = true
+        isClickable = true
+        tag = danger
+        background = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), Jinky.rounded(Jinky.TEXT, dp(12).toFloat()))
+            addState(intArrayOf(), Jinky.rounded(0xF010141F.toInt(), dp(12).toFloat()))
+        }
+        addView(ImageView(context).apply {
+            setImageResource(icon)
+            setColorFilter(if (danger) Jinky.RED else Jinky.TEXT, PorterDuff.Mode.SRC_IN)
+        }, LinearLayout.LayoutParams(dp(21), dp(21)))
+        addView(text(10f, Jinky.TEXT, bold = true).apply { text = label; gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(7) })
+        setOnFocusChangeListener { v, has -> focusLook(v, has) }
     }
 
-    companion object {
-        private const val PANEL_W = 420
+    private fun focusLook(v: View, has: Boolean) {
+        val t = v as LinearLayout
+        (t.getChildAt(0) as ImageView).setColorFilter(
+            if (has) Jinky.INK else if (t.tag == true) Jinky.RED else Jinky.TEXT, PorterDuff.Mode.SRC_IN)
+        (t.getChildAt(1) as TextView).setTextColor(if (has) Jinky.INK else Jinky.TEXT)
+        v.animate().scaleX(if (has) 1.05f else 1f).scaleY(if (has) 1.05f else 1f).setDuration(160).start()
+    }
+
+    private fun setLabel(t: LinearLayout, label: String) {
+        (t.getChildAt(1) as TextView).text = label
     }
 }

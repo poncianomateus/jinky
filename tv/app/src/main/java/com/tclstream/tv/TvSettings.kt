@@ -33,7 +33,20 @@ class TvSettings(context: Context) {
         return id !in now
     }
 
+    /** Achievements of [gameId] the user follows (shown in the menu over the game), at most 5. */
+    fun tracked(gameId: Int): List<String> =
+        prefs.getString("track_$gameId", "")!!.split('\u0001').filter { it.isNotEmpty() }
+
+    /** Follows or stops following [id]. Returns true if it is followed now (false when already 5). */
+    fun toggleTrack(gameId: Int, id: String): Boolean {
+        val now = tracked(gameId)
+        val next = if (id in now) now - id else if (now.size >= MAX_TRACKED) return false else now + id
+        prefs.edit().putString("track_$gameId", next.joinToString("\u0001")).apply()
+        return id in next
+    }
+
     companion object {
         val BITRATES = listOf(0, 15, 20, 30, 40, 50, 60)
+        const val MAX_TRACKED = 5
     }
 }
