@@ -1,22 +1,19 @@
 // jinky-padbridge — drives the Android TV emulator with a DualSense, for trying the Jinky TV app
 // on the PC (the emulator does not pass host controllers through).
 //
-// Reads the controller straight from HID (USB or Bluetooth) and sends key events to the emulator
-// console (127.0.0.1:5554), which reach Android instantly:
-//   D-pad / left stick = arrows   Cross = OK   Circle = Back   Options = Menu
+// Reads the controller straight from HID (USB or Bluetooth) and mirrors it into the emulator as a
+// real gamepad: Android's `hid` tool (over adb) creates a virtual HID device there, so the TV app
+// sees a controller exactly as it would on a TV — buttons, D-pad, sticks and triggers.
 //
-// Usage: jinky-padbridge [console-port]
-#include <winsock2.h>
-#include <ws2tcpip.h>
+// Usage: jinky-padbridge
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -55,12 +52,10 @@ Pad open_dualsense() {
             if (caps.UsagePage == 1 && (caps.Usage == 4 || caps.Usage == 5)) {
                 found = {h, caps.InputReportByteLength, caps.InputReportByteLength > 64};
                 // Over Bluetooth the pad sends a reduced report until its calibration is read once.
-                if (found.bluetooth) {
+                if (found.bluetooth && caps.FeatureReportByteLength) {
                     std::vector<uint8_t> feature(caps.FeatureReportByteLength);
-                    if (!feature.empty()) {
-                        feature[0] = 0x05;
-                        HidD_GetFeature(h, feature.data(), ULONG(feature.size()));
-                    }
+                    feature[0] = 0x05;
+                    HidD_GetFeature(h, feature.data(), ULONG(feature.size()));
                 }
                 continue;
             }
@@ -71,98 +66,126 @@ Pad open_dualsense() {
     return found;
 }
 
-struct Buttons {
-    bool up = false, down = false, left = false, right = false, ok = false, back = false, menu = false;
-    bool operator==(const Buttons&) const = default;
-};
+// The virtual gamepad's report: id, 16 buttons, hat (0-7, 8 = centred), LX LY RX RY, L2 R2.
+using Report = std::vector<int>;
 
-// DualSense input report -> the buttons the TV app cares about.
-bool parse(const Pad& pad, const uint8_t* r, size_t n, Buttons& b) {
-    uint8_t lx, ly, b0, b1;
-    if (!pad.bluetooth && r[0] == 0x01 && n >= 11) {  // USB
-        lx = r[1], ly = r[2], b0 = r[8], b1 = r[9];
-    } else if (pad.bluetooth && r[0] == 0x31 && n >= 12) {  // Bluetooth, full report
-        lx = r[2], ly = r[3], b0 = r[9], b1 = r[10];
-    } else if (pad.bluetooth && r[0] == 0x01 && n >= 7) {  // Bluetooth, reduced report
-        lx = r[1], ly = r[2], b0 = r[5], b1 = r[6];
+// Gamepad with 16 buttons, a hat, two sticks and two analog triggers (brake/gas), report id 1.
+// Buttons follow Linux's gamepad order: 1 A, 2 B, 4 X, 5 Y, 7 L1, 8 R1, 9 L2, 10 R2, 11 Select,
+// 12 Start, 13 Mode, 14 L3, 15 R3.
+const char* kDescriptor =
+    "[5,1,9,5,161,1,133,1,"
+    "5,9,25,1,41,16,21,0,37,1,117,1,149,16,129,2,"
+    "5,1,9,57,21,0,37,7,53,0,70,59,1,101,20,117,4,149,1,129,66,"
+    "117,4,149,1,129,3,"
+    "5,1,9,48,9,49,9,50,9,53,21,0,38,255,0,117,8,149,4,129,2,"
+    "5,2,9,197,9,196,21,0,38,255,0,117,8,149,2,129,2,"
+    "192]";
+
+bool to_report(const Pad& pad, const uint8_t* r, size_t n, Report& out) {
+    const uint8_t* s;    // lx ly rx ry l2 r2
+    uint8_t b0, b1, b2;  // hat + face buttons, shoulders/sticks/menus, PS
+    if (!pad.bluetooth && r[0] == 0x01 && n >= 11) {
+        s = r + 1, b0 = r[8], b1 = r[9], b2 = r[10];
+    } else if (pad.bluetooth && r[0] == 0x31 && n >= 12) {
+        s = r + 2, b0 = r[9], b1 = r[10], b2 = r[11];
+    } else if (pad.bluetooth && r[0] == 0x01 && n >= 10) {  // reduced Bluetooth report
+        static uint8_t sticks[6];
+        std::copy(r + 1, r + 5, sticks);
+        sticks[4] = r[8], sticks[5] = r[9];
+        s = sticks, b0 = r[5], b1 = r[6], b2 = r[7];
     } else {
         return false;
     }
-    const int hat = b0 & 0x0F;  // 0 = up, clockwise, 8 = released
-    b.up = hat == 7 || hat == 0 || hat == 1 || ly < 50;
-    b.right = (hat >= 1 && hat <= 3) || lx > 205;
-    b.down = (hat >= 3 && hat <= 5) || ly > 205;
-    b.left = (hat >= 5 && hat <= 7) || lx < 50;
-    b.ok = b0 & 0x20;     // Cross
-    b.back = b0 & 0x40;   // Circle
-    b.menu = b1 & 0x20;   // Options
+    int buttons = 0;
+    auto set = [&](bool on, int button) { if (on) buttons |= 1 << (button - 1); };
+    set(b0 & 0x20, 1);   // Cross    -> A
+    set(b0 & 0x40, 2);   // Circle   -> B
+    set(b0 & 0x10, 4);   // Square   -> X
+    set(b0 & 0x80, 5);   // Triangle -> Y
+    set(b1 & 0x01, 7);   // L1
+    set(b1 & 0x02, 8);   // R1
+    set(b1 & 0x04, 9);   // L2
+    set(b1 & 0x08, 10);  // R2
+    set(b1 & 0x10, 11);  // Create   -> Select (View)
+    set(b1 & 0x20, 12);  // Options  -> Start (Menu)
+    set(b2 & 0x01, 13);  // PS       -> Mode (Guide)
+    set(b1 & 0x40, 14);  // L3
+    set(b1 & 0x80, 15);  // R3
+    out = {1, buttons & 0xFF, buttons >> 8, b0 & 0x0F, s[0], s[1], s[2], s[3], s[4], s[5]};
     return true;
 }
 
-class Console {
+std::string json(const Report& r) {
+    std::string s = R"({"id":1,"command":"report","report":[)";
+    for (size_t i = 0; i < r.size(); ++i) s += (i ? "," : "") + std::to_string(r[i]);
+    return s + "]}\n";
+}
+
+// `adb -e shell hid -`: Android's HID tool reading commands from our pipe.
+class Emulator {
 public:
-    explicit Console(int port) : port_(port) {}
-    ~Console() { close(); }
+    ~Emulator() { stop(); }
 
     bool send(const std::string& line) {
-        if (s_ == INVALID_SOCKET && !connect()) return false;
-        const std::string data = line + "\n";
-        if (::send(s_, data.data(), int(data.size()), 0) < 0) {
-            close();
+        if (!stdin_ && !start()) return false;
+        DWORD n = 0;
+        if (!WriteFile(stdin_, line.data(), DWORD(line.size()), &n, nullptr)) {
+            std::puts("emulator gone; waiting for it");
+            stop();
             return false;
         }
         return true;
     }
 
 private:
-    bool connect() {
-        s_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        sockaddr_in a{};
-        a.sin_family = AF_INET;
-        a.sin_port = htons(uint16_t(port_));
-        inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-        if (::connect(s_, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
-            close();
+    bool start() {
+        const char* local = std::getenv("LOCALAPPDATA");
+        if (!local) return false;
+        std::string cmd = "\"" + std::string(local) + "\\Android\\Sdk\\platform-tools\\adb.exe\" -e shell hid -";
+        SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+        HANDLE read = nullptr, write = nullptr;
+        if (!CreatePipe(&read, &write, &sa, 0)) return false;
+        SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0);
+        STARTUPINFOA si{sizeof si};
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = read;
+        si.hStdOutput = si.hStdError = GetStdHandle(STD_OUTPUT_HANDLE);
+        PROCESS_INFORMATION pi{};
+        const bool ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+                                       &si, &pi);
+        CloseHandle(read);
+        if (!ok) {
+            CloseHandle(write);
             return false;
         }
-        // Drain the console's answers ("OK") so its buffer never fills.
-        reader_ = std::thread([s = s_] {
-            char buf[1024];
-            while (recv(s, buf, sizeof buf, 0) > 0) {
-            }
-        });
-        reader_.detach();
-        std::string token;
-        if (const char* home = std::getenv("USERPROFILE"))
-            std::getline(std::ifstream(std::string(home) + "\\.emulator_console_auth_token"), token);
-        const std::string auth = "auth " + token + "\n";
-        ::send(s_, auth.data(), int(auth.size()), 0);
-        std::printf("connected to the emulator on port %d\n", port_);
+        CloseHandle(pi.hThread);
+        process_ = pi.hProcess;
+        stdin_ = write;
+        const std::string reg = std::string(R"j({"id":1,"command":"register","name":"DualSense (Jinky bridge)",)j") +
+                                R"j("vid":4617,"pid":1,"bus":"usb","descriptor":)j" + kDescriptor + "}\n";
+        DWORD n = 0;
+        WriteFile(stdin_, reg.data(), DWORD(reg.size()), &n, nullptr);
+        std::puts("virtual controller created in the emulator");
         return true;
     }
-    void close() {
-        if (s_ != INVALID_SOCKET) closesocket(s_);
-        s_ = INVALID_SOCKET;
+    void stop() {
+        if (stdin_) CloseHandle(stdin_);
+        if (process_) {
+            TerminateProcess(process_, 0);
+            CloseHandle(process_);
+        }
+        stdin_ = process_ = nullptr;
     }
 
-    int port_;
-    SOCKET s_ = INVALID_SOCKET;
-    std::thread reader_;
+    HANDLE stdin_ = nullptr, process_ = nullptr;
 };
-
-void key(Console& c, const char* name, bool down) {
-    c.send(std::string("event send EV_KEY:") + name + ":" + (down ? "1" : "0"));
-}
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-    Console console(argc > 1 ? std::atoi(argv[1]) : 5554);
-    std::puts("jinky-padbridge: D-pad/stick = arrows, Cross = OK, Circle = Back, Options = Menu (Ctrl+C to stop)");
-
+    std::puts("jinky-padbridge: your DualSense becomes a controller inside the Android TV emulator (Ctrl+C to stop)");
+    Emulator emulator;
     while (true) {
         Pad pad = open_dualsense();
         if (pad.handle == INVALID_HANDLE_VALUE) {
@@ -171,21 +194,22 @@ int main(int argc, char** argv) {
             continue;
         }
         std::printf("DualSense found (%s)\n", pad.bluetooth ? "Bluetooth" : "USB");
-        std::vector<uint8_t> report(pad.report_len);
-        Buttons last;
+        std::vector<uint8_t> raw(pad.report_len);
+        Report last;
+        ULONGLONG last_sent = 0;
         DWORD n = 0;
-        while (ReadFile(pad.handle, report.data(), DWORD(report.size()), &n, nullptr)) {
-            Buttons b;
-            if (!parse(pad, report.data(), n, b) || b == last) continue;
-            // Android repeats a held arrow by itself, like a TV remote.
-            if (b.up != last.up) key(console, "KEY_UP", b.up);
-            if (b.down != last.down) key(console, "KEY_DOWN", b.down);
-            if (b.left != last.left) key(console, "KEY_LEFT", b.left);
-            if (b.right != last.right) key(console, "KEY_RIGHT", b.right);
-            if (b.ok != last.ok) key(console, "KEY_ENTER", b.ok);
-            if (b.back != last.back) key(console, "KEY_BACK", b.back);
-            if (b.menu != last.menu) key(console, "KEY_MENU", b.menu);
-            last = b;
+        while (ReadFile(pad.handle, raw.data(), DWORD(raw.size()), &n, nullptr)) {
+            Report r;
+            if (!to_report(pad, raw.data(), n, r) || r == last) continue;
+            // Buttons always go at once; stick-only changes at most every 8 ms.
+            const bool buttons = last.empty() || r[1] != last[1] || r[2] != last[2] || r[3] != last[3];
+            if (!buttons && GetTickCount64() - last_sent < 8) continue;
+            if (!emulator.send(json(r))) {
+                Sleep(1000);
+                continue;
+            }
+            last = r;
+            last_sent = GetTickCount64();
         }
         std::puts("DualSense disconnected");
         CloseHandle(pad.handle);
