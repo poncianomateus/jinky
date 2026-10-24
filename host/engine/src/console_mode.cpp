@@ -69,22 +69,22 @@ void ConsoleMode::restore_display(const std::wstring& display) {
     ChangeDisplaySettingsExW(display.c_str(), nullptr, nullptr, 0, nullptr);
 }
 
-bool ConsoleMode::big_picture_window_open() {
+bool ConsoleMode::big_picture_window_open(bool visible_only) {
     // Steam's Big Picture window title contains "Big Picture" in every language ("Steam - Modo Big
-    // Picture" in Portuguese). Existence only, not visibility: a fullscreen game may minimise it,
-    // and the window is destroyed when the user leaves Big Picture (verified).
-    bool found = false;
+    // Picture" in Portuguese). By default existence only, not visibility: a fullscreen game may
+    // minimise it, and the window is destroyed when the user leaves Big Picture (verified).
+    HWND found = nullptr;
     EnumWindows(
         [](HWND hwnd, LPARAM p) -> BOOL {
             wchar_t title[256];
             if (GetWindowTextW(hwnd, title, 256) > 0 && wcsstr(title, L"Big Picture")) {
-                *reinterpret_cast<bool*>(p) = true;
+                *reinterpret_cast<HWND*>(p) = hwnd;
                 return FALSE;
             }
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&found));
-    return found;
+    return found && (!visible_only || IsWindowVisible(found));
 }
 
 bool ConsoleMode::big_picture_closed() {
@@ -141,6 +141,8 @@ bool ConsoleMode::restore_if_left() {
     std::getline(std::wifstream(marker), display);
     if (!display.empty()) restore_display(display);
     AudioCapture::set_pc_muted(false);
+    // Big Picture was opened for that session: don't leave it on the PC's screen.
+    if (big_picture_window_open()) open_url(L"steam://close/bigpicture");
     DeleteFileW(marker.c_str());
     return true;
 }

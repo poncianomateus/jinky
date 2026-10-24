@@ -41,6 +41,35 @@ bool shell_program(const std::wstring& program) {
     return false;
 }
 
+// The program's full path (lowercased), from its process id.
+std::wstring process_program(DWORD pid) {
+    HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!p) return {};
+    wchar_t path[MAX_PATH * 2];
+    DWORD len = DWORD(std::size(path));
+    std::wstring out;
+    if (QueryFullProcessImageNameW(p, 0, path, &len)) out.assign(path, len);
+    CloseHandle(p);
+    for (auto& c : out) c = wchar_t(std::towlower(c));
+    return out;
+}
+
+// When the process started (FILETIME units), 0 if unknown.
+uint64_t process_started(DWORD pid) {
+    HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!p) return 0;
+    FILETIME created{}, exited{}, kernel{}, user{};
+    const bool ok = GetProcessTimes(p, &created, &exited, &kernel, &user);
+    CloseHandle(p);
+    return ok ? (uint64_t(created.dwHighDateTime) << 32 | created.dwLowDateTime) : 0;
+}
+
+uint64_t now_filetime() {
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    return uint64_t(ft.dwHighDateTime) << 32 | ft.dwLowDateTime;
+}
+
 bool big_picture(HWND hwnd) {
     wchar_t title[256] = {};
     GetWindowTextW(hwnd, title, 256);
@@ -63,6 +92,21 @@ bool SteamGameWatch::alive(uint32_t pid) {
     const bool running = WaitForSingleObject(p, 0) == WAIT_TIMEOUT;
     CloseHandle(p);
     return running;
+}
+
+bool SteamGameWatch::could_be_the_game(uint32_t pid) const {
+    // A Steam game lives in a Steam library; anything else (emulators and other stores added as
+    // "non-Steam games") must have started during this session. Programs the user already had
+    // open — a maximised slicer, browser or editor — are never taken for the game: closing the
+    // game from the TV once killed a 3D-printing slicer the user had switched to on the PC.
+    if (process_program(pid).find(L"\\steamapps\\common\\") != std::wstring::npos) return true;
+    const uint64_t started = process_started(pid);
+    return started != 0 && started >= began_wall_;
+}
+
+uint32_t SteamGameWatch::game_candidate() const {
+    const uint32_t pid = game_in_front();
+    return pid && could_be_the_game(pid) ? pid : 0;
 }
 
 uint32_t SteamGameWatch::game_in_front() {
@@ -93,16 +137,19 @@ void* SteamGameWatch::prompt_in_front() {
 bool SteamGameWatch::close_game() {
     if (closing_) return true;
     DWORD pid = game_pid_ && alive(game_pid_) ? game_pid_ : 0;
-    if (!pid) pid = game_in_front();
+    if (!pid) pid = game_candidate();
     if (!pid) {
         TCL_WARN("game", "close requested, but no game is in front");
         return false;
     }
+    std::string name;  // for the log: which program was closed
+    for (wchar_t c : process_program(pid)) name.push_back(c < 128 ? char(c) : '?');
+    if (const auto slash = name.find_last_of('\\'); slash != std::string::npos) name.erase(0, slash + 1);
     // Like "quit game" on a console: no save prompt, the game just ends.
     HANDLE p = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
     const bool ok = p && TerminateProcess(p, 0);
     if (p) CloseHandle(p);
-    TCL_INFO("game", "closing the game ({}): {}", pid, ok ? "done" : "failed");
+    TCL_INFO("game", "closing the game ({} {}): {}", name, pid, ok ? "done" : "failed");
     if (ok) {
         closing_ = true;
         game_pid_ = pid;
@@ -116,6 +163,7 @@ void SteamGameWatch::reset() {
     prompt_ = nullptr;
     prompt_since_ = {};
     began_ = std::chrono::steady_clock::now();
+    began_wall_ = now_filetime() - 50'000'000;  // 5 s of slack (FILETIME is in 100 ns units)
     running_since_ = gone_since_ = {};
 }
 
@@ -130,10 +178,11 @@ SteamGameWatch::Event SteamGameWatch::poll() {
         game_pid_ = 0;
         return Event::Closed;
     }
-    const uint32_t in_front = game_in_front();
+    const uint32_t in_front = game_candidate();
     // Follow the game's process (non-Steam games aren't reported by Steam); a launcher handing
     // over to the real game, or an emulator restarting, shows up as a new full-screen process.
-    if (in_front && (ready_ || started_)) game_pid_ = in_front;
+    // While the followed game is alive it stays the game, whatever else comes to the front.
+    if (in_front && (ready_ || started_) && !(game_pid_ && alive(game_pid_))) game_pid_ = in_front;
 
     // Something other than the game waiting in front (launcher, EULA, Steam prompt, another
     // store's app): after 3 s in front, show it on the TV so the player can deal with it.

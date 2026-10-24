@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 
@@ -63,8 +63,15 @@ public static class SteamAchievements
             // A private profile or game (or one shared by the family) hides the progress, not the list.
             var hidden = false;
             Dictionary<string, (bool, long)> mine;
-            try { mine = Mine(appId, apiKey, me, fresh); }
+            try { mine = new(Mine(appId, apiKey, me, fresh)); }
             catch (ProgressHiddenException) { mine = []; hidden = true; }
+            // Steam's own copy on this PC: up to date the moment an achievement unlocks (the Web
+            // API lags by minutes) and readable even when the profile is private.
+            if (SteamLocalStats.Unlocked(appId) is { } local)
+            {
+                foreach (var (id, time) in local) mine[id] = (true, time);
+                hidden = false;
+            }
             LastError = null;
             return new(schema.Select(s =>
             {
@@ -169,23 +176,49 @@ public static class SteamAchievements
     static readonly List<Unlock> Recent = [];
     static readonly Dictionary<int, HashSet<string>> Seen = new();
 
+    static readonly Dictionary<int, DateTime> LocalStamp = new();
+    static DateTime _lastWebWatch;
+
     /// <summary>
-    /// Checks the game running on the PC for newly unlocked achievements (call every few seconds
-    /// while a TV plays). The first look at a game only learns what was already unlocked.
+    /// Checks the game running on the PC for newly unlocked achievements (call every couple of
+    /// seconds while a TV plays). The first look at a game only learns what was already unlocked.
+    /// Steam's local stats file shows an unlock at once; without it, the Web API (every 10 s, and
+    /// it lags) is the fallback.
     /// </summary>
     public static void Watch(string? apiKey, Func<int, string> gameName)
     {
         var app = SteamLibrary.RunningGame();
-        if (app <= 0 || string.IsNullOrWhiteSpace(apiKey)) return;
-        var list = Get(app, apiKey, fresh: true);
-        if (list is null || list.Count == 0) return;
-        var unlocked = list.Where(a => a.Achieved).Select(a => a.Id).ToHashSet();
+        if (app <= 0) return;
+        HashSet<string> unlocked;
+        List<Item> list;
+        if (SteamLocalStats.LastWrite(app) is { } stamp)
+        {
+            lock (Lock)
+                if (LocalStamp.TryGetValue(app, out var seen) && seen == stamp && Seen.ContainsKey(app)) return;
+            if (SteamLocalStats.Unlocked(app) is not { } local) return;  // being written: next round
+            lock (Lock) LocalStamp[app] = stamp;
+            unlocked = local.Keys.ToHashSet();
+            // Names, icons and rarity from the Web API when there is a key, else the local schema.
+            list = (string.IsNullOrWhiteSpace(apiKey) ? null : Get(app, apiKey))
+                   ?? SteamLocalStats.Schema(app).Select(e => new Item(e.Id, e.Name, e.Description, "", "", e.Hidden,
+                                                                     local.ContainsKey(e.Id), local.GetValueOrDefault(e.Id), -1)).ToList();
+            if (list.Count == 0) return;
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(apiKey) || DateTime.UtcNow - _lastWebWatch < TimeSpan.FromSeconds(10)) return;
+            _lastWebWatch = DateTime.UtcNow;
+            var web = Get(app, apiKey, fresh: true);
+            if (web is null || web.Count == 0) return;
+            list = web;
+            unlocked = list.Where(a => a.Achieved).Select(a => a.Id).ToHashSet();
+        }
         lock (Lock)
         {
             if (Seen.TryGetValue(app, out var before))
             {
                 var count = unlocked.Count;
-                foreach (var a in list.Where(a => a.Achieved && !before.Contains(a.Id)))
+                foreach (var a in list.Where(a => unlocked.Contains(a.Id) && !before.Contains(a.Id)))
                     Recent.Add(new Unlock(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), app, gameName(app), a, count, list.Count));
                 if (Recent.Count > 50) Recent.RemoveRange(0, Recent.Count - 50);
             }

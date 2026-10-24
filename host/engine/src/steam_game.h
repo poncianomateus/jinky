@@ -35,12 +35,17 @@ private:
     // A window in front that isn't Big Picture, the desktop or Jinky (launcher, Steam dialog...).
     static void* prompt_in_front();
     static bool alive(uint32_t pid);
+    // Whether a process may be the game: a Steam library game, or started during this session.
+    bool could_be_the_game(uint32_t pid) const;
+    // game_in_front(), if it could be the game.
+    uint32_t game_candidate() const;
 
     bool started_ = false;
     bool ready_ = false;
     bool attention_ = false;
     bool closing_ = false;    // close_game() ended it: don't wait for Steam to notice
     uint32_t game_pid_ = 0;   // the game's process once it was seen full screen
+    uint64_t began_wall_ = 0;  // session start as FILETIME (processes older than this aren't the game)
     void* prompt_ = nullptr;  // the waiting window and since when it has been in front
     std::chrono::steady_clock::time_point began_{}, running_since_{}, gone_since_{}, prompt_since_{};
 };

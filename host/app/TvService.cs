@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -31,13 +31,16 @@ public sealed class TvService : IDisposable
     /// <summary>Whether a TV is streaming right now; games can only be started from a TV then.</summary>
     public Func<bool>? Streaming { get; set; }
 
+    /// <summary>A session is on and ready for a game (in console mode: Big Picture is already up).</summary>
+    public Func<bool>? LaunchReady { get; set; }
+
     /// <summary>The Steam Web API key (lists the account's games that aren't installed), if set.</summary>
     public Func<string?>? SteamApiKey { get; set; }
 
     // What a TV asked for while its session was still opening (start or install a game).
     (Action Run, DateTime At)? _pending;
 
-    /// <summary>A TV session started: do what it asked for, if anything (and if recent).</summary>
+    /// <summary>The TV's session is ready for a game: do what it asked for, if anything (and if recent).</summary>
     public void OnSessionStarted()
     {
         if (_pending is not { } p) return;
@@ -45,10 +48,10 @@ public sealed class TvService : IDisposable
         if (DateTime.UtcNow - p.At <= TimeSpan.FromSeconds(30)) p.Run();
     }
 
-    /// <summary>Runs [action] now if a TV is streaming, else as soon as the TV's session starts.</summary>
+    /// <summary>Runs [action] now if a TV session is ready for it, else as soon as it is.</summary>
     bool RunInSession(Action action)
     {
-        if (Streaming?.Invoke() == true)
+        if (LaunchReady?.Invoke() == true)
         {
             action();
             return true;
@@ -106,7 +109,9 @@ public sealed class TvService : IDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
-            try { await Task.Delay(TimeSpan.FromSeconds(10), _stop.Token); }
+            // Cheap: only Steam's local stats file is checked this often (the Web API fallback
+            // throttles itself to every 10 s).
+            try { await Task.Delay(TimeSpan.FromSeconds(2), _stop.Token); }
             catch (OperationCanceledException) { return; }
             if (Streaming?.Invoke() != true) continue;
             try

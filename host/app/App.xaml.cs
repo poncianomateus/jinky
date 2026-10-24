@@ -58,8 +58,9 @@ public partial class App : Application
         _vm.SessionStarted += () =>
         {
             if (_settings.ConsoleMode) _window?.Hide();
-            _tvService?.OnSessionStarted();
         };
+        // The game the TV asked for starts once the engine says so (after Big Picture is up).
+        _vm.ReadyToLaunch += () => _tvService?.OnSessionStarted();
         // A TV asking to pair needs the user's eyes on the code: bring the window forward.
         _vm.PairingRequested += () =>
         {
@@ -85,6 +86,7 @@ public partial class App : Application
         _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
         _tvService.GameLaunched += name => Dispatcher.Invoke(() => _vm.OnGameLaunched(name));
         _tvService.Streaming = () => Dispatcher.Invoke(() => _vm.IsStreaming);
+        _tvService.LaunchReady = () => Dispatcher.Invoke(() => _vm.LaunchReady);
         _tvService.SteamApiKey = () => _settings.SteamApiKey;
         _vm.CheckSteamKey();
         _tvService.Start();

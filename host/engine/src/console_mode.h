@@ -23,11 +23,13 @@ public:
     // Undoes a console mode left behind by a host that was killed. Returns true if it did anything.
     static bool restore_if_left();
 
+    // Whether Steam's Big Picture window exists (open, even if behind a game); with
+    // `visible_only`, only once it is actually shown (it is created hidden while it loads).
+    static bool big_picture_window_open(bool visible_only = false);
+
 private:
     static bool set_refresh_60(const std::wstring& display, int& previous_hz);
     static void restore_display(const std::wstring& display);
-
-    static bool big_picture_window_open();
 
     bool active_ = false;
     bool bp_seen_ = false;

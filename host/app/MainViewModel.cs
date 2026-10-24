@@ -231,6 +231,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>Raised when a TV starts a session (the app hides its window in console mode).</summary>
     public event Action? SessionStarted;
 
+    /// <summary>The engine is ready for the game the TV asked for (Big Picture is up, in console mode).</summary>
+    public event Action? ReadyToLaunch;
+    public bool LaunchReady { get; private set; }
+
     public void OnEngineEvent(EngineEvent e)
     {
         switch (e.Kind)
@@ -247,12 +251,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 break;
             case "connected":
                 _tvName = null;
+                LaunchReady = false;
                 SessionStarted?.Invoke();
                 Current = State.Streaming;
                 StatusDetail = $"TV conectada · {Host(e.Str("tv"))}";
                 Add("TV conectada · " + Host(e.Str("tv")));
                 break;
+            case "launch_ready":
+                LaunchReady = true;
+                ReadyToLaunch?.Invoke();
+                break;
             case "disconnected":
+                LaunchReady = false;
                 Current = State.Waiting;
                 StatusDetail = "Abra o Jinky na TV para começar.";
                 Latency = Fps = Bitrate = "—";
@@ -289,6 +299,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Add($"O jogo passou de {e.Str("from")} para outra TV");
                 break;
             case "session_end":
+                LaunchReady = false;
                 Add("Big Picture fechado · sessão encerrada");
                 break;
             case "codec":

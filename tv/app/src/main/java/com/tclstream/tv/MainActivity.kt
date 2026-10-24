@@ -444,7 +444,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun pollUnlocks() {
         val host = homeHost ?: return
         val now = android.os.SystemClock.elapsedRealtime()
-        if (unlockPolling || now - lastUnlockPoll < 5000 || host.updatePort == 0) return
+        if (unlockPolling || now - lastUnlockPoll < 3000 || host.updatePort == 0) return
         lastUnlockPoll = now
         unlockPolling = true
         val after = unlocksAfter

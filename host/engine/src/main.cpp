@@ -259,6 +259,11 @@ int main(int argc, char** argv) {
     std::string peer_name;
     bool busy_logged = false;
     steady_clock::time_point last_displaced_sent{}, last_bp_check{};
+    // A game the TV asked for is started by the desktop app once this says "launch_ready": in
+    // console mode only after Big Picture is up, or Big Picture opening late lands on top of a
+    // game that starts fast (Resident Evil 7: the game played behind it).
+    steady_clock::time_point launch_wait_until{}, bp_seen_at{};
+    bool launch_ready_pending = false;
 
     // --- pairing / authentication ---
     tcl::PairedStore paired;
@@ -713,6 +718,9 @@ int main(int argc, char** argv) {
                         TCL_INFO("session", "game session: Big Picture hidden behind the TV's launch screen");
                         game_watch.reset();
                     }
+                    launch_ready_pending = true;
+                    launch_wait_until = steady_clock::now() + 10s;
+                    bp_seen_at = {};
                     peer_name.clear();
                     peer_key = hello_key.value_or(tclproto::PairKey{});
                     peer_device = hello_device;
@@ -780,6 +788,23 @@ int main(int argc, char** argv) {
         // to normal, like turning a console off.
         // A game started from the TV's library: reveal the picture once the game is in front, and
         // closing the game ends the session (the TV goes back to its home screen).
+        if (peer && launch_ready_pending) {
+            const auto now = steady_clock::now();
+            bool ready = !console.active();  // no Big Picture to wait for
+            if (!ready && bp_seen_at == steady_clock::time_point{} && tcl::ConsoleMode::big_picture_window_open(true))
+                bp_seen_at = now;
+            // Big Picture takes the screen as it appears; give it a moment more before the game.
+            if (!ready && bp_seen_at != steady_clock::time_point{} && now - bp_seen_at >= 1500ms) ready = true;
+            if (!ready && now >= launch_wait_until) {
+                TCL_WARN("session", "Big Picture did not show up in 10 s; starting the game anyway");
+                ready = true;
+            }
+            if (ready) {
+                launch_ready_pending = false;
+                if (peer_game) TCL_INFO("session", "ready to start the game");
+                tcl::emit_event("launch_ready");
+            }
+        }
         if (peer && console.active() && steady_clock::now() - last_bp_check >= 1s) {
             last_bp_check = steady_clock::now();
             const auto game = peer_game ? game_watch.poll() : tcl::SteamGameWatch::Event::None;
