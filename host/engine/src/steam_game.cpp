@@ -91,6 +91,7 @@ void* SteamGameWatch::prompt_in_front() {
 }
 
 bool SteamGameWatch::close_game() {
+    if (closing_) return true;
     DWORD pid = game_pid_ && alive(game_pid_) ? game_pid_ : 0;
     if (!pid) pid = game_in_front();
     if (!pid) {
@@ -102,11 +103,15 @@ bool SteamGameWatch::close_game() {
     const bool ok = p && TerminateProcess(p, 0);
     if (p) CloseHandle(p);
     TCL_INFO("game", "closing the game ({}): {}", pid, ok ? "done" : "failed");
+    if (ok) {
+        closing_ = true;
+        game_pid_ = pid;
+    }
     return ok;
 }
 
 void SteamGameWatch::reset() {
-    started_ = ready_ = attention_ = false;
+    started_ = ready_ = attention_ = closing_ = false;
     game_pid_ = 0;
     prompt_ = nullptr;
     prompt_since_ = {};
@@ -117,6 +122,14 @@ void SteamGameWatch::reset() {
 SteamGameWatch::Event SteamGameWatch::poll() {
     using namespace std::chrono;
     const auto now = steady_clock::now();
+    // The player closed it from the TV: over as soon as the process is gone. Steam keeps
+    // reporting the game for several seconds after it ends (cloud sync), so don't ask Steam.
+    if (closing_) {
+        if (game_pid_ && alive(game_pid_)) return Event::None;
+        closing_ = started_ = false;
+        game_pid_ = 0;
+        return Event::Closed;
+    }
     const uint32_t in_front = game_in_front();
     // Follow the game's process (non-Steam games aren't reported by Steam); a launcher handing
     // over to the real game, or an emulator restarting, shows up as a new full-screen process.
@@ -137,7 +150,11 @@ SteamGameWatch::Event SteamGameWatch::poll() {
     }
 
     const uint32_t steam_app = running_app_id();
-    const bool running = steam_app != 0 || (game_pid_ && alive(game_pid_)) || (in_front && now - began_ > 4s);
+    // Once the game was on screen, its own process decides: when it ends, Steam still reports
+    // the game for a while (cloud sync), which made the TV wait ~15 s to get back home.
+    const bool game_ended = ready_ && game_pid_ && !alive(game_pid_) && !in_front;
+    const bool running = (steam_app != 0 && !game_ended) || (game_pid_ && alive(game_pid_)) ||
+                         (in_front && now - began_ > 4s);
     if (running) {
         if (!started_) {
             started_ = true;
@@ -166,7 +183,7 @@ SteamGameWatch::Event SteamGameWatch::poll() {
     if (gone_since_ == steady_clock::time_point{}) gone_since_ = now;
     // Launchers often exit and start the game as a new process; Steam may report "nothing
     // running" for a moment in between.
-    if (now - gone_since_ < 10s) return Event::None;
+    if (now - gone_since_ < (game_ended ? 4s : 10s)) return Event::None;
     started_ = false;
     return Event::Closed;
 }
