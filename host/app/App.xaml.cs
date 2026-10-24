@@ -104,9 +104,10 @@ public partial class App : Application
         {
             _vm.OnAway();
         }
-        // Two Windows users signed in at once: only the one on the screen can stream (Windows
-        // doesn't capture a session in the background, and both Jinkys want the same ports). The
-        // one in the background steps aside and the one in front takes over, both ways.
+        // Two Windows users signed in at once ("switch user"): only the one on the screen can
+        // stream (Windows doesn't capture a disconnected session, and both Jinkys want the same
+        // ports). The one left behind steps aside and the one in front takes over, both ways.
+        // With ASTER both are on screen: the first to start keeps the ports (see port_busy).
         var sessionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         sessionTimer.Tick += (_, _) => CheckSession();
         sessionTimer.Start();
@@ -159,11 +160,17 @@ public partial class App : Application
         lock (this) _engineWork = _engineWork.ContinueWith(_ => work(engine), TaskScheduler.Default);
     }
 
-    /// <summary>Whether this Windows user's session is the one on the screen.</summary>
+    /// <summary>
+    /// Whether this Windows user's session is on a screen: active, not disconnected. After "switch
+    /// user" the one left behind is disconnected; with ASTER every workplace's session is active.
+    /// </summary>
     static bool OnScreen()
     {
-        var active = WTSGetActiveConsoleSessionId();
-        return active == 0xFFFFFFFF || active == (uint)System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        if (!WTSQuerySessionInformation(IntPtr.Zero, -1 /* this session */, 8 /* WTSConnectState */, out var buffer, out _))
+            return true;
+        var state = System.Runtime.InteropServices.Marshal.ReadInt32(buffer);
+        WTSFreeMemory(buffer);
+        return state == 0;  // WTSActive
     }
 
     void CheckSession()
@@ -192,8 +199,11 @@ public partial class App : Application
         UpdateTray();
     }
 
-    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
+    [System.Runtime.InteropServices.DllImport("wtsapi32.dll", SetLastError = true)]
+    static extern bool WTSQuerySessionInformation(IntPtr server, int sessionId, int infoClass, out IntPtr buffer, out int bytes);
+
+    [System.Runtime.InteropServices.DllImport("wtsapi32.dll")]
+    static extern void WTSFreeMemory(IntPtr memory);
 
     void CreateTray()
     {

@@ -368,6 +368,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Add(e.Bool("on") == true ? $"Jogos limitados a {e.Num("fps") ?? 60:0} fps · mais folga para a transmissão"
                                          : "Limite de fps dos jogos desfeito");
                 break;
+            case "port_busy":
+                if (_state != State.Away)
+                {
+                    Current = State.Away;
+                    StatusDetail = "Outro Jinky está atendendo a TV agora (de outro usuário do Windows ou de outra estação do ASTER). " +
+                                   "Feche-o lá (ícone perto do relógio → Sair) e este assume sozinho.";
+                    Add("Outro Jinky está atendendo a TV · este espera a vez");
+                }
+                break;
             case "log":
                 if (e.Str("level") == "ERROR") Add(e.Str("msg") ?? "erro", warning: true);
                 break;

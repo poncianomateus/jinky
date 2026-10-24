@@ -111,6 +111,14 @@ public sealed class Engine : IDisposable
         Exited?.Invoke();
         if (_stopping) return;
 
+        // 3 = the port belongs to another Jinky (another Windows user or ASTER workplace): not a
+        // crash; wait for it to be free.
+        if (p.ExitCode == 3)
+        {
+            Task.Delay(3000).ContinueWith(_ => { if (!_stopping) Launch(); });
+            return;
+        }
+
         // Unexpected exit: restart, but give up if it keeps dying (e.g. no NVIDIA GPU).
         var now = DateTime.UtcNow;
         _crashes.Enqueue(now);

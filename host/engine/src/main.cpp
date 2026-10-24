@@ -246,7 +246,15 @@ int main(int argc, char** argv) {
 
     tclproto::UdpSocket sock;
     if (!sock.open(opt.port)) {
-        TCL_ERROR("net", "UDP port {}: {}", opt.port, sock.error());
+        // Another Jinky has the port: another Windows user's, or another ASTER workplace's. Not a
+        // crash: the desktop app waits and starts this engine again once the port is free.
+        const std::string err = sock.error();
+        if (err.find("10048") != std::string::npos || err.find("10013") != std::string::npos) {
+            TCL_WARN("net", "UDP port {} is in use by another Jinky", opt.port);
+            tcl::emit_event("port_busy", "\"port\":" + std::to_string(opt.port));
+            return 3;
+        }
+        TCL_ERROR("net", "UDP port {}: {}", opt.port, err);
         return 1;
     }
     TCL_INFO("net", "waiting for a receiver on UDP port {} (Ctrl+C to stop)", opt.port);
