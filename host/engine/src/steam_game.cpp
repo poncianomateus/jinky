@@ -128,8 +128,14 @@ void* SteamGameWatch::prompt_in_front() {
     HWND hwnd = GetForegroundWindow();
     if (!hwnd || !IsWindowVisible(hwnd) || big_picture(hwnd)) return nullptr;
     const auto program = window_program(hwnd);
-    // Steam's own dialogs count (they wait for the player); the desktop and Jinky don't.
-    const bool steam_dialog = program.size() >= 10 && program.compare(program.size() - 10, 10, L"\\steam.exe") == 0;
+    // Steam's own dialogs count (they wait for the player); the desktop and Jinky don't. Steam
+    // draws most of its windows (license agreement on a game's first start, cloud sync, "in use
+    // on another computer") with steamwebhelper.exe, so that counts too (Big Picture doesn't).
+    auto ends_with = [&](const wchar_t* tail) {
+        const size_t n = wcslen(tail);
+        return program.size() >= n && program.compare(program.size() - n, n, tail) == 0;
+    };
+    const bool steam_dialog = ends_with(L"\\steam.exe") || ends_with(L"\\steamwebhelper.exe");
     if (!steam_dialog && shell_program(program)) return nullptr;
     return hwnd;
 }

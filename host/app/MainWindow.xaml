@@ -189,6 +189,13 @@
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding KeepBigPicture}" IsEnabled="{Binding ConsoleMode}" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="Deixar o Big Picture aberto" FontWeight="Bold"/>
+                                    <TextBlock Text="Entre uma partida e outra o Big Picture continua aberto e os jogos abrem mais rápido. Ele fecha quando você sai do Jinky. Bom para um usuário do Windows que é só console."
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding SoundOnlyOnTv}" IsEnabled="{Binding SoundToggleEnabled}" Margin="0,0,0,18">
                                 <StackPanel>
                                     <TextBlock Text="Som só na TV" FontWeight="Bold"/>

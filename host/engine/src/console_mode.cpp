@@ -123,15 +123,19 @@ void ConsoleMode::enter(const std::wstring& display, bool big_picture) {
     emit_event("console", "\"on\":true");
 }
 
-void ConsoleMode::leave() {
+void ConsoleMode::leave(bool close_big_picture) {
     if (!active_) return;
     active_ = false;
-    if (bp_opened_) open_url(L"steam://close/bigpicture");
+    if (bp_opened_ && close_big_picture) open_url(L"steam://close/bigpicture");
     restore_display(display_);
     AudioCapture::set_pc_muted(false);
     if (const auto marker = marker_path(); !marker.empty()) DeleteFileW(marker.c_str());
     TCL_INFO("console", "console mode off: display and sound restored");
     emit_event("console", "\"on\":false");
+}
+
+void ConsoleMode::close_big_picture() {
+    if (big_picture_window_open()) open_url(L"steam://close/bigpicture");
 }
 
 bool ConsoleMode::restore_if_left() {

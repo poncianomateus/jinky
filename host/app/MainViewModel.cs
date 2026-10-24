@@ -216,6 +216,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (_settings.ConsoleMode == value) return; _settings.ConsoleMode = value; Notify(); Notify(nameof(SoundToggleEnabled)); _settingsChanged(); }
     }
 
+    public bool KeepBigPicture
+    {
+        get => _settings.KeepBigPicture;
+        set { if (_settings.KeepBigPicture == value) return; _settings.KeepBigPicture = value; Notify(); _settingsChanged(); }
+    }
+
     public bool CapGames
     {
         get => _settings.CapGames;

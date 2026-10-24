@@ -15,6 +15,7 @@ add_executable(jinky-engine
     src/capture.cpp
     src/console_mode.cpp
     src/frame_cap.cpp
+    src/pad_mouse.cpp
     src/steam_game.cpp
     src/cursor.cpp
     src/converter.cpp

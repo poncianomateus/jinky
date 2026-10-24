@@ -799,7 +799,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (picture && ready >= 0) {
                 stopLaunching()
                 // A launcher or Steam prompt is in front of the game: say why it's showing.
-                if (ready == GAME_NEEDS_ATTENTION) showHint("O jogo pediu uma confirmação: use o controle.")
+                if (ready == GAME_NEEDS_ATTENTION) showHint("Uma janela pede sua resposta: o analógico move o mouse, A clica, B cancela, Start confirma.")
             } else {
                 launchScreen.setStatus(if (host == null) "Conectando ao PC…" else "Abrindo o jogo…")
             }

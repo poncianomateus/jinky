@@ -13,7 +13,9 @@ public:
     // `display` is the GDI device name of the captured monitor (e.g. \\.\DISPLAY1).
     // `big_picture`: also open Steam Big Picture (not for a game started from the TV's library).
     void enter(const std::wstring& display, bool big_picture = true);
-    void leave();
+    // [close_big_picture] false: the display and sound go back to normal but Big Picture stays
+    // open, so the next game starts sooner (closed when Jinky itself closes).
+    void leave(bool close_big_picture = true);
     bool active() const { return active_; }
 
     // True once when the user has left Big Picture (its window existed and has been gone for 2 s):
@@ -22,6 +24,9 @@ public:
 
     // Undoes a console mode left behind by a host that was killed. Returns true if it did anything.
     static bool restore_if_left();
+
+    // Closes Big Picture (left open between games with --keep-big-picture).
+    static void close_big_picture();
 
     // Whether Steam's Big Picture window exists (open, even if behind a game); with
     // `visible_only`, only once it is actually shown (it is created hidden while it loads).

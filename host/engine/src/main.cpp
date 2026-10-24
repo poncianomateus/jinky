@@ -26,6 +26,7 @@
 #include "capture.h"
 #include "console_mode.h"
 #include "frame_cap.h"
+#include "pad_mouse.h"
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
@@ -95,6 +96,7 @@ struct Options {
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
     bool frame_cap = false;  // console sessions also cap games at the stream's rate (NVIDIA driver)
+    bool keep_big_picture = false;  // a session ending leaves Big Picture open (closed when the engine stops)
     bool stdin_control = false;
     bool insecure = false;  // accept any TV without pairing (test tools only)
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
@@ -117,6 +119,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--mute-pc") o.mute_pc = true;
         else if (a == "--console") o.console = true;
         else if (a == "--frame-cap") o.frame_cap = true;
+        else if (a == "--keep-big-picture") o.keep_big_picture = true;
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--insecure") o.insecure = true;
@@ -380,7 +383,7 @@ int main(int argc, char** argv) {
                 return;
             }
             if (keep_console && console.active()) return;
-            console.leave();  // no-op unless a console session just ended
+            console.leave(!opt.keep_big_picture);  // no-op unless a console session just ended
             if (frame_cap.active()) {
                 frame_cap.leave();
                 tcl::emit_event("frame_cap", "\"on\":false");
@@ -403,6 +406,7 @@ int main(int argc, char** argv) {
 
     // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
     tcl::GamepadHub gamepads;
+    tcl::PadMouse pad_mouse;  // the controller as mouse/keyboard while a window waits for the player
     const bool gamepads_ok = gamepads.init([&](uint8_t pad, uint8_t large_motor, uint8_t small_motor) {
         const uint64_t p = audio_peer;
         if (!p) return;
@@ -505,6 +509,7 @@ int main(int argc, char** argv) {
                 }
                 if (ok) {
                     gamepads.apply(*in);
+                    pad_mouse.update(*in);
                     last_input = steady_clock::now().time_since_epoch().count();
                     if (in->sent_us) {
                         const int32_t trip = int32_t(uint32_t(now_us()) - in->sent_us);
@@ -846,6 +851,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < 3; ++i)
                     send_control(*peer, PacketType::GameReady, attention ? tclproto::kGameNeedsAttention : tclproto::kGameOnScreen);
             }
+            pad_mouse.set_active(peer_game && game_watch.waiting_for_player());
             const bool bp_closed = !peer_game && console.big_picture_closed();
             if (bp_closed || game == tcl::SteamGameWatch::Event::Closed) {
                 TCL_INFO("session", "{}: ending the session", bp_closed ? "Big Picture closed" : "game closed");
@@ -858,6 +864,9 @@ int main(int argc, char** argv) {
                 gamepads.unplug_all();
             }
         }
+
+        // Session over (or not a game session): the controller is a controller again.
+        if (pad_mouse.active() && (!peer || !peer_game)) pad_mouse.set_active(false);
 
         // --- capture ---
         // A fresh desktop frame is encoded as soon as it is captured (waiting for the next 60 Hz
@@ -1037,6 +1046,8 @@ int main(int argc, char** argv) {
     rx_thread.join();
     audio.stop();
     console.leave();
+    // Jinky is closing: Big Picture, if left open between games, goes too.
+    if (opt.keep_big_picture) tcl::ConsoleMode::close_big_picture();
     frame_cap.leave();
     if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit
     gamepads.unplug_all();

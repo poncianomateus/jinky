@@ -22,6 +22,10 @@ public:
     //                 session is over.
     Event poll();
 
+    // A window waits for the player in front of a game that isn't on screen yet (NeedsAttention
+    // was sent): the controller then works as mouse/keyboard for it (PadMouse).
+    bool waiting_for_player() const { return attention_ && !ready_; }
+
     // The Steam app running now (0 = none), as Steam itself reports it.
     static uint32_t running_app_id();
     // Quits the game (the one being followed, else the full-screen program in front; never Steam,
