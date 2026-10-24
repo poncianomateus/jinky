@@ -182,6 +182,13 @@
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding CapGames}" IsEnabled="{Binding ConsoleMode}" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="Limitar jogos a 60 fps" FontWeight="Bold"/>
+                                    <TextBlock Text="A TV mostra 60 quadros por segundo: o resto só ocupa a placa de vídeo e faz a imagem engasgar. Usa o limite do driver da NVIDIA e volta ao seu ajuste quando você sai."
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding SoundOnlyOnTv}" IsEnabled="{Binding SoundToggleEnabled}" Margin="0,0,0,18">
                                 <StackPanel>
                                     <TextBlock Text="Som só na TV" FontWeight="Bold"/>

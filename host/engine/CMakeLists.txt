@@ -14,6 +14,7 @@ add_executable(jinky-engine
     src/audio_capture.cpp
     src/capture.cpp
     src/console_mode.cpp
+    src/frame_cap.cpp
     src/steam_game.cpp
     src/cursor.cpp
     src/converter.cpp
@@ -27,9 +28,12 @@ add_executable(jinky-engine
 target_compile_features(jinky-engine PRIVATE cxx_std_20)
 target_compile_definitions(jinky-engine PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE JINKY_VERSION="${JINKY_VERSION}")
 target_include_directories(jinky-engine PRIVATE ../../third_party/nvenc ../../third_party/vigemclient/include)
-target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler bcrypt iphlpapi qwave wlanapi)
+# NVIDIA NVAPI (driver settings: the frame cap for game sessions); a no-op without an NVIDIA driver.
+target_include_directories(jinky-engine SYSTEM PRIVATE ../../third_party/nvapi)
+target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 setupapi d3dcompiler bcrypt iphlpapi qwave wlanapi
+                      ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nvapi/amd64/nvapi64.lib)
 if(MSVC)
-    target_compile_options(jinky-engine PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(jinky-engine PRIVATE /W4 /permissive- /utf-8 /external:W0)
     # Third-party code is compiled as-is; don't hold it to our warning level.
     set_source_files_properties(../../third_party/vigemclient/src/ViGEmClient.cpp PROPERTIES COMPILE_OPTIONS "/W0")
 endif()

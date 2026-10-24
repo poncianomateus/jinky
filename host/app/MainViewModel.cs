@@ -132,6 +132,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (_settings.ConsoleMode == value) return; _settings.ConsoleMode = value; Notify(); Notify(nameof(SoundToggleEnabled)); _settingsChanged(); }
     }
 
+    public bool CapGames
+    {
+        get => _settings.CapGames;
+        set { if (_settings.CapGames == value) return; _settings.CapGames = value; Notify(); _settingsChanged(); }
+    }
+
     public bool SoundOnlyOnTv
     {
         get => _settings.ConsoleMode || _settings.SoundOnlyOnTv;
@@ -304,6 +310,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 break;
             case "console":
                 Add(e.Bool("on") == true ? "Modo console ligado · Big Picture, 60 Hz, som na TV" : "Modo console desligado · tela e som restaurados");
+                break;
+            case "frame_cap":
+                Add(e.Bool("on") == true ? $"Jogos limitados a {e.Num("fps") ?? 60:0} fps · mais folga para a transmissão"
+                                         : "Limite de fps dos jogos desfeito");
                 break;
             case "log":
                 if (e.Str("level") == "ERROR") Add(e.Str("msg") ?? "erro", warning: true);

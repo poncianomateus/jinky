@@ -24,6 +24,7 @@
 #include "audio_capture.h"
 #include "capture.h"
 #include "console_mode.h"
+#include "frame_cap.h"
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
@@ -92,6 +93,7 @@ struct Options {
     bool audio = true;
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
+    bool frame_cap = false;  // console sessions also cap games at the stream's rate (NVIDIA driver)
     bool stdin_control = false;
     bool insecure = false;  // accept any TV without pairing (test tools only)
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
@@ -112,6 +114,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--mute-pc") o.mute_pc = true;
         else if (a == "--console") o.console = true;
+        else if (a == "--frame-cap") o.frame_cap = true;
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--insecure") o.insecure = true;
@@ -141,7 +144,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else {
             std::fprintf(stderr,
                          "usage: jinky-engine [--port 47100] [--output 0] [--bitrate 40000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console] [--insecure]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console] [--frame-cap] [--insecure]\n"
                          "                      [--codec auto|hevc|h264]\n");
             return false;
         }
@@ -158,6 +161,7 @@ int main(int argc, char** argv) {
     if (tcl::ConsoleMode::restore_if_left())
         TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
     if (tcl::AudioCapture::restore_if_left_muted()) TCL_INFO("audio", "PC sound restored (left muted by a previous run)");
+    if (tcl::FrameCap::restore_if_left()) TCL_INFO("framecap", "NVIDIA frame rate limit restored (left on by a previous run)");
     SetConsoleCtrlHandler(on_console_ctrl, TRUE);
     if (opt.stdin_control) {
         // The desktop app runs the engine without a console; it stops it by writing "quit" or by
@@ -310,6 +314,7 @@ int main(int argc, char** argv) {
     std::atomic<uint64_t> audio_peer{0};
     std::atomic<uint32_t> audio_session{0};
     tcl::ConsoleMode console;
+    tcl::FrameCap frame_cap;
     // keep_console: the TV went silent (Wi-Fi dropped) rather than leaving; console mode (Big
     // Picture, 60 Hz, muted PC) stays on for a while so it can come straight back to the game.
     auto publish_peer = [&](bool keep_console = false) {
@@ -327,10 +332,16 @@ int main(int argc, char** argv) {
                 // Games from the TV's library also start inside Big Picture (it handles Steam's
                 // prompts and controller input in launchers); the TV hides it until the game shows.
                 console.enter(capture.display_name(), true);
+                if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
+                    tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
                 return;
             }
             if (keep_console && console.active()) return;
             console.leave();  // no-op unless a console session just ended
+            if (frame_cap.active()) {
+                frame_cap.leave();
+                tcl::emit_event("frame_cap", "\"on\":false");
+            }
             // "Área de trabalho": the PC stays as it is; only its sound moves to the TV.
             if (opt.audio && !tcl::AudioCapture::set_pc_muted(peer.has_value()))
                 TCL_WARN("audio", "could not change PC mute state");
@@ -939,6 +950,7 @@ int main(int argc, char** argv) {
     rx_thread.join();
     audio.stop();
     console.leave();
+    frame_cap.leave();
     if (opt.mute_pc) tcl::AudioCapture::set_pc_muted(false);  // never leave the PC muted on exit
     gamepads.unplug_all();
     SetEvent(g_cleanup_done);
