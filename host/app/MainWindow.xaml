@@ -216,6 +216,7 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="Placa de vídeo" Foreground="{StaticResource Muted}" Margin="0,0,16,10"/>
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Gpu}" HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" FontWeight="SemiBold"/>
@@ -227,7 +228,15 @@
                                 <TextBlock Grid.Row="3" Text="Controles conectados" Foreground="{StaticResource Muted}" Margin="0,0,16,0"/>
                                 <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding PadsConnected}" HorizontalAlignment="Right"
                                            FontFamily="{StaticResource Mono}" FontSize="12.5"/>
+                                <TextBlock Grid.Row="4" Text="Portas" Foreground="{StaticResource Muted}" Margin="0,10,16,0"/>
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding PortsText}" HorizontalAlignment="Right" Margin="0,10,0,0"
+                                           FontFamily="{StaticResource Mono}" FontSize="12.5"/>
                             </Grid>
+                            <!-- Several Jinkys on one PC (Windows users / ASTER workplaces): each is its own "PC" on the TV. -->
+                            <TextBlock Text="NOME NA TV" Style="{StaticResource Eyebrow}" Margin="0,16,0,0"/>
+                            <TextBox Style="{StaticResource Field}" Margin="0,8,0,4" FontFamily="{StaticResource Body}" FontSize="13.5"
+                                     Text="{Binding TvName}"/>
+                            <TextBlock Text="{Binding TvNameHint}" Foreground="{StaticResource Dim}" TextWrapping="Wrap" FontSize="12"/>
                             <Rectangle Height="1" Fill="{StaticResource Line}" Margin="0,18,0,16"/>
                             <TextBlock Text="BIBLIOTECA DA STEAM NA TV" Style="{StaticResource Eyebrow}"/>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding SteamDirect}" Margin="0,10,0,12">

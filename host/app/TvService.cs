@@ -17,7 +17,11 @@ namespace Jinky;
 /// </summary>
 public sealed class TvService : IDisposable
 {
-    public const int Port = 47101;
+    /// <summary>
+    /// This Jinky's HTTP port. 47101 for the first Jinky on the PC; each Windows user / ASTER
+    /// workplace running Jinky at the same time takes the next pair (see <see cref="Ports"/>).
+    /// </summary>
+    public static int Port => Ports.Service;
     const int MaxBody = 8 * 1024 * 1024;
     // Replaced on every Start(): the service stops while another Windows user has the screen
     // (that user's Jinky answers the TVs) and starts again when this one is back.

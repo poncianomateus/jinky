@@ -20,6 +20,11 @@ inline constexpr uint8_t kVersion = 1;
 inline constexpr size_t kMaxPayload = 1200;
 
 inline constexpr uint16_t kDefaultMediaPort = 47100;
+// Several Jinkys can run on one PC at once (one per Windows user / ASTER workplace), each its own
+// "PC" for the TVs: the first on kDefaultMediaPort, the next ones kMediaPortStep further on. TVs
+// look for PCs on all of them and use the port each one answered from.
+inline constexpr uint16_t kMediaPortStep = 10;
+inline constexpr int kMaxHostsPerPc = 4;
 
 enum class PacketType : uint8_t {
     Video = 1,

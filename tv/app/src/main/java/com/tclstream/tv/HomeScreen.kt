@@ -32,6 +32,7 @@ data class HomeHost(
     val mac: ByteArray?,
     val updateVersion: Int = 0,  // TV app version the PC offers (0 = none)
     val updatePort: Int = 0,
+    val port: Int = 0,  // its streaming port (several Jinkys, one per Windows user, can share a PC)
 ) {
     enum class Status { READY, BUSY, OFFLINE }
 }
@@ -56,6 +57,7 @@ class HomeScreen(
     private val onSettings: () -> Unit,
     private val onLibrary: (HomeHost, search: Boolean) -> Unit,
     private val onProfile: () -> Unit,
+    private val onChoosePc: () -> Unit,
 ) : TvPage(context) {
 
     private sealed class Item {
@@ -181,13 +183,23 @@ class HomeScreen(
             addView(libraryTab, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(update, LinearLayout.LayoutParams(-2, dp(28)).apply { marginEnd = dp(10) })
+            // The PC chip: OK opens "Escolher PC" (a PC can run one Jinky per Windows user).
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), 0, dp(13), 0)
-                background = Jinky.rounded(Jinky.GLASS, dp(14).toFloat())
+                isFocusable = true
+                isClickable = true
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), Jinky.rounded(Jinky.TEXT, dp(14).toFloat()))
+                    addState(intArrayOf(), Jinky.rounded(Jinky.GLASS, dp(14).toFloat()))
+                }
+                setOnClickListener { onChoosePc() }
                 addView(chipBars, LinearLayout.LayoutParams(-2, dp(9)).apply { marginEnd = dp(7) })
-                addView(statusText)
+                addView(statusText.apply {
+                    isDuplicateParentStateEnabled = true
+                    setTextColor(focusColors(Jinky.INK, Jinky.TEXT))
+                })
             }, LinearLayout.LayoutParams(-2, dp(28)))
             addView(search, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
             addView(profileButton, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })

@@ -59,10 +59,16 @@ public sealed class Settings
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
     }
 
+    /// <summary>How TVs list this Jinky; empty = "<PC name> · <Windows user>".</summary>
+    public string? TvName { get; set; }
+
+    public static string DefaultTvName => $"{Environment.MachineName} · {Environment.UserName}";
+
     /// <summary>Engine arguments for these preferences.</summary>
     public string EngineArguments()
     {
-        var args = "--events --stdin-control";
+        var name = string.IsNullOrWhiteSpace(TvName) ? DefaultTvName : TvName.Trim();
+        var args = $"--events --stdin-control --port {Ports.Media} --name \"{name.Replace("\"", "'")}\"";
         // Offer the bundled TV app to TVs (they update from this PC).
         if (TvService.Available) args += $" --tv-update {TvService.VersionCode}:{TvService.Port}";
         if (ConsoleMode) args += CapGames ? " --console --frame-cap" : " --console";
@@ -93,5 +99,51 @@ public static class StartWithWindows
             key.SetValue(Name, $"\"{Environment.ProcessPath}\" --tray");
         else
             key.DeleteValue(Name, throwOnMissingValue: false);
+    }
+}
+
+/// <summary>
+/// The ports of this Jinky. Several Jinkys can run on one PC at the same time (one per Windows
+/// user or ASTER workplace), each a separate "PC" for the TVs: the first takes 47100 (streaming,
+/// UDP) and 47101 (TV service, TCP), the next 47110/47111, and so on. TVs look on all of them
+/// and learn each Jinky's port from its answer, so the pair may differ from one start to the next.
+/// </summary>
+public static class Ports
+{
+    public const int First = 47100, Step = 10, Count = 4;
+
+    public static int Media { get; private set; } = First;
+    public static int Service => Media + 1;
+
+    /// <summary>Takes the first pair nobody is using. Returns the slot (0 = the usual ports).</summary>
+    public static int Pick()
+    {
+        for (var slot = 0; slot < Count; slot++)
+        {
+            var media = First + slot * Step;
+            if (Free(media, media + 1))
+            {
+                Media = media;
+                return slot;
+            }
+        }
+        Media = First;  // all taken: the engine reports it and keeps waiting
+        return 0;
+    }
+
+    static bool Free(int udp, int tcp)
+    {
+        try
+        {
+            using (new System.Net.Sockets.UdpClient(udp)) { }
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, tcp);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            return false;
+        }
     }
 }

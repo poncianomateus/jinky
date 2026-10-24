@@ -75,6 +75,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>How TVs list this Jinky (several can run on one PC: one per Windows user / ASTER workplace).</summary>
+    public string TvName
+    {
+        get => _settings.TvName ?? "";
+        set
+        {
+            var v = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (_settings.TvName == v) return;
+            _settings.TvName = v;
+            Notify();
+            _settingsChanged();  // the engine announces the name: restart it
+        }
+    }
+
+    public string TvNameHint => $"Vazio = \"{Settings.DefaultTvName}\"";
+    public string PortsText => $"{Ports.Media} e {Ports.Service}";
+
+    public void OnPortsChanged(int slot)
+    {
+        Notify(nameof(PortsText));
+        Notify(nameof(TvInstallUrl));
+        if (slot > 0) Add($"Outro Jinky usa as portas de sempre neste PC · este usa {PortsText}");
+    }
+
     /// <summary>Where a TV without Jinky downloads it from this PC (Downloader app, or the TV's browser).</summary>
     public string TvInstallUrl => LocalAddress() is { } ip ? $"http://{ip}:{TvService.Port}/tv/jinky.apk" : "";
 

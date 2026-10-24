@@ -127,9 +127,9 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(
 
 // --- home screen ---
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeConnect(JNIEnv* env, jclass, jlong h, jstring ip,
-                                                                         jboolean desktop, jboolean game) {
+                                                                         jint port, jboolean desktop, jboolean game) {
     const char* s = env->GetStringUTFChars(ip, nullptr);
-    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, desktop, game);
+    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, uint16_t(port), desktop, game);
     if (s) env->ReleaseStringUTFChars(ip, s);
 }
 

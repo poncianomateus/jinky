@@ -32,6 +32,11 @@ public sealed class Updater
 
     public static bool Configured => !Repository.StartsWith("OWNER/");
 
+    /// <summary>Installed "Só para mim" (inside this Windows user's profile), not for all users.</summary>
+    public static bool PerUserInstall =>
+        AppContext.BaseDirectory.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                            StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// The newest release if it is newer than this Jinky, else null. Never throws. Releases are
     /// published as pre-releases ("teste") first and promoted once tested: everyone gets the
@@ -108,9 +113,16 @@ public sealed class Updater
                 File.Delete(path);
                 return "O arquivo baixado não confere com a assinatura da versão. Nada foi instalado.";
             }
-            // The installer asks Windows for administrator rights (firewall rules, driver), closes
-            // this Jinky cleanly, updates it and reopens it in the tray.
-            Process.Start(new ProcessStartInfo(path, "/SILENT /SUPPRESSMSGBOXES /NORESTART /SP-") { UseShellExecute = true, Verb = "runas" });
+            // Same kind of installation as this one. "Para todos os usuários": the installer asks
+            // Windows for administrator rights (firewall rules, driver). "Só para mim" (installed in
+            // this user's profile): no admin. Either way it closes this Jinky cleanly, updates it
+            // and reopens it in the tray.
+            var forMeOnly = PerUserInstall;
+            Process.Start(new ProcessStartInfo(path, "/SILENT /SUPPRESSMSGBOXES /NORESTART /SP- " + (forMeOnly ? "/CURRENTUSER" : "/ALLUSERS"))
+            {
+                UseShellExecute = true,
+                Verb = forMeOnly ? "" : "runas",
+            });
             return null;
         }
         catch (System.ComponentModel.Win32Exception)

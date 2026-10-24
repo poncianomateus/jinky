@@ -94,9 +94,19 @@ public partial class App : Application
         _engine.EventReceived += ev => Dispatcher.Invoke(() => { _vm.OnEngineEvent(ev); UpdateTray(); });
         _engine.Failed += msg => Dispatcher.Invoke(() => { _vm.OnEngineFailed(msg); UpdateTray(); });
         _engine.Exited += () => Dispatcher.Invoke(() => { _vm.OnEngineExited(); UpdateTray(); });
+        // Another Jinky took this one's port meanwhile: pick a free pair and start again.
+        _engine.PortBusy += () => Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() =>
+        {
+            if (_quitting || !_onScreen) return;
+            _tvService?.Stop();
+            UsePorts();
+            _tvService?.Start();
+            RunEngine(e => e.Start(_settings.EngineArguments()));
+        }));
         _onScreen = OnScreen();
         if (_onScreen)
         {
+            UsePorts();
             _tvService.Start();
             _engine.Start(_settings.EngineArguments());
         }
@@ -160,6 +170,13 @@ public partial class App : Application
         lock (this) _engineWork = _engineWork.ContinueWith(_ => work(engine), TaskScheduler.Default);
     }
 
+    /// <summary>Takes a free pair of ports (another Jinky on this PC may have the usual ones).</summary>
+    void UsePorts()
+    {
+        var slot = Ports.Pick();
+        _vm?.OnPortsChanged(slot);
+    }
+
     /// <summary>
     /// Whether this Windows user's session is on a screen: active, not disconnected. After "switch
     /// user" the one left behind is disconnected; with ASTER every workplace's session is active.
@@ -193,6 +210,7 @@ public partial class App : Application
         else
         {
             _vm.OnBack();
+            UsePorts();
             _tvService.Start();
             RunEngine(e => e.Start(_settings.EngineArguments()));
         }

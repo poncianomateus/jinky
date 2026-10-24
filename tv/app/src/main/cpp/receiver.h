@@ -40,7 +40,8 @@ public:
     // returns to discovery.
     // `game`: a game chosen in the TV's library (console mode without Big Picture; the PC says
     // when the game is on screen and ends the session when it closes).
-    void connect(uint32_t ip, bool desktop, bool game = false);
+    // [port]: the PC's streaming port from its answer to discovery (0 = keep the current one).
+    void connect(uint32_t ip, uint16_t port, bool desktop, bool game = false);
     // -1 = not yet; else tclproto::GameReadyReason (on screen / a prompt waits for the player).
     int game_ready() const { return game_ready_; }
     int end_reason() const { return end_reason_; }
@@ -135,7 +136,7 @@ private:
     static constexpr size_t kMaxQueuedFrames = 4;
 
     tclproto::UdpSocket sock_;
-    uint16_t host_port_ = 0;
+    std::atomic<uint16_t> host_port_{0};  // the session PC's port (several Jinkys may share an IP)
     std::thread thread_;
     std::atomic<bool> running_{false};
 
@@ -160,6 +161,7 @@ private:
     std::atomic<bool> session_wanted_{false};
     std::atomic<bool> desktop_{false};
     std::atomic<uint32_t> connect_ip_{0};  // pending connect request (0 = none)
+    std::atomic<uint16_t> connect_port_{0};
     std::atomic<bool> connect_desktop_{false};
     std::atomic<bool> connect_game_{false};
     std::atomic<bool> game_{false};
@@ -170,6 +172,7 @@ private:
     struct KnownHost {
         tclproto::HostInfo info;
         uint32_t ip = 0;
+        uint16_t port = 0;  // the port it answered from: its streaming port
         int64_t seen_ms = 0;
     };
     mutable std::mutex hosts_mu_;

@@ -2,6 +2,7 @@
 // Captures the desktop, encodes H.264 with NVENC and streams it over UDP to the first receiver
 // that says Hello. No pairing/encryption yet: LAN testing only (see docs/ARCHITECTURE.md §9).
 #include <windows.h>
+#include <shellapi.h>
 #include <avrt.h>
 #include <timeapi.h>
 
@@ -99,6 +100,7 @@ struct Options {
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
     uint16_t tv_update_port = 0;  // "quit" on stdin (or stdin closing) stops the engine cleanly
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
+    std::string name;  // how TVs list this PC ("" = the computer's name)
     tcl::EncoderConfig enc;
 };
 
@@ -132,6 +134,7 @@ bool parse_args(int argc, char** argv, Options& o) {
             std::exit(0);
         }
         else if (a == "--codec" && (v = next())) o.codec = v;
+        else if (a == "--name" && (v = next())) o.name = v;
         else if (a == "--refs" && (v = next())) o.enc.max_ref_frames = uint32_t(std::atoi(v));
         else if (a == "--bitrate" && (v = next())) o.enc.bitrate_kbps = uint32_t(std::atoi(v));
         else if (a == "--fps" && (v = next())) o.enc.fps = uint32_t(std::atoi(v));
@@ -144,7 +147,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else {
             std::fprintf(stderr,
                          "usage: jinky-engine [--port 47100] [--output 0] [--bitrate 40000]\n"
-                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console] [--frame-cap] [--insecure]\n"
+                         "                      [--fps 60] [--size 1920x1080] [--test-pattern] [--stress] [--no-audio] [--mute-pc] [--console] [--frame-cap] [--name PC] [--insecure]\n"
                          "                      [--codec auto|hevc|h264]\n");
             return false;
         }
@@ -157,6 +160,13 @@ bool parse_args(int argc, char** argv, Options& o) {
 int main(int argc, char** argv) {
     Options opt;
     if (!parse_args(argc, argv, opt)) return 2;
+    // argv is in the ANSI code page: read --name again as Unicode (Windows user names may have
+    // accents) and keep it as UTF-8, which is what the protocol carries.
+    if (int wargc = 0; LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc)) {
+        for (int i = 1; i + 1 < wargc; ++i)
+            if (std::wstring_view(wargv[i]) == L"--name") opt.name = utf8(wargv[i + 1]);
+        LocalFree(wargv);
+    }
     // If a previous run was killed while the PC was muted for streaming, give the sound back.
     if (tcl::ConsoleMode::restore_if_left())
         TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
@@ -307,7 +317,8 @@ int main(int argc, char** argv) {
     };
     std::optional<PendingPair> pending;
     std::map<uint64_t, steady_clock::time_point> discover_replies;
-    const std::string pc_name = tcl::computer_name();
+    // Several Jinkys on one PC (one per Windows user / ASTER workplace) tell TVs apart by name.
+    const std::string pc_name = opt.name.empty() ? tcl::computer_name() : opt.name;
     auto send_auth_required = [&](const tclproto::Endpoint& to) {
         auto& n = nonces[addr_key(to)];
         if (n.value == 0) n.value = tcl::random_u64() | 1;

@@ -48,9 +48,10 @@ void Receiver::stop() {
     sock_.close();
 }
 
-void Receiver::connect(uint32_t ip, bool desktop, bool game) {
+void Receiver::connect(uint32_t ip, uint16_t port, bool desktop, bool game) {
     connect_desktop_ = desktop;
     connect_game_ = game;
+    connect_port_ = port;
     connect_ip_ = ip;
 }
 
@@ -78,7 +79,8 @@ std::string Receiver::hosts() const {
             out += buf;
         }
         out += "|" + std::to_string(now - h.seen_ms) + "|" + h.info.name + "|" + h.info.busy_with + "|" +
-               std::to_string(h.info.tv_version_code) + "|" + std::to_string(h.info.update_port) + "\n";
+               std::to_string(h.info.tv_version_code) + "|" + std::to_string(h.info.update_port) + "|" +
+               std::to_string(h.port) + "\n";
     }
     return out;
 }
@@ -88,6 +90,7 @@ void Receiver::on_host_info(const tclproto::HostInfo& info, const tclproto::Endp
     auto& h = hosts_[info.host_id];
     h.info = info;
     h.ip = from.ip;
+    h.port = from.port;
     h.seen_ms = now_ms();
 }
 
@@ -107,6 +110,7 @@ void Receiver::apply_connect_requests() {
         queue_.clear();
     }
     if (const uint32_t ip = connect_ip_.exchange(0)) {
+        if (const uint16_t port = connect_port_.exchange(0)) host_port_ = port;
         host_ = tclproto::Endpoint{ip, host_port_};
         host_known_ = true;
         host_ip_ = ip;
@@ -354,8 +358,12 @@ void Receiver::net_loop() {
             if (now - last_discover_ms_ >= (answered ? 2000 : 500)) {
                 uint8_t d[tclproto::ControlMessage::kSize];
                 tclproto::ControlMessage{PacketType::Discover, 0, 0}.write(d);
-                sock_.send_to(tclproto::Endpoint::broadcast(host_port_), d);
-                for (uint32_t ip : direct) sock_.send_to(tclproto::Endpoint{ip, host_port_}, d);
+                // Every Jinky a PC may run (one per Windows user / ASTER workplace) has its own port.
+                for (int k = 0; k < tclproto::kMaxHostsPerPc; ++k) {
+                    const uint16_t port = uint16_t(tclproto::kDefaultMediaPort + k * tclproto::kMediaPortStep);
+                    sock_.send_to(tclproto::Endpoint::broadcast(port), d);
+                    for (uint32_t ip : direct) sock_.send_to(tclproto::Endpoint{ip, port}, d);
+                }
                 last_discover_ms_ = now;
             }
             tclproto::Endpoint from;

@@ -23,6 +23,7 @@ public sealed class Engine : IDisposable
     public event Action<EngineEvent>? EventReceived;
     public event Action<string>? Failed;  // could not start / keeps crashing
     public event Action? Exited;
+    public event Action? PortBusy;  // its port belongs to another Jinky: the app picks ports and starts it again
 
     readonly SafeJobHandle _job = SafeJobHandle.CreateKillOnClose();
     Process? _process;
@@ -115,7 +116,8 @@ public sealed class Engine : IDisposable
         // crash; wait for it to be free.
         if (p.ExitCode == 3)
         {
-            Task.Delay(3000).ContinueWith(_ => { if (!_stopping) Launch(); });
+            _stopping = true;
+            PortBusy?.Invoke();
             return;
         }
 

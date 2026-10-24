@@ -6,6 +6,11 @@ import android.content.Context
 class TvSettings(context: Context) {
     private val prefs = context.getSharedPreferences("jinky_settings", Context.MODE_PRIVATE)
 
+    /** The PC chosen in "Escolher PC" (host id; 0 = none yet: the first one ready). */
+    var preferredPc: Long
+        get() = prefs.getLong("preferred_pc", 0L)
+        set(v) = prefs.edit().putLong("preferred_pc", v).apply()
+
     /** Picture quality in Mbit/s; 0 = whatever the PC is set to. */
     var bitrateMbps: Int
         get() = prefs.getInt("bitrate_mbps", 0)

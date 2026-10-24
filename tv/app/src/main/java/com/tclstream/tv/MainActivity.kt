@@ -29,6 +29,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var homeScreen: HomeScreen
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var helpScreen: HelpScreen
+    private lateinit var pcPicker: PcPickerScreen
     private lateinit var libraryScreen: LibraryScreen
     private lateinit var gameScreen: GameScreen
     private lateinit var achievementsScreen: AchievementsScreen
@@ -48,7 +49,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var wasInSession = false
@@ -160,7 +161,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     }
                     sessionDesktop = desktop
                     sessionGame = null
-                    receiver?.connect(host.ip, desktop)
+                    receiver?.connect(host.ip, host.port, desktop)
                     homeScreen.visibility = View.GONE
                     startScreen.setShown(true)
                 },
@@ -179,7 +180,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         showPage(Page.PROFILE)
                         profileScreen.show(h.ip, h.updatePort)
                     }
-                })
+                },
+                onChoosePc = { showPage(Page.PCS) })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             settingsScreen = SettingsScreen(this@MainActivity, settings,
@@ -195,6 +197,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
+            pcPicker = PcPickerScreen(this@MainActivity,
+                onChoose = { h ->
+                    settings.preferredPc = h.id
+                    gamesFrom = null  // load the chosen PC's library
+                    showPage(Page.HOME)
+                    updateHome()
+                },
+                onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
+            addView(pcPicker, FrameLayout.LayoutParams(-1, -1))
             libraryScreen = LibraryScreen(this@MainActivity, settings,
                 onOpen = { game -> openGame(game, Page.LIBRARY) },
                 onPlay = { game -> homeHost?.let { playGame(it, game) } },
@@ -371,6 +382,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             gameScreen.visibility == View.VISIBLE -> Page.GAME
             achievementsScreen.visibility == View.VISIBLE -> Page.ACHIEVEMENTS
             profileScreen.visibility == View.VISIBLE -> Page.PROFILE
+            pcPicker.visibility == View.VISIBLE -> Page.PCS
             else -> null
         }
         if (p != null) page = p
@@ -381,6 +393,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         gameScreen.visibility = if (p == Page.GAME) View.VISIBLE else View.GONE
         achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
         profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
+        pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
+        if (p == Page.PCS && before != Page.PCS) pcPicker.show(knownPcs(), homeHost?.id)
         if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
@@ -393,6 +407,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.GAME -> gameScreen
                 Page.ACHIEVEMENTS -> achievementsScreen
                 Page.PROFILE -> profileScreen
+                Page.PCS -> pcPicker
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -409,6 +424,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.GAME -> gameScreen.focusFirst()
             Page.ACHIEVEMENTS -> achievementsScreen.focusFirst()
             Page.PROFILE -> profileScreen.focusFirst()
+            Page.PCS -> pcPicker.focusFirst()
         }
         updateUiInput()
     }
@@ -475,7 +491,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         homeScreen.visibility = View.GONE
         launchScreen.show(game, host.ip, host.updatePort)
         audio?.muted = true  // Big Picture opens behind the launch screen: not a sound of it
-        receiver?.connect(host.ip, false, game = true)
+        receiver?.connect(host.ip, host.port, false, game = true)
         // The PC starts the game as soon as this session begins.
         Thread {
             LibraryScreen.launch(host.ip, host.updatePort, game)?.let { Log.w(TAG, "launch ${game.name}: $it") }
@@ -496,7 +512,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         showPage(Page.HOME)
         homeScreen.visibility = View.GONE
         startScreen.setShown(true)
-        receiver?.connect(host.ip, false)
+        receiver?.connect(host.ip, host.port, false)
         Thread {
             LibraryScreen.install(host.ip, host.updatePort, game)?.let { Log.w(TAG, "install ${game.name}: $it") }
         }.start()
@@ -559,12 +575,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun forgetPc() {
-        val ids = pairingStore.hosts().keys
-        if (ids.isEmpty()) {
-            settingsScreen.setNote("Esta TV não está pareada com nenhum PC.")
+        // Only the PC in use (others, e.g. another Windows user's Jinky, stay paired).
+        val id = homeHost?.id
+        if (id == null || id !in pairingStore.hosts().keys) {
+            settingsScreen.setNote("Esta TV não está pareada com este PC.")
             return
         }
-        ids.forEach { pairingStore.remove(it) }
+        pairingStore.remove(id)
         // The native side still holds the old key: start it again without it.
         stopReceiver()
         startReceiver()
@@ -635,23 +652,38 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // --- in-stream menu: View + Menu held on the controller, or Back on the TV remote ---
 
+    /** PCs answering discovery right now. One PC may run several Jinkys (one per Windows user). */
+    private fun onlinePcs(): List<HomeHost> = receiver?.hosts().orEmpty().lines().mapNotNull { line ->
+        val p = line.split('|')
+        if (p.size < 7) return@mapNotNull null
+        val id = java.lang.Long.parseUnsignedLong(p[0], 16)
+        val age = p[4].toLongOrNull() ?: Long.MAX_VALUE
+        hostCache.remember(id, p[5], p[1], p[3])
+        if (age > 6000) return@mapNotNull null  // not answering any more
+        HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
+            HostCache.parseMac(p[3]), p.getOrNull(7)?.toIntOrNull() ?: 0, p.getOrNull(8)?.toIntOrNull() ?: 0,
+            p.getOrNull(9)?.toIntOrNull() ?: 0)
+    }
+
+    /** For "Escolher PC": the ones online, then the others this TV has seen. */
+    private fun knownPcs(): List<HomeHost> {
+        val online = onlinePcs()
+        return online + hostCache.all().filter { c -> online.none { it.id == c.id } }
+            .map { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+    }
+
     /** Home screen: the PC this TV knows, live from discovery, else from the cache (to wake it). */
     private fun updateHome() {
         val now = android.os.SystemClock.elapsedRealtime()
         startScreen.setShown(false)
         showPage(page)
-        val online = receiver?.hosts().orEmpty().lines().mapNotNull { line ->
-            val p = line.split('|')
-            if (p.size < 7) return@mapNotNull null
-            val id = java.lang.Long.parseUnsignedLong(p[0], 16)
-            val age = p[4].toLongOrNull() ?: Long.MAX_VALUE
-            hostCache.remember(id, p[5], p[1], p[3])
-            if (age > 6000) return@mapNotNull null  // not answering any more
-            HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
-                HostCache.parseMac(p[3]), p.getOrNull(7)?.toIntOrNull() ?: 0, p.getOrNull(8)?.toIntOrNull() ?: 0)
-        }
-        val host = online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
-            ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+        val online = onlinePcs()
+        // The PC chosen in "Escolher PC" when it is there; else the first one ready.
+        val preferred = settings.preferredPc
+        val host = online.firstOrNull { it.id == preferred }
+            ?: online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
+            ?: hostCache.all().let { all -> all.firstOrNull { it.id == preferred } ?: all.firstOrNull() }
+                ?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
         homeHost = host
         lastPictureMs = 0L
@@ -663,7 +695,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun uiShown() = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
-        profileScreen.visibility == View.VISIBLE || menu.isOpen
+        profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE || menu.isOpen
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
@@ -839,7 +871,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onBackPressed() {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (profileScreen.visibility == View.VISIBLE) showPage(Page.HOME)
+        if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (achievementsScreen.visibility == View.VISIBLE) closeAchievements()
         else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
         else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
