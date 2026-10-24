@@ -224,6 +224,23 @@ int main(int argc, char** argv) {
         return 1;
     }
     TCL_INFO("encoder", "active: {}", encoder.description());
+    // The encoder reads the converter's output texture (registered with NVENC at open). Whenever
+    // that texture is recreated (desktop resolution change), or encoding keeps failing, open the
+    // encoder again on the current texture, at the bitrate it was using. Without this a game
+    // switching resolution left every later frame failing until Jinky was restarted.
+    uint32_t encode_failures = 0;
+    auto reopen_encoder = [&](const char* why) {
+        const uint32_t kbps = encoder.bitrate_kbps();
+        encoder.close();
+        if (!encoder.open(capture.device(), converter.output(), opt.enc)) {
+            TCL_ERROR("encoder", "reopen after {} failed: {}", why, encoder.error());
+            return false;
+        }
+        if (kbps && kbps != opt.enc.bitrate_kbps && !encoder.set_bitrate(kbps)) TCL_WARN("encoder", "{}", encoder.error());
+        encode_failures = 0;
+        TCL_INFO("encoder", "reopened after {}: {}", why, encoder.description());
+        return true;
+    };
     tcl::emit_event("ready", "\"gpu\":" + tcl::json_str(utf8(capture.adapter_name())) + ",\"desktop\":\"" +
                                  std::to_string(capture.width()) + "x" + std::to_string(capture.height()) + "\"");
 
@@ -849,6 +866,7 @@ int main(int argc, char** argv) {
                     TCL_ERROR("convert", "{}", converter.error());
                     return 1;
                 }
+                if (!reopen_encoder("a resolution change")) return 1;
             }
             idr_pending = true;
             continue;
@@ -875,9 +893,15 @@ int main(int argc, char** argv) {
         const bool fresh = dirty;
         const uint64_t t0 = now_us();
         if (!encoder.encode(send_idr, t0, bitstream, key)) {
-            TCL_ERROR("encoder", "{}", encoder.error());
+            // Log the first failures only; after half a second of them, start the encoder over.
+            if (++encode_failures <= 3) TCL_ERROR("encoder", "{}", encoder.error());
+            if (encode_failures >= 30) {
+                if (!reopen_encoder("repeated encode failures")) return 1;
+                idr_pending = true;
+            }
             continue;
         }
+        encode_failures = 0;
         const uint64_t encode_us = now_us() - t0;
         encode_us_total += encode_us;
         encode_us_max = std::max(encode_us_max, encode_us);
