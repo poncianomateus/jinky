@@ -20,7 +20,8 @@ DisableDirPage=auto
 ; Windows user / ASTER workplace can then have its own Jinky, with its own version and updates.
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog commandline
-UsePreviousPrivileges=yes
+; Always ask (an all-users install on the PC must not decide for another Windows user).
+UsePreviousPrivileges=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
