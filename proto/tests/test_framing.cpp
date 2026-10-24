@@ -104,9 +104,11 @@ static void test_input_roundtrip() {
     in.ly = 32767;
     in.rx = -1;
     in.ry = 1000;
+    in.sent_us = 0xDEADBEEF;
     uint8_t buf[InputState::kSize];
     in.write(buf);
     auto r = InputState::read(buf);
+    CHECK(r && r->sent_us == 0xDEADBEEF);
     CHECK(r && r->pad_index == 2 && r->connected && r->seq == 123456 && r->buttons == in.buttons);
     CHECK(r->left_trigger == 17 && r->right_trigger == 255);
     CHECK(r->lx == -32768 && r->ly == 32767 && r->rx == -1 && r->ry == 1000);

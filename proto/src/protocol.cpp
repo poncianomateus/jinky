@@ -151,7 +151,7 @@ void InputState::write(std::span<uint8_t> out, std::span<const uint8_t> key) con
     put_u16(p + 22, uint16_t(ly));
     put_u16(p + 24, uint16_t(rx));
     put_u16(p + 26, uint16_t(ry));
-    put_u32(p + 28, 0);
+    put_u32(p + 28, sent_us);
     const Mac m = key.empty() ? Mac{} : mac(key, {p, 32});
     std::memcpy(p + 32, m.data(), kMacSize);
 }
@@ -179,6 +179,7 @@ std::optional<InputState> InputState::read(std::span<const uint8_t> in) {
     s.ly = int16_t(get_u16(p + 22));
     s.rx = int16_t(get_u16(p + 24));
     s.ry = int16_t(get_u16(p + 26));
+    s.sent_us = get_u32(p + 28);
     return s;
 }
 

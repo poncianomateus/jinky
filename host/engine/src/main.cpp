@@ -331,6 +331,8 @@ int main(int argc, char** argv) {
     std::optional<tclproto::Endpoint> input_peer;
     tclproto::PairKey input_key{};
     std::atomic<steady_clock::rep> last_input{0};  // steady_clock ticks of the last accepted input
+    // Controller input's trip from the TV (its send time is stamped on this PC's clock).
+    std::atomic<uint64_t> input_trip_sum_us{0}, input_trip_count{0}, input_trip_max_us{0};
 
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
     std::atomic<uint64_t> audio_peer{0};
@@ -485,6 +487,17 @@ int main(int argc, char** argv) {
                 if (ok) {
                     gamepads.apply(*in);
                     last_input = steady_clock::now().time_since_epoch().count();
+                    if (in->sent_us) {
+                        const int32_t trip = int32_t(uint32_t(now_us()) - in->sent_us);
+                        // Within a second only: anything else is a clock not yet settled.
+                        if (trip > -5'000 && trip < 1'000'000) {
+                            input_trip_sum_us += uint64_t(std::max(trip, 0));
+                            input_trip_count++;
+                            uint64_t seen = input_trip_max_us.load();
+                            while (uint64_t(std::max(trip, 0)) > seen &&
+                                   !input_trip_max_us.compare_exchange_weak(seen, uint64_t(std::max(trip, 0)))) {}
+                        }
+                    }
                 }
                 continue;
             }
@@ -979,6 +992,12 @@ int main(int argc, char** argv) {
                                                  frames_sent / secs, bytes_sent * 8 / secs / 1e6,
                                                  frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0,
                                                  encoder.bitrate_kbps() / 1000.0, resent));
+            if (const uint64_t count = input_trip_count.exchange(0)) {
+                const double avg_ms = double(input_trip_sum_us.exchange(0)) / double(count) / 1000.0;
+                const double max_ms = double(input_trip_max_us.exchange(0)) / 1000.0;
+                TCL_INFO("stats", "controller input from the TV: avg {:.1f} ms, max {:.1f} ms ({} packets)", avg_ms, max_ms, count);
+                tcl::emit_event("input", std::format("\"avg_ms\":{:.1f},\"max_ms\":{:.1f}", avg_ms, max_ms));
+            }
             TCL_INFO("stats", "{:.1f} fps sent, {:.1f} Mbit/s (target {:.0f}), encode avg {:.2f} max {:.2f} ms, send gap max {:.1f} ms, late sends {}, packets resent {}",
                      frames_sent / secs, bytes_sent * 8 / secs / 1e6, encoder.bitrate_kbps() / 1000.0,
                      frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0, encode_us_max / 1000.0,

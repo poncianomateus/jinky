@@ -696,6 +696,8 @@ void Receiver::send_input(tclproto::InputState state) {
     if (!host_known_) return;
     const uint32_t ip = host_ip_;
     state.session_id = session_id_;
+    // Stamped on the PC's clock so the PC can measure the trip (TV -> Wi-Fi -> PC).
+    if (clock_synced_) state.sent_us = uint32_t(now_us() + clock_offset_us_.load());
     uint8_t buf[tclproto::InputState::kSize];
     {
         // Signed with the pair key, so the PC accepts it as coming from this TV.

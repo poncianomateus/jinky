@@ -240,6 +240,9 @@ struct InputState {
     uint16_t buttons = 0;     // GamepadButtons
     uint8_t left_trigger = 0, right_trigger = 0;  // 0..255
     int16_t lx = 0, ly = 0, rx = 0, ry = 0;       // -32768..32767, +y = up (XInput convention)
+    // When the TV sent it, on the PC's clock (low 32 bits of its microseconds, from the clock
+    // sync); 0 = unknown. Lets the PC measure how long controller input takes to arrive.
+    uint32_t sent_us = 0;
 
     // 32 bytes of state + a 16-byte MAC over them, made with the TV's pair key (zeros when the
     // host runs without pairing, e.g. --insecure test mode).
