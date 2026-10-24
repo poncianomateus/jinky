@@ -52,6 +52,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
+    private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
     private var wasInSession = false
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
@@ -678,12 +679,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startScreen.setShown(false)
         showPage(page)
         val online = onlinePcs()
-        // The PC chosen in "Escolher PC" when it is there; else the first one ready.
+        // The PC chosen in "Escolher PC": shown even when it is off (this TV belongs to it; it must
+        // not land on another Windows user's Jinky by itself). No choice yet: the only PC there is,
+        // and with more than one, ask (once) instead of guessing.
         val preferred = settings.preferredPc
+        val chosenOffline = if (preferred == 0L || online.any { it.id == preferred }) null
+            else hostCache.all().firstOrNull { it.id == preferred }?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
         val host = online.firstOrNull { it.id == preferred }
+            ?: chosenOffline
             ?: online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
-            ?: hostCache.all().let { all -> all.firstOrNull { it.id == preferred } ?: all.firstOrNull() }
-                ?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+            ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+        if (preferred == 0L && online.size > 1 && !askedForPc && page == Page.HOME) {
+            askedForPc = true
+            ui.post { showPage(Page.PCS) }
+        }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
         homeHost = host
         lastPictureMs = 0L
