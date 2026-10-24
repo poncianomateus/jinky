@@ -13,8 +13,20 @@ public sealed class Settings
     /// <summary>Console sessions cap games at the stream's 60 fps (NVIDIA driver), leaving GPU room for the stream.</summary>
     public bool CapGames { get; set; } = true;
 
-    /// <summary>Also offer test versions (pre-releases): for trying a version before everyone gets it.</summary>
-    public bool TestUpdates { get; set; }
+    /// <summary>
+    /// Also offer test versions (pre-releases), to try a version before everyone gets it. Only on
+    /// the developer's PC (see <see cref="Developer"/>); unset there means on.
+    /// </summary>
+    public bool? TestUpdates { get; set; }
+
+    /// <summary>
+    /// The developer's own PC: a file named "developer" in Jinky's data folder. Only there does
+    /// Jinky show and use the test-versions channel; everyone else gets stable releases only.
+    /// </summary>
+    public static bool Developer => File.Exists(Path.Combine(Folder, "developer"));
+
+    /// <summary>Whether this PC is offered test versions.</summary>
+    public bool WantsTestUpdates => Developer && (TestUpdates ?? true);
 
     /// <summary>When console mode is off: still send the sound only to the TV.</summary>
     public bool SoundOnlyOnTv { get; set; } = true;

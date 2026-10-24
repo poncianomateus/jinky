@@ -242,8 +242,11 @@
                             <TextBox Style="{StaticResource Field}" Margin="0,10,0,8"
                                      Text="{Binding SteamApiKey, UpdateSourceTrigger=PropertyChanged}"/>
                             <TextBlock Text="{Binding SteamKeyStatus}" Foreground="{StaticResource Dim}" TextWrapping="Wrap" FontSize="12"/>
-                            <Rectangle Height="1" Fill="{StaticResource Line}" Margin="0,18,0,16"/>
-                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding TestUpdates}">
+                            <!-- Only on the developer's PC (a "developer" file in Jinky's data folder). -->
+                            <Rectangle Height="1" Fill="{StaticResource Line}" Margin="0,18,0,16"
+                                       Visibility="{Binding ShowTestUpdates, Converter={StaticResource BoolToVisibility}}"/>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding TestUpdates}"
+                                      Visibility="{Binding ShowTestUpdates, Converter={StaticResource BoolToVisibility}}">
                                 <StackPanel>
                                     <TextBlock Text="Receber versões de teste" FontWeight="Bold"/>
                                     <TextBlock Text="Este PC (e as TVs dele) recebe as versões novas antes de todo mundo, para testar. Podem ter problemas."

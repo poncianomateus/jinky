@@ -59,12 +59,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>The update channel changed: check again now.</summary>
     public event Action? UpdateChannelChanged;
 
+    /// <summary>The test-versions switch exists only on the developer's PC.</summary>
+    public bool ShowTestUpdates => Settings.Developer;
+
     public bool TestUpdates
     {
-        get => _settings.TestUpdates;
+        get => _settings.WantsTestUpdates;
         set
         {
-            if (_settings.TestUpdates == value) return;
+            if (_settings.WantsTestUpdates == value) return;
             _settings.TestUpdates = value;
             _settings.Save();
             Notify();

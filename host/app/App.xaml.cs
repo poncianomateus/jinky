@@ -107,7 +107,7 @@ public partial class App : Application
             await Task.Delay(TimeSpan.FromSeconds(20));
             while (true)
             {
-                var update = await Updater.CheckAsync(_settings.TestUpdates);
+                var update = await Updater.CheckAsync(_settings.WantsTestUpdates);
                 Dispatcher.Invoke(() =>
                 {
                     var isNew = update is not null && _vm.OfferedVersion != update.Version;

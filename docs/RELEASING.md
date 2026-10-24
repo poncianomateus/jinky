@@ -11,7 +11,7 @@ Atualizar o PC = as TVs passam a se atualizar a partir dele.
 
 ### Canal de testes (desde 0.6.7)
 
-Toda versão nasce como **teste** (pre-release no GitHub). Só os PCs com **"Receber versões de teste"** ligado (no card "Este PC") a recebem — e as TVs desses PCs junto, porque se atualizam pelo PC. Os demais Jinky só olham `releases/latest`, que ignora pre-releases.
+Toda versão nasce como **teste** (pre-release no GitHub). Só o PC do desenvolvedor a recebe: ele tem o arquivo `%LOCALAPPDATA%\Jinky\developer` (vazio), que faz aparecer **"Receber versões de teste"** no card "Este PC" (ligado por padrão). Sem esse arquivo o Jinky nem mostra a opção. Esse PC recebe a versão de teste, e as TVs dele junto, porque se atualizam pelo PC. Os demais Jinky só olham `releases/latest`, que ignora pre-releases.
 
 1. Publica como teste → testa no seu PC/TVs.
 2. Deu problema? Corrige e publica outra versão de teste (ninguém mais foi afetado).
