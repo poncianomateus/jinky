@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     void AcceptPairing_Click(object sender, RoutedEventArgs e) => Vm.AcceptPairing();
 
     async void Update_Click(object sender, RoutedEventArgs e) => await Vm.InstallUpdateAsync();
+    void CheckUpdates_Click(object sender, RoutedEventArgs e) => Vm.CheckForUpdatesNow();
     void RejectPairing_Click(object sender, RoutedEventArgs e) => Vm.RejectPairing();
 
     void Unpair_Click(object sender, RoutedEventArgs e)

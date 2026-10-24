@@ -26,6 +26,7 @@ public sealed class Settings
     public static bool Developer => File.Exists(Path.Combine(Folder, "developer"));
 
     /// <summary>Whether this PC is offered test versions.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool WantsTestUpdates => Developer && (TestUpdates ?? true);
 
     /// <summary>When console mode is off: still send the sound only to the TV.</summary>

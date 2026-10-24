@@ -121,7 +121,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void SetUpdate(UpdateInfo? update)
     {
         _update = update;
+        if (_checkingNow)
+        {
+            _checkingNow = false;
+            UpdateCheckText = update is null ? "Você já tem a versão mais nova."
+                : $"Versão {update.Version} disponível: clique em \"Atualizar\" lá em cima.";
+        }
         NotifyUpdate();
+    }
+
+    bool _checkingNow;
+    string _updateCheckText = "";
+    public string UpdateCheckText { get => _updateCheckText; private set { _updateCheckText = value; Notify(); } }
+
+    /// <summary>"Procurar atualização": checks GitHub now instead of waiting for the next 6-hour round.</summary>
+    public void CheckForUpdatesNow()
+    {
+        _checkingNow = true;
+        UpdateCheckText = "Procurando…";
+        UpdateChannelChanged?.Invoke();
     }
 
     public async Task InstallUpdateAsync()
