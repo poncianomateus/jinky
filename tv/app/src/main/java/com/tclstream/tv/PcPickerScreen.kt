@@ -34,16 +34,17 @@ class PcPickerScreen(
         addView(root, LayoutParams(-1, -1))
     }
 
-    /** Lists [hosts] (the one in use first) and focuses the one in use. */
-    fun show(hosts: List<HomeHost>, currentId: Long?) {
+    /** Lists [hosts] (the one in use, then the ones paired with this TV) and focuses the one in use. */
+    fun show(hosts: List<HomeHost>, currentId: Long?, paired: Set<Long>) {
         list.removeAllViews()
         var focus: View? = null
-        for (h in hosts.sortedByDescending { it.id == currentId }) {
+        for (h in hosts.sortedWith(compareByDescending<HomeHost> { it.id == currentId }.thenByDescending { it.id in paired })) {
             val status = when (h.status) {
                 HomeHost.Status.READY -> "Pronto"
                 HomeHost.Status.BUSY -> if (h.busyWith.isNotEmpty()) "Jogando em ${h.busyWith}" else "Em uso"
                 HomeHost.Status.OFFLINE -> "Desligado ou sem o Jinky aberto"
-            } + if (h.id == currentId) " · em uso nesta TV" else ""
+            } + (if (h.id !in paired) " · ainda não pareado com esta TV" else "") +
+                if (h.id == currentId) " · em uso nesta TV" else ""
             val row = bigButton().apply {
                 text = twoLines(h.name, status)
                 setOnClickListener { onChoose(h) }

@@ -395,7 +395,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
         profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
         pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
-        if (p == Page.PCS && before != Page.PCS) pcPicker.show(knownPcs(), homeHost?.id)
+        if (p == Page.PCS && before != Page.PCS) pcPicker.show(knownPcs(), homeHost?.id, pairingStore.hosts().keys)
         if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
@@ -685,10 +685,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val preferred = settings.preferredPc
         val chosenOffline = if (preferred == 0L || online.any { it.id == preferred }) null
             else hostCache.all().firstOrNull { it.id == preferred }?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+        // Without a choice, never a PC this TV isn't paired with while it is paired with some
+        // (e.g. another Windows user's Jinky on the same PC that removed this TV).
+        val paired = pairingStore.hosts().keys
+        val candidates = if (paired.isEmpty()) online else online.filter { it.id in paired }
         val host = online.firstOrNull { it.id == preferred }
             ?: chosenOffline
-            ?: online.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
-            ?: hostCache.all().firstOrNull()?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+            ?: candidates.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
+            ?: hostCache.all().let { all -> all.firstOrNull { it.id in paired } ?: if (paired.isEmpty()) all.firstOrNull() else null }
+                ?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+            ?: online.firstOrNull()
         if (preferred == 0L && online.size > 1 && !askedForPc && page == Page.HOME) {
             askedForPc = true
             ui.post { showPage(Page.PCS) }
@@ -881,7 +887,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
         if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
-        else if (achievementsScreen.visibility == View.VISIBLE) closeAchievements()
+        else if (achievementsScreen.visibility == View.VISIBLE) { if (!achievementsScreen.closeDetail()) closeAchievements() }
         else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
         else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)
         else if (libraryScreen.visibility == View.VISIBLE) showPage(Page.HOME)

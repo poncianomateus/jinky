@@ -28,6 +28,7 @@ import java.util.concurrent.Executors
  * A game's achievements (design v2): a vertical list with the whole description, how rare each one
  * is and when it was unlocked. Hidden ones stay hidden until revealed one at a time (Y), so nothing
  * spoils the story by accident. X follows an achievement: it then shows in the menu over the game.
+ * A opens one: everything about it, "Como conseguir" (a guide on the TV's YouTube app) and follow.
  */
 class AchievementsScreen(
     context: Context,
@@ -73,6 +74,16 @@ class AchievementsScreen(
     private val revealed = HashSet<String>()
     private var generation = 0
     private val rows = mutableListOf<Pair<View, Achievement>>()
+
+    // The panel A opens over the list (one achievement in full, with what can be done with it).
+    private val detail = FrameLayout(context).apply {
+        visibility = View.GONE
+        isClickable = true  // the list behind doesn't take clicks
+        setBackgroundColor(Jinky.ink(0xCC))
+    }
+    private var detailFor: Achievement? = null
+    private var detailRow: View? = null
+    private val hints = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
 
     init {
         addView(hero, LayoutParams(-1, dp(180)))
@@ -131,13 +142,143 @@ class AchievementsScreen(
             addView(hiddenChip, LinearLayout.LayoutParams(-2, dp(26)))
         }, LayoutParams(-1, dp(26)).apply { setMargins(dp(326), dp(75), dp(48), 0) })
         addView(message, LayoutParams(-2, -2).apply { setMargins(dp(330), dp(118), 0, 0) })
-        addView(scroll, LayoutParams(-1, -1).apply { setMargins(dp(322), dp(108), dp(44), 0) })
+        addView(scroll, LayoutParams(-1, -1).apply { setMargins(dp(322), dp(108), dp(44), dp(44)) })  // above the hints
+
+        // What the buttons do, always in sight (the list looked like a still page without it).
+        addView(hints, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(48), dp(18)) })
+        addView(detail, LayoutParams(-1, -1))
 
         hiddenChip.setOnClickListener {
             showHidden = !showHidden
             rebuild(keepFocus = false)
             hiddenChip.requestFocus()
         }
+    }
+
+    private fun refreshHints() {
+        hints.removeAllViews()
+        fun add(b: Jinky.Button, label: String) =
+            hints.addView(Jinky.hint(context, b, label), LinearLayout.LayoutParams(-2, -2).apply { if (hints.childCount > 0) marginStart = dp(16) })
+        add(Jinky.Button.OK, "Detalhes e guia")
+        add(Jinky.Button.PIN, "Acompanhar")
+        add(Jinky.Button.SEARCH, "Revelar oculta")
+        add(Jinky.Button.BACK, "Voltar")
+    }
+
+    /** One achievement in full, with what can be done with it. */
+    private fun openDetail(a: Achievement, from: View) {
+        val g = game ?: return
+        detailFor = a
+        detailRow = from
+        detail.removeAllViews()
+        val secret = a.hidden && !a.achieved && !showHidden && a.id !in revealed
+        val tracked = a.id in settings.tracked(g.id)
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+            background = Jinky.rounded(Jinky.SURFACE, dp(16).toFloat(), dp(1), Jinky.LINE)
+        }
+        card.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val icon = ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = Jinky.rounded(if (a.achieved) a.rarity.ground else Jinky.RAISED, dp(12).toFloat())
+                clipToOutline = true
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                }
+            }
+            if (secret) {
+                icon.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                icon.setImageResource(R.drawable.ic_lock)
+                icon.setColorFilter(Jinky.DIM)
+            } else {
+                val url = if (a.achieved) a.icon else a.iconGray.ifBlank { a.icon }
+                if (url.isNotBlank()) ArtLoader.loadUrl(url, 1) { bmp ->
+                    if (bmp == null || detailFor?.id != a.id) return@loadUrl
+                    icon.setImageBitmap(bmp)
+                    if (!a.achieved) icon.colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
+                }
+            }
+            addView(icon, LinearLayout.LayoutParams(dp(72), dp(72)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text(8f, a.rarity.soft, bold = true).apply {
+                    text = a.rarity.label.uppercase() + if (a.percent >= 0) " · ${pct(a.percent)} dos jogadores têm" else ""
+                })
+                addView(text(16f, Jinky.TEXT, bold = true).apply { text = if (secret) "Conquista oculta" else a.name },
+                    LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(3) })
+                addView(mono(8.5f, if (a.achieved) Jinky.GREEN else Jinky.DIM).apply {
+                    text = if (a.achieved) "Desbloqueada em ${date(a.unlockTime)}" else "Ainda bloqueada"
+                }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(16) })
+        })
+        card.addView(text(11f, Jinky.SOFT).apply {
+            text = when {
+                secret -> "Esta conquista é secreta e pode revelar parte da história. Revele só se quiser saber."
+                a.description.isNotBlank() -> a.description
+                a.hidden -> "Conquista secreta: a Steam não mostra a descrição."
+                else -> "Sem descrição."
+            }
+            setLineSpacing(0f, 1.3f)
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        if (!a.achieved && a.percent >= 0) card.addView(text(9.5f, Jinky.MUTED).apply {
+            text = when {
+                a.percent >= 50 -> "Boa para a próxima: mais da metade dos jogadores já conseguiu."
+                a.percent >= 20 -> "Comum entre quem joga: dá para conseguir sem muito esforço."
+                a.percent >= 5 -> "Um desafio: poucos jogadores chegam lá."
+                else -> "Raríssima: quase ninguém conseguiu."
+            }
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+
+        val actions = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        fun action(label: String, onClick: () -> Unit) = smallButton(label).apply {
+            setOnClickListener { onClick() }
+            actions.addView(this, LinearLayout.LayoutParams(-2, -2).apply { if (actions.childCount > 0) marginStart = dp(10) })
+        }
+        val first = if (secret) action("Revelar") { revealed += a.id; rebuild(keepFocus = false); openDetail(a, from) }
+            else action("Como conseguir · YouTube") { openGuide(g, a) }
+        if (!a.achieved) action(if (tracked) "Parar de acompanhar" else "Acompanhar no jogo") {
+            toggleTrack(a)
+            openDetail(a, from)
+        }
+        action("Fechar") { closeDetail() }
+        card.addView(actions, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
+        detail.addView(card, LayoutParams(dp(520), -2, Gravity.CENTER))
+        detail.visibility = View.VISIBLE
+        first.post { first.requestFocus() }
+    }
+
+    /** Back with the panel open closes the panel (not the page). Returns whether it did. */
+    fun closeDetail(): Boolean {
+        if (detail.visibility != View.VISIBLE) return false
+        detail.visibility = View.GONE
+        detailFor = null
+        detailRow?.requestFocus()
+        return true
+    }
+
+    /**
+     * "Como conseguir": the TV's YouTube app searching for the achievement's guide. Back on the
+     * remote returns to Jinky (a running game keeps going on the PC).
+     */
+    private fun openGuide(g: LibraryGame, a: Achievement) {
+        val query = "${g.name} ${a.name} conquista como conseguir"
+        val uri = android.net.Uri.parse("https://www.youtube.com/results?search_query=" + android.net.Uri.encode(query))
+        for (pkg in listOf("com.google.android.youtube.tv", "com.amazon.firetv.youtube", "com.google.android.youtube")) {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(pkg)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+                return
+            } catch (e: Exception) {
+                Log.i(TAG, "guide via $pkg: ${e.javaClass.simpleName}")  // not installed: try the next one
+            }
+        }
+        closeDetail()
+        showMessage("Sem o app do YouTube nesta TV. Procure: $query")
+        main.postDelayed({ showMessage(null) }, 6000)
     }
 
     /** Opens the achievements of [g] from the PC at [pcIp]. */
@@ -149,6 +290,9 @@ class AchievementsScreen(
         filter = Filter.ALL
         showHidden = false
         revealed.clear()
+        detail.visibility = View.GONE
+        detailFor = null
+        hints.removeAllViews()
         crumb.text = "${g.name}   /   Conquistas"
         clock.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
         hero.setImageDrawable(null)
@@ -187,6 +331,7 @@ class AchievementsScreen(
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (detail.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)  // the panel's own buttons
         if (event.action == KeyEvent.ACTION_DOWN) {
             val focusedRow = rows.firstOrNull { it.first.hasFocus() }
             when (event.keyCode) {
@@ -242,6 +387,7 @@ class AchievementsScreen(
             }, LinearLayout.LayoutParams(-2, dp(26)).apply { if (chips.childCount > 0) marginStart = dp(6) })
         }
         refreshTracking()
+        refreshHints()
         rebuild(keepFocus = false)
         rows.firstOrNull()?.first?.requestFocusFromTouch()
     }
@@ -344,7 +490,7 @@ class AchievementsScreen(
                         LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(3) })
                 }
             })
-            setOnClickListener { toggleTrack(a) }
+            setOnClickListener { v -> openDetail(a, v) }
             setOnFocusChangeListener { v, has -> if (has) v.post { scroll.smoothScrollTo(0, (v.top - dp(60)).coerceAtLeast(0)) } }
         }
     }

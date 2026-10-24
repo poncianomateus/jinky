@@ -52,8 +52,15 @@ Source: "..\third_party\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; DestDir: "{tm
 Source: "system-setup.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsSystemSetup
 
 [Icons]
-Name: "{autoprograms}\Jinky"; Filename: "{app}\Jinky.exe"
-Name: "{autodesktop}\Jinky"; Filename: "{app}\Jinky.exe"; Tasks: desktopicon
+; Only for the Windows user installing, even "para todos": another user (another ASTER workplace)
+; has their own Jinky and must not see this one's shortcuts.
+Name: "{userprograms}\Jinky"; Filename: "{app}\Jinky.exe"
+Name: "{userdesktop}\Jinky"; Filename: "{app}\Jinky.exe"; Tasks: desktopicon
+
+[InstallDelete]
+; Shortcuts older installers put on every user's desktop and Start menu.
+Type: files; Name: "{commondesktop}\Jinky.lnk"; Check: IsAdminInstallMode
+Type: files; Name: "{commonprograms}\Jinky.lnk"; Check: IsAdminInstallMode
 
 [Registry]
 ; Same value the app's "Iniciar com o Windows" switch writes, so both stay in sync.
