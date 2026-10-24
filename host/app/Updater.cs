@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -6,7 +6,8 @@ using System.Text.Json;
 
 namespace Jinky;
 
-public sealed record UpdateInfo(Version Version, string SetupUrl, string ChecksumUrl, string Notes);
+/// <summary>An update on offer; [Test] = a pre-release, only offered to PCs that asked for them.</summary>
+public sealed record UpdateInfo(Version Version, string SetupUrl, string ChecksumUrl, string Notes, bool Test = false);
 
 /// <summary>
 /// Checks GitHub Releases for a newer Jinky, downloads the installer, verifies its SHA-256 against
@@ -31,32 +32,50 @@ public sealed class Updater
 
     public static bool Configured => !Repository.StartsWith("OWNER/");
 
-    /// <summary>The latest release if it is newer than this Jinky, else null. Never throws.</summary>
-    public static async Task<UpdateInfo?> CheckAsync()
+    /// <summary>
+    /// The newest release if it is newer than this Jinky, else null. Never throws. Releases are
+    /// published as pre-releases ("teste") first and promoted once tested: everyone gets the
+    /// latest stable one; with [tests] (the developer's own PC) pre-releases count too.
+    /// </summary>
+    public static async Task<UpdateInfo?> CheckAsync(bool tests = false)
     {
         if (!Configured) return null;
         try
         {
-            using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repository}/releases/latest"));
-            var root = doc.RootElement;
-            var tag = root.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "";
-            if (!Version.TryParse(tag, out var latest) || latest <= Current) return null;
-            string? setup = null, sum = null;
-            foreach (var a in root.GetProperty("assets").EnumerateArray())
+            if (!tests)
             {
-                var name = a.GetProperty("name").GetString() ?? "";
-                var url = a.GetProperty("browser_download_url").GetString();
-                if (name.EndsWith(".exe.sha256", StringComparison.OrdinalIgnoreCase)) sum = url;
-                else if (name.StartsWith("Jinky-Setup-", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) setup = url;
+                using var latest = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repository}/releases/latest"));
+                return Offer(latest.RootElement);
             }
-            if (setup is null || sum is null) return null;  // incomplete release: ignore it
-            var notes = root.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
-            return new UpdateInfo(latest, setup, sum, notes);
+            using var all = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repository}/releases?per_page=20"));
+            return all.RootElement.EnumerateArray()
+                      .Where(r => !(r.TryGetProperty("draft", out var d) && d.GetBoolean()))
+                      .Select(Offer).OfType<UpdateInfo>()
+                      .MaxBy(u => u.Version);
         }
         catch (Exception)
         {
             return null;  // offline, rate-limited, etc.: try again later
         }
+    }
+
+    // A release as an update for this PC: newer than this Jinky and complete, else null.
+    static UpdateInfo? Offer(JsonElement release)
+    {
+        var tag = release.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "";
+        if (!Version.TryParse(tag, out var version) || version <= Current) return null;
+        string? setup = null, sum = null;
+        foreach (var a in release.GetProperty("assets").EnumerateArray())
+        {
+            var name = a.GetProperty("name").GetString() ?? "";
+            var url = a.GetProperty("browser_download_url").GetString();
+            if (name.EndsWith(".exe.sha256", StringComparison.OrdinalIgnoreCase)) sum = url;
+            else if (name.StartsWith("Jinky-Setup-", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) setup = url;
+        }
+        if (setup is null || sum is null) return null;  // incomplete release: ignore it
+        var notes = release.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
+        var test = release.TryGetProperty("prerelease", out var p) && p.GetBoolean();
+        return new UpdateInfo(version, setup, sum, notes, test);
     }
 
     /// <summary>Downloads, verifies and launches the installer. Progress 0..1. Returns an error or null.</summary>

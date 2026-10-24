@@ -99,21 +99,25 @@ public partial class App : Application
 
         // Updates: check shortly after start, then every 6 hours. Never interrupts a game: the user
         // clicks "Atualizar" when it suits them.
+        // Turning test versions on or off checks again at once.
+        var recheck = new SemaphoreSlim(0);
+        _vm.UpdateChannelChanged += () => recheck.Release();
         _ = Task.Run(async () =>
         {
             await Task.Delay(TimeSpan.FromSeconds(20));
             while (true)
             {
-                var update = await Updater.CheckAsync();
+                var update = await Updater.CheckAsync(_settings.TestUpdates);
                 Dispatcher.Invoke(() =>
                 {
-                    var isNew = update is not null && _vm.UpdateButtonText != $"Atualizar para {update.Version}";
+                    var isNew = update is not null && _vm.OfferedVersion != update.Version;
                     _vm.SetUpdate(update);
                     if (isNew)
                         _tray?.ShowBalloonTip(5000, "Atualização do Jinky disponível",
-                                              $"Versão {update!.Version}. Abra o Jinky e clique em Atualizar.", Forms.ToolTipIcon.None);
+                                              $"Versão {update!.Version}{(update.Test ? " (teste)" : "")}. Abra o Jinky e clique em Atualizar.",
+                                              Forms.ToolTipIcon.None);
                 });
-                await Task.Delay(TimeSpan.FromHours(6));
+                await recheck.WaitAsync(TimeSpan.FromHours(6));
             }
         });
 

@@ -53,7 +53,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanInstallUpdate => _update is not null && !_installing;
     public string UpdateNotes => _update?.Notes ?? "";
     public string VersionText => $"v{Updater.Current}";
-    public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}");
+    public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}" + (_update.Test ? " (teste)" : ""));
+    public Version? OfferedVersion => _update?.Version;
+
+    /// <summary>The update channel changed: check again now.</summary>
+    public event Action? UpdateChannelChanged;
+
+    public bool TestUpdates
+    {
+        get => _settings.TestUpdates;
+        set
+        {
+            if (_settings.TestUpdates == value) return;
+            _settings.TestUpdates = value;
+            _settings.Save();
+            Notify();
+            UpdateChannelChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Where a TV without Jinky downloads it from this PC (Downloader app, or the TV's browser).</summary>
+    public string TvInstallUrl => LocalAddress() is { } ip ? $"http://{ip}:{TvService.Port}/tv/jinky.apk" : "";
+
+    static string? LocalAddress()
+    {
+        try
+        {
+            // The address this PC uses on the home network (the route a TV would take back to it).
+            using var s = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
+                                                        System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+            s.Connect("192.168.0.1", 9);
+            return (s.LocalEndPoint as System.Net.IPEndPoint)?.Address.ToString();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     public void SetUpdate(UpdateInfo? update)
     {

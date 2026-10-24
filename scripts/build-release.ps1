@@ -1,7 +1,8 @@
-<#
+﻿<#
   Builds a Jinky release: engine, TV app, Windows app (self-contained) and the installer.
 
-  Output: dist\Jinky-Setup-<version>.exe and its .sha256 (used by the app's updater).
+  Output: dist\Jinky-Setup-<version>.exe and its .sha256 (used by the app's updater), and
+  dist\Jinky-TV-<version>.apk (the TV app, for first installs).
   Usage:  powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
   Needs:  Visual Studio 2022 (C++), Android Studio (JDK/SDK/NDK), .NET 10 SDK, Inno Setup 6,
           and the TV signing key in %USERPROFILE%\.jinky-signing (see docs\RELEASING.md).
@@ -45,6 +46,8 @@ Step "TV app" {
     $badging = (& $aapt.FullName dump badging $apk | Select-Object -First 1)
     if ($badging -notmatch "versionCode='$versionCode'") { throw "APK is not version $versionCode : $badging" }
     $global:LASTEXITCODE = 0  # aapt exits non-zero even when it read the APK fine
+    # Published with the release too: a TV's first install (later updates come from its PC).
+    Copy-Item $apk "$root\dist\Jinky-TV-$version.apk" -Force
 }
 
 Step "Windows app (self-contained)" {

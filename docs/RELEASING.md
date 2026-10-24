@@ -9,16 +9,34 @@
 
 Atualizar o PC = as TVs passam a se atualizar a partir dele.
 
+### Canal de testes (desde 0.6.7)
+
+Toda versão nasce como **teste** (pre-release no GitHub). Só os PCs com **"Receber versões de teste"** ligado (no card "Este PC") a recebem — e as TVs desses PCs junto, porque se atualizam pelo PC. Os demais Jinky só olham `releases/latest`, que ignora pre-releases.
+
+1. Publica como teste → testa no seu PC/TVs.
+2. Deu problema? Corrige e publica outra versão de teste (ninguém mais foi afetado).
+3. Tudo certo → `scripts\promote-release.ps1` transforma aquela versão em estável e ela chega a todos.
+
+Não existe "voltar versão" num PC alheio: se um estável quebrar, a saída é publicar logo uma versão nova corrigida. Correção urgente pode ir direto para todos com `-Stable`.
+
+### Primeira instalação numa TV
+
+O app da TV só se atualiza pelo PC, então a **primeira** instalação é manual:
+
+- **Pela rede de casa (mais fácil):** o card "TVs pareadas" do Jinky do PC mostra o endereço `http://<IP do PC>:47101/tv/jinky.apk`. Fire TV: app **Downloader** → digitar o endereço. Google TV (TCL etc.): ativar *Fontes desconhecidas* e abrir o endereço num navegador da TV (ou instalar o APK por pen drive).
+- **Pela internet:** cada release traz `Jinky-TV.apk`; a versão estável fica sempre em `https://github.com/poncianomateus/jinky-releases/releases/latest/download/Jinky-TV.apk`.
+
 ## Passo a passo
 
 1. Edite `VERSION` (ex.: `0.3.2`). Vale para PC, TV, motor e instalador.
 2. `powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1`
    - roda os testes do protocolo, compila motor, app da TV (confere o versionCode), app do Windows (autocontido) e o instalador
-   - gera `dist\Jinky-Setup-<versão>.exe` e `dist\Jinky-Setup-<versão>.exe.sha256`
-3. Teste o instalador numa instalação real (ver "Teste mínimo").
-4. `powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -Notes "o que mudou"`
-   - cria a release `v<versão>` no repositório de releases com os dois arquivos
-5. Commit + tag `v<versão>` no repositório do código.
+   - gera `dist\Jinky-Setup-<versão>.exe`, `dist\Jinky-Setup-<versão>.exe.sha256` e `dist\Jinky-TV-<versão>.apk`
+3. Commit + tag `v<versão>` no repositório do código.
+4. `powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -NotesFile notas.md`
+   - cria a release `v<versão>` **como teste** com o instalador, o `.sha256` e `Jinky-TV.apk` (`-Stable` publica direto para todos)
+5. Teste no seu PC (com "Receber versões de teste" ligado) e nas TVs (ver "Teste mínimo").
+6. `powershell -ExecutionPolicy Bypass -File scripts\promote-release.ps1` — libera para todos.
 
 ## ⚠️ Chave de assinatura do app da TV
 
