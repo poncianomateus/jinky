@@ -124,7 +124,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     // --- state -------------------------------------------------------------------------------
 
-    public enum State { Starting, Waiting, Streaming, Failed }
+    // Away: another Windows user has the screen; their Jinky answers the TVs meanwhile.
+    public enum State { Starting, Waiting, Streaming, Failed, Away }
 
     State _state = State.Starting;
     public State Current { get => _state; private set { _state = value; Notify(); NotifyStatus(); } }
@@ -135,6 +136,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         State.Starting => "Iniciando…",
         State.Waiting => "Pronto para a TV",
         State.Streaming => "Jogando na TV",
+        State.Away => "Em outro usuário",
         _ => "Algo deu errado",
     };
 
@@ -146,6 +148,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         State.Streaming => "Transmitindo",
         State.Waiting => "Aguardando a TV",
         State.Starting => "Iniciando",
+        State.Away => "Em pausa",
         _ => "Parado",
     };
 
@@ -373,6 +376,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void OnGameLaunched(string name) => Add($"Abrindo {name} pela TV");
 
+    /// <summary>Another Windows user took the screen: this Jinky stepped aside.</summary>
+    public void OnAway()
+    {
+        Current = State.Away;
+        StatusDetail = "Outro usuário do Windows está na tela: o Jinky dele atende a TV. Este volta sozinho quando você voltar.";
+        Add("Outro usuário do Windows na tela · Jinky em pausa");
+    }
+
+    /// <summary>This Windows user has the screen again.</summary>
+    public void OnBack()
+    {
+        Current = State.Starting;
+        StatusDetail = "Preparando o streaming…";
+        Add("De volta à tela · Jinky retomando");
+    }
+
     public void OnTvDiagnostics(string tv, string path) =>
         Add($"Diagnóstico recebido de {tv} ({System.IO.Path.GetFileName(path)})");
 
@@ -385,7 +404,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void OnEngineExited()
     {
-        if (_state != State.Failed) Current = State.Starting;
+        if (_state is not (State.Failed or State.Away)) Current = State.Starting;
         _activePads.Clear();
         PadsConnected = "nenhum";
     }

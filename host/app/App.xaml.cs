@@ -89,13 +89,27 @@ public partial class App : Application
         _tvService.LaunchReady = () => Dispatcher.Invoke(() => _vm.LaunchReady);
         _tvService.SteamApiKey = () => _settings.SteamApiKey;
         _vm.CheckSteamKey();
-        _tvService.Start();
 
         _engine = new Engine();
         _engine.EventReceived += ev => Dispatcher.Invoke(() => { _vm.OnEngineEvent(ev); UpdateTray(); });
         _engine.Failed += msg => Dispatcher.Invoke(() => { _vm.OnEngineFailed(msg); UpdateTray(); });
         _engine.Exited += () => Dispatcher.Invoke(() => { _vm.OnEngineExited(); UpdateTray(); });
-        _engine.Start(_settings.EngineArguments());
+        _onScreen = OnScreen();
+        if (_onScreen)
+        {
+            _tvService.Start();
+            _engine.Start(_settings.EngineArguments());
+        }
+        else
+        {
+            _vm.OnAway();
+        }
+        // Two Windows users signed in at once: only the one on the screen can stream (Windows
+        // doesn't capture a session in the background, and both Jinkys want the same ports). The
+        // one in the background steps aside and the one in front takes over, both ways.
+        var sessionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        sessionTimer.Tick += (_, _) => CheckSession();
+        sessionTimer.Start();
 
         // Updates: check shortly after start, then every 6 hours. Never interrupts a game: the user
         // clicks "Atualizar" when it suits them.
@@ -129,9 +143,57 @@ public partial class App : Application
     void OnSettingsChanged()
     {
         _settings.Save();
-        // The engine reads its options at start; restarting it takes about a second.
-        Task.Run(() => _engine?.Restart(_settings.EngineArguments()));
+        // The engine reads its options at start; restarting it takes about a second. While
+        // another user has the screen it is off, and starts with the new options on return.
+        if (_onScreen) RunEngine(e => e.Restart(_settings.EngineArguments()));
     }
+
+    bool _onScreen = true;
+    Task _engineWork = Task.CompletedTask;
+
+    // Engine start/stop take up to a few seconds: one at a time, in order, off the UI thread.
+    void RunEngine(Action<Engine> work)
+    {
+        var engine = _engine;
+        if (engine is null) return;
+        lock (this) _engineWork = _engineWork.ContinueWith(_ => work(engine), TaskScheduler.Default);
+    }
+
+    /// <summary>Whether this Windows user's session is the one on the screen.</summary>
+    static bool OnScreen()
+    {
+        var active = WTSGetActiveConsoleSessionId();
+        return active == 0xFFFFFFFF || active == (uint)System.Diagnostics.Process.GetCurrentProcess().SessionId;
+    }
+
+    void CheckSession()
+    {
+        if (_quitting || _engine is null || _tvService is null || _vm is null) return;
+        var onScreen = OnScreen();
+        if (onScreen == _onScreen)
+        {
+            // Back on screen but the other user's Jinky hadn't freed the port yet: retry.
+            if (onScreen && !_tvService.Running) _tvService.Start();
+            return;
+        }
+        _onScreen = onScreen;
+        if (!onScreen)
+        {
+            _tvService.Stop();
+            RunEngine(e => e.Stop());
+            _vm.OnAway();
+        }
+        else
+        {
+            _vm.OnBack();
+            _tvService.Start();
+            RunEngine(e => e.Start(_settings.EngineArguments()));
+        }
+        UpdateTray();
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern uint WTSGetActiveConsoleSessionId();
 
     void CreateTray()
     {

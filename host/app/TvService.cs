@@ -19,8 +19,13 @@ public sealed class TvService : IDisposable
 {
     public const int Port = 47101;
     const int MaxBody = 8 * 1024 * 1024;
-    readonly TcpListener _listener = new(IPAddress.Any, Port);
-    readonly CancellationTokenSource _stop = new();
+    // Replaced on every Start(): the service stops while another Windows user has the screen
+    // (that user's Jinky answers the TVs) and starts again when this one is back.
+    TcpListener _listener = new(IPAddress.Any, Port);
+    CancellationTokenSource _stop = new();
+
+    /// <summary>Listening for TVs now.</summary>
+    public bool Running { get; private set; }
 
     /// <summary>A TV sent its diagnostic report (TV name, saved file).</summary>
     public event Action<string, string>? DiagnosticsReceived;
@@ -91,27 +96,42 @@ public sealed class TvService : IDisposable
 
     public bool Start()
     {
+        if (Running) return true;
+        var listener = new TcpListener(IPAddress.Any, Port);
         try
         {
-            _listener.Start();
+            listener.Start();
         }
         catch (SocketException)
         {
-            return false;  // port busy: TVs just won't see updates or the library
+            return false;  // port busy (another user's Jinky still has it): try again later
         }
-        _ = Task.Run(AcceptLoop);
-        _ = Task.Run(WatchAchievements);
+        var stop = new CancellationTokenSource();
+        _listener = listener;
+        _stop = stop;
+        Running = true;
+        _ = Task.Run(() => AcceptLoop(listener, stop.Token));
+        _ = Task.Run(() => WatchAchievements(stop.Token));
         return true;
     }
 
-    /// <summary>While a TV plays, looks for newly unlocked achievements every few seconds.</summary>
-    async Task WatchAchievements()
+    /// <summary>Stops answering TVs (frees the port); Start() again resumes.</summary>
+    public void Stop()
     {
-        while (!_stop.IsCancellationRequested)
+        if (!Running) return;
+        Running = false;
+        _stop.Cancel();
+        _listener.Stop();
+    }
+
+    /// <summary>While a TV plays, looks for newly unlocked achievements every few seconds.</summary>
+    async Task WatchAchievements(CancellationToken stop)
+    {
+        while (!stop.IsCancellationRequested)
         {
             // Cheap: only Steam's local stats file is checked this often (the Web API fallback
             // throttles itself to every 10 s).
-            try { await Task.Delay(TimeSpan.FromSeconds(2), _stop.Token); }
+            try { await Task.Delay(TimeSpan.FromSeconds(2), stop); }
             catch (OperationCanceledException) { return; }
             if (Streaming?.Invoke() != true) continue;
             try
@@ -126,14 +146,14 @@ public sealed class TvService : IDisposable
         }
     }
 
-    async Task AcceptLoop()
+    async Task AcceptLoop(TcpListener listener, CancellationToken stop)
     {
-        while (!_stop.IsCancellationRequested)
+        while (!stop.IsCancellationRequested)
         {
             TcpClient client;
             try
             {
-                client = await _listener.AcceptTcpClientAsync(_stop.Token);
+                client = await listener.AcceptTcpClientAsync(stop);
             }
             catch (Exception)
             {
@@ -389,9 +409,5 @@ public sealed class TvService : IDisposable
         return s.WriteAsync(Encoding.ASCII.GetBytes(head)).AsTask();
     }
 
-    public void Dispose()
-    {
-        _stop.Cancel();
-        _listener.Stop();
-    }
+    public void Dispose() => Stop();
 }
