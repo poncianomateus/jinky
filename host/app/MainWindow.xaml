@@ -297,7 +297,7 @@
                             <StackPanel>
                                 <TextBlock Text="INSTALAR NUMA TV NOVA" Style="{StaticResource Eyebrow}"/>
                                 <TextBlock Style="{StaticResource Hint}" FontSize="13" Margin="0,6,0,8"
-                                           Text="Fire TV: instale o app Downloader e digite o endereço abaixo. Google TV (TCL e outras): ative &quot;Fontes desconhecidas&quot; e abra o endereço num navegador da TV. Depois disso, a TV se atualiza sozinha por este PC."/>
+                                           Text="Na TV (Fire TV ou Google TV), instale o app Downloader, permita que ele instale apps (&quot;Fontes desconhecidas&quot;) e digite o endereço abaixo. Depois disso, a TV se atualiza sozinha por este PC."/>
                                 <TextBox Text="{Binding TvInstallUrl, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource Field}"
                                          FontSize="14" FontWeight="Bold"/>
                             </StackPanel>
