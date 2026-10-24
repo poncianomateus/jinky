@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
@@ -25,13 +25,18 @@ public static class SteamClient
 
     // Steam's own view: every game in the library it considers owned (bought, free or shared by
     // the family). owner_account_id is set only for games another family member owns.
+    // "user": the account signed in to the Steam that answered. Two Windows users (ASTER
+    // workplaces) can each run Steam, but only one gets the developer port: its library must not be
+    // shown as the other user's.
     const string Query = """
-        JSON.stringify(collectionStore.allGamesCollection.allApps
+        JSON.stringify({
+          user: (typeof App !== 'undefined' && App.m_CurrentUser && App.m_CurrentUser.strSteamID) || "",
+          apps: collectionStore.allGamesCollection.allApps
           .filter(a => a.BIsOwned() && a.appid > 0 && a.appid <= 2147483647)  // not "non-Steam game" shortcuts
           .map(a => ({ id: a.appid, name: a.display_name, last: a.rt_last_time_played || 0,
                        minutes: a.minutes_playtime_forever || 0, size: Number(a.size_on_disk || 0),
                        installed: !!(a.per_client_data && a.per_client_data[0] && a.per_client_data[0].installed),
-                       family: !!a.owner_account_id })))
+                       family: !!a.owner_account_id })) })
         """;
 
     /// <summary>Why the last reading failed (for the status line), else null.</summary>
@@ -91,8 +96,12 @@ public static class SteamClient
             if (ws is null) throw new InvalidOperationException("a página da biblioteca da Steam ainda não abriu");
             var json = Evaluate(new Uri(ws), Query) ?? throw new InvalidOperationException("a Steam não respondeu à consulta da biblioteca");
             using var doc = JsonDocument.Parse(json);
+            var user = doc.RootElement.TryGetProperty("user", out var u) ? u.GetString() ?? "" : "";
+            var steam = SteamLibrary.SteamPath();
+            if (user.Length > 0 && steam is not null && SteamLibrary.SteamId(steam) is { } me && me != user)
+                throw new InvalidOperationException("a Steam que respondeu é de outra conta (de outro usuário do Windows)");
             LastError = null;
-            return doc.RootElement.EnumerateArray().Select(a => new App(
+            return doc.RootElement.GetProperty("apps").EnumerateArray().Select(a => new App(
                 a.GetProperty("id").GetInt32(),
                 a.GetProperty("name").GetString() ?? "",
                 a.GetProperty("last").GetInt64(),

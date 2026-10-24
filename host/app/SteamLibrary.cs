@@ -116,12 +116,36 @@ public static partial class SteamLibrary
     static (string Key, DateTime At, List<(int Id, string Name, long Last, bool Family)> Games)? _owned;
     const long SteamId64Base = 76561197960265728;
 
-    /// <summary>The Steam account most recently signed in on this PC (SteamID64).</summary>
+    /// <summary>
+    /// This Windows user's Steam account (SteamID64). Per Windows user: each one (each ASTER
+    /// workplace) can run its own Steam with its own account at the same time, so first the
+    /// account signed in to this user's Steam (HKCU), then the one it signs in automatically, and
+    /// only then loginusers.vdf's "most recent", which is shared by the whole PC.
+    /// </summary>
     public static string? SteamId(string steam)
     {
+        try
+        {
+            using var active = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\ActiveProcess");
+            if (active?.GetValue("ActiveUser") is int account && account != 0)
+                return (SteamId64Base + (uint)account).ToString();
+        }
+        catch (Exception)
+        {
+            // No Steam for this user: fall back to the files.
+        }
         var file = Path.Combine(steam, "config", "loginusers.vdf");
         if (!File.Exists(file)) return null;
         var text = File.ReadAllText(file, Encoding.UTF8);
+        using (var steamKey = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
+        {
+            if (steamKey?.GetValue("AutoLoginUser") is string login && login.Length > 0)
+            {
+                var mine = Regex.Match(text, "\"(\\d{17})\"\\s*\\{[^}]*?\"AccountName\"\\s*\"" + Regex.Escape(login) + "\"",
+                                       RegexOptions.IgnoreCase);
+                if (mine.Success) return mine.Groups[1].Value;
+            }
+        }
         var recent = Regex.Match(text, "\"(\\d{17})\"\\s*\\{[^}]*?\"MostRecent\"\\s*\"1\"", RegexOptions.IgnoreCase);
         if (recent.Success) return recent.Groups[1].Value;
         var any = Regex.Match(text, "\"(\\d{17})\"\\s*\\{");
