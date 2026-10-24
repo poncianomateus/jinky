@@ -52,9 +52,10 @@ O Android **só aceita uma atualização** se o APK novo for assinado com a **me
 - [ ] TV conecta sem aviso do firewall
 - [ ] Controle Xbox funciona (driver ViGEmBus presente)
 - [ ] TV mostra "Atualizar o Jinky" e atualiza
-- [ ] Desinstalar: regras de firewall removidas, monitor/som normais
+- [ ] Desinstalar: monitor/som normais (as regras de firewall e o driver ficam: outros usuários do Windows usam)
 
 ## Observações
 
 - O instalador não é assinado digitalmente (certificado de código custa caro). O Windows SmartScreen pode mostrar "O Windows protegeu o computador" no primeiro download: **Mais informações → Executar assim mesmo**.
-- Regras de firewall criadas: `Jinky (streaming)` UDP 47100 e `Jinky (atualizações das TVs)` TCP 47101, ambas só `localsubnet`.
+- Instalação padrão **"Só para mim"** (perfil do usuário, `%LOCALAPPDATA%\Programs\Jinky`): cada usuário do Windows tem o seu Jinky, com versão e atualizações próprias. "Para todos os usuários" (Program Files) continua como opção. O atualizador reinstala no mesmo modo.
+- O que vale para o PC inteiro (`installer\system-setup.ps1`, roda elevado só se faltar): regras de firewall `Jinky (streaming)` UDP e `Jinky (atualizacoes das TVs)` TCP, portas 47100-47139, só `localsubnet`; driver ViGEmBus.

@@ -15,10 +15,11 @@ AppComments=Jogue os jogos do PC na TV
 DefaultDirName={autopf}\Jinky
 DisableProgramGroupPage=yes
 DisableDirPage=auto
-; "Para todos os usuários" (Program Files; firewall rules and the controller driver need
-; administrator rights) or "Só para mim" (inside this Windows user's profile, no admin): each
-; Windows user / ASTER workplace can then have its own Jinky, with its own version and updates.
-PrivilegesRequired=admin
+; "Só para mim" by default: Jinky inside this Windows user's profile (%LOCALAPPDATA%\Programs), so
+; each Windows user / ASTER workplace has its own Jinky, with its own version and updates.
+; "Para todos os usuários" (Program Files) stays as an option. What the whole PC needs once
+; (firewall rules, virtual controller driver) is done by system-setup.ps1, elevated only if missing.
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ; Always ask (an all-users install on the PC must not decide for another Windows user).
 UsePreviousPrivileges=no
@@ -47,7 +48,8 @@ Name: "startup"; Description: "Iniciar o Jinky junto com o Windows (fica perto d
 [Files]
 Source: "..\dist\stage\app\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 ; Virtual Xbox controller driver (ViGEmBus, BSD-3-Clause), only when not installed yet.
-Source: "..\third_party\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: IsAdminInstallMode and not ViGEmBusInstalled
+Source: "..\third_party\redist\ViGEmBus_1.22.0_x64_x86_arm64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not ViGEmBusInstalled
+Source: "system-setup.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsSystemSetup
 
 [Icons]
 Name: "{autoprograms}\Jinky"; Filename: "{app}\Jinky.exe"
@@ -58,27 +60,43 @@ Name: "{autodesktop}\Jinky"; Filename: "{app}\Jinky.exe"; Tasks: desktopicon
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Jinky"; ValueData: """{app}\Jinky.exe"" --tray"; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-; Firewall: only the home network (local subnet) may reach Jinky, on its ports: 47100/47101 for the
-; first Jinky on the PC, 47110/47111... for more Windows users / ASTER workplaces at once. By port,
-; not by program, so "Só para mim" installs (no admin) are covered too. Recreated on every
-; all-users install/update.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Jinky (streaming)"""; Flags: runhidden; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Jinky (atualizações das TVs)"""; Flags: runhidden; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Jinky (streaming)"" dir=in action=allow protocol=UDP localport=47100-47139 remoteip=localsubnet profile=any"; Flags: runhidden; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Jinky (atualizações das TVs)"" dir=in action=allow protocol=TCP localport=47100-47139 remoteip=localsubnet profile=any"; Flags: runhidden; Check: IsAdminInstallMode
-Filename: "{tmp}\ViGEmBus_1.22.0_x64_x86_arm64.exe"; Parameters: "/exenoui /qn /norestart"; StatusMsg: "Instalando o driver de controle virtual (ViGEmBus)…"; Check: IsAdminInstallMode and not ViGEmBusInstalled
+; Once per PC (firewall rules for the home network, virtual controller driver), only if missing:
+; directly when installing for all users, else elevated (Windows asks for permission once).
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\system-setup.ps1"" -ViGEm ""{tmp}\ViGEmBus_1.22.0_x64_x86_arm64.exe"""; StatusMsg: "Preparando o firewall e o controle virtual…"; Flags: runhidden waituntilterminated; Check: IsAdminInstallMode and NeedsSystemSetup
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\system-setup.ps1"" -ViGEm ""{tmp}\ViGEmBus_1.22.0_x64_x86_arm64.exe"""; StatusMsg: "Preparando o firewall e o controle virtual (o Windows vai pedir permissão)…"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: (not IsAdminInstallMode) and NeedsSystemSetup
 ; Interactive install: offer to open Jinky. Silent update (from the app): reopen it in the tray.
 Filename: "{app}\Jinky.exe"; Description: "Abrir o Jinky"; Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{app}\Jinky.exe"; Parameters: "--tray"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
-[UninstallRun]
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Jinky (streaming)"""; Flags: runhidden; RunOnceId: "fw1"; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Jinky (atualizações das TVs)"""; Flags: runhidden; RunOnceId: "fw2"; Check: IsAdminInstallMode
+; Uninstalling keeps the firewall rules and the driver: other Windows users' own Jinky use them.
 
 [Code]
+var
+  SystemSetupChecked, SystemSetupNeeded: Boolean;
+
 function ViGEmBusInstalled: Boolean;
 begin
   Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\ViGEmBus');
+end;
+
+{ The firewall rule for all of Jinky's ports (47100-47139) exists. Reading rules needs no admin. }
+function FirewallReady: Boolean;
+var
+  Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{cmd}'), '/c netsh advfirewall firewall show rule name="Jinky (streaming)" | findstr /c:"47100-47139"',
+                 '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+{ Something the whole PC needs is missing (decided once, before anything is changed). }
+function NeedsSystemSetup: Boolean;
+begin
+  if not SystemSetupChecked then
+  begin
+    SystemSetupNeeded := (not ViGEmBusInstalled) or (not FirewallReady);
+    SystemSetupChecked := True;
+  end;
+  Result := SystemSetupNeeded;
 end;
 
 { Asks a running Jinky to quit cleanly ("Jinky.exe --quit"): it stops streaming and gives the PC
@@ -110,11 +128,11 @@ begin
   Result := True;
 end;
 
-{ "Só para mim" can't install the virtual controller driver (it needs an administrator). }
+{ The permission for the PC-wide part was refused: say what is missing and how to fix it. }
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and not IsAdminInstallMode and not ViGEmBusInstalled and not WizardSilent then
-    MsgBox('O Jinky foi instalado só para você. Para o controle funcionar nos jogos, o driver de controle ' +
-           'virtual (ViGEmBus) precisa ser instalado uma vez por um administrador: rode o instalador ' +
-           'escolhendo "Para todos os usuários" (pode ser em outro usuário do Windows).', mbInformation, MB_OK);
+  if (CurStep = ssPostInstall) and not WizardSilent and ((not ViGEmBusInstalled) or (not FirewallReady)) then
+    MsgBox('O Jinky foi instalado, mas falta uma parte que vale para o PC inteiro (firewall da rede de casa ' +
+           'e driver do controle virtual), que precisa da permissão de administrador do Windows. ' +
+           'Rode o instalador de novo e aceite a permissão quando o Windows pedir.', mbInformation, MB_OK);
 end;
