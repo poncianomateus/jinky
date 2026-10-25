@@ -30,6 +30,7 @@ class GameMenu(
     private val onHome: () -> Unit,
     private val onExit: () -> Unit,
     private val onAchievements: () -> Unit,
+    private val onToggleMouse: () -> Unit,
 ) : TvPage(context) {
 
     private val shade = View(context).apply {
@@ -50,6 +51,7 @@ class GameMenu(
     private val resume = tile(R.drawable.ic_play, "Continuar")
     private val achievements = tile(R.drawable.ic_trophy, "Conquistas")
     private val statsTile = tile(R.drawable.ic_gauge, "Desempenho")
+    private val mouseTile = tile(R.drawable.ic_mouse, "Mouse")
     private val home = tile(R.drawable.ic_home, "Início")
     private val closeGame = tile(R.drawable.ic_power, "Fechar jogo", danger = true)
     private val exit = tile(R.drawable.ic_exit, "Sair do Jinky")
@@ -79,7 +81,7 @@ class GameMenu(
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(11), 0, dp(11), dp(2)) })
             addView(trackCard, LinearLayout.LayoutParams(dp(260), -2))
         })
-        for (t in listOf(resume, achievements, statsTile, home, closeGame, exit))
+        for (t in listOf(resume, achievements, mouseTile, statsTile, home, closeGame, exit))
             tiles.addView(t, LinearLayout.LayoutParams(0, dp(80), 1f).apply { if (tiles.childCount > 0) marginStart = dp(8) })
         band.addView(tiles, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         addView(band, LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(48), 0, dp(48), dp(32)) })
@@ -87,6 +89,7 @@ class GameMenu(
         resume.setOnClickListener { onResume() }
         achievements.setOnClickListener { onAchievements() }
         statsTile.setOnClickListener { onToggleStats() }
+        mouseTile.setOnClickListener { onToggleMouse() }
         home.setOnClickListener { onHome() }
         exit.setOnClickListener { onExit() }
         closeGame.setOnClickListener {
@@ -116,7 +119,9 @@ class GameMenu(
      * [canClose]: a game can be closed from here; [stats]: performance on screen ("off",
      * "compact" or "full"; the tile goes to the next one).
      */
-    fun open(name: String, streamLine: String, canClose: Boolean, stats: String, game: LibraryGame?, art: Pair<String, Int>?) {
+    fun open(name: String, streamLine: String, canClose: Boolean, stats: String, game: LibraryGame?, art: Pair<String, Int>?,
+             mouse: Boolean = false) {
+        setLabel(mouseTile, if (mouse) "Mouse: ligado" else "Mouse")
         title.text = name
         line = streamLine
         updateStats()

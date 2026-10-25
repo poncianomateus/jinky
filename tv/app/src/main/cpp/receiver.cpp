@@ -64,6 +64,13 @@ void Receiver::close_game() {
     for (int i = 0; i < 2; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);
 }
 
+void Receiver::set_mouse_mode(bool on) {
+    if (!host_known_ || !session_wanted_) return;
+    uint8_t buf[tclproto::ControlMessage::kSize];
+    tclproto::ControlMessage{PacketType::MouseMode, session_id_, on ? 1u : 0u}.write(buf);
+    for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);  // UDP: say it thrice
+}
+
 void Receiver::disconnect() { disconnect_requested_ = true; }
 
 std::string Receiver::hosts() const {

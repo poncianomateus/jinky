@@ -13,6 +13,10 @@ public:
     enum class Event { None, Ready, NeedsAttention, Closed };
 
     void reset();
+    // The game was just asked to start (Big Picture is up, or the wait for it ran out). Windows
+    // in front only count as "waiting for the player" from a few seconds after this: before it,
+    // Steam's own windows are still opening and nothing waits for anyone.
+    void launched();
     // Call about once a second during a game session.
     //  Ready  (once): the game is in front, so the TV can reveal the picture.
     //  NeedsAttention (once): a launcher or prompt has been waiting in front for a few seconds;
@@ -51,7 +55,7 @@ private:
     uint32_t game_pid_ = 0;   // the game's process once it was seen full screen
     uint64_t began_wall_ = 0;  // session start as FILETIME (processes older than this aren't the game)
     void* prompt_ = nullptr;  // the waiting window and since when it has been in front
-    std::chrono::steady_clock::time_point began_{}, running_since_{}, gone_since_{}, prompt_since_{};
+    std::chrono::steady_clock::time_point began_{}, launched_{}, running_since_{}, gone_since_{}, prompt_since_{};
 };
 
 }  // namespace tcl

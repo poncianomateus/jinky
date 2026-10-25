@@ -47,6 +47,8 @@ public:
     int game_ready() const { return game_ready_; }
     int end_reason() const { return end_reason_; }
     void close_game();
+    // Menu "Mouse": the first controller drives the PC's mouse (true) or the game again (false).
+    void set_mouse_mode(bool on);
     void disconnect();
     bool in_session() const { return session_wanted_; }
     // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith|tvVersion|updatePort".

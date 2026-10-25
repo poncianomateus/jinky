@@ -23,6 +23,8 @@ class NativeReceiver : AutoCloseable {
     /** Why the PC ended the session: 0 Big Picture closed, 1 game closed. */
     fun endReason(): Int = nativeEndReason(handle)
     fun closeGame() = nativeCloseGame(handle)
+    /** Menu "Mouse": the first controller drives the PC's mouse, or the game again. */
+    fun setMouseMode(on: Boolean) = nativeSetMouseMode(handle, on)
     /** Ends the session and goes back to discovering PCs. */
     fun disconnect() = nativeDisconnect(handle)
     fun inSession(): Boolean = nativeInSession(handle)
@@ -108,6 +110,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeVideoKbps(handle: Long): Int
         @JvmStatic external fun nativeEndReason(handle: Long): Int
         @JvmStatic external fun nativeCloseGame(handle: Long)
+        @JvmStatic external fun nativeSetMouseMode(handle: Long, on: Boolean)
         @JvmStatic external fun nativeDisconnect(handle: Long)
         @JvmStatic external fun nativeInSession(handle: Long): Boolean
         @JvmStatic external fun nativeHosts(handle: Long): String

@@ -26,6 +26,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
     private lateinit var perfHud: PerfHud
+    private var mouseMode = false  // menu "Mouse": the controller drives the PC's mouse
     private var statsMode = "off"  // performance on screen during this game: off, compact, full
     private var lastPresented = 0L
     private var lastPresentedAt = 0L
@@ -106,6 +107,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 wasInSession = inSession
                 // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
                 statsMode = if (inSession) settings.statsMode else "off"
+                mouseMode = false  // every session starts with the controller in the game
                 applyStatsMode()
                 if (!inSession) gamesFrom = null  // "last played" changed: reload the home row
                 if (inSession) unlocksAfter = -1L
@@ -292,6 +294,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     // The PC closes the game in front; a game session then ends by itself.
                     receiver?.closeGame()
                     hideMenu()
+                },
+                onToggleMouse = {
+                    mouseMode = !mouseMode
+                    receiver?.setMouseMode(mouseMode)
+                    hideMenu()
+                    showHint(if (mouseMode)
+                        "Mouse ligado:  analógico esquerdo move  ·  A clica  ·  X botão direito  ·  B Esc  ·  Start Enter.  Para voltar ao jogo: menu  →  Mouse."
+                        else "Controle de volta ao jogo.")
                 },
                 onToggleStats = {
                     // Off -> compact -> detailed -> off, for this game.
@@ -1008,7 +1018,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val game = sessionGame
         val host = homeHost
         menu.open(sessionTitle.ifEmpty { "Jinky" }, streamLine(), canClose = !sessionDesktop,
-            stats = statsMode, game = game, art = host?.let { it.ip to it.updatePort })
+            stats = statsMode, mouse = mouseMode, game = game, art = host?.let { it.ip to it.updatePort })
         gamepads?.menuOpen = true
         // The achievements the user follows in this game, once the PC answers.
         if (game != null && host != null && settings.tracked(game.id).isNotEmpty()) Thread {

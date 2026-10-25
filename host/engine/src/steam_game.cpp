@@ -76,6 +76,23 @@ bool big_picture(HWND hwnd) {
     return wcsstr(title, L"Big Picture") != nullptr;
 }
 
+std::wstring window_title(HWND hwnd) {
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    return title;
+}
+
+// For the log: "title" (program.exe), ASCII only.
+std::string describe(HWND hwnd, const std::wstring& program) {
+    std::string out = "\"";
+    for (wchar_t c : window_title(hwnd)) out.push_back(c < 128 ? char(c) : '?');
+    out += "\" (";
+    std::string name;
+    for (wchar_t c : program) name.push_back(c < 128 ? char(c) : '?');
+    if (const auto slash = name.find_last_of('\\'); slash != std::string::npos) name.erase(0, slash + 1);
+    return out + name + ")";
+}
+
 }  // namespace
 
 uint32_t SteamGameWatch::running_app_id() {
@@ -137,7 +154,17 @@ void* SteamGameWatch::prompt_in_front() {
     };
     const bool steam_dialog = ends_with(L"\\steam.exe") || ends_with(L"\\steamwebhelper.exe");
     if (!steam_dialog && shell_program(program)) return nullptr;
+    if (steam_dialog) {
+        // Steam's main window ("Steam") and its untitled helper windows wait for no one: they
+        // show up while Steam opens, and once made every game start with the controller as a mouse.
+        const auto title = window_title(hwnd);
+        if (title.empty() || title == L"Steam") return nullptr;
+    }
     return hwnd;
+}
+
+void SteamGameWatch::launched() {
+    if (launched_ == std::chrono::steady_clock::time_point{}) launched_ = std::chrono::steady_clock::now();
 }
 
 bool SteamGameWatch::close_game() {
@@ -169,6 +196,7 @@ void SteamGameWatch::reset() {
     prompt_ = nullptr;
     prompt_since_ = {};
     began_ = std::chrono::steady_clock::now();
+    launched_ = {};
     began_wall_ = now_filetime() - 50'000'000;  // 5 s of slack (FILETIME is in 100 ns units)
     running_since_ = gone_since_ = {};
 }
@@ -192,14 +220,17 @@ SteamGameWatch::Event SteamGameWatch::poll() {
 
     // Something other than the game waiting in front (launcher, EULA, Steam prompt, another
     // store's app): after 3 s in front, show it on the TV so the player can deal with it.
-    if (!ready_ && !attention_ && !in_front && now - began_ > 4s) {
+    // Only once the game was asked to start, with a moment for it to come up.
+    if (!ready_ && !attention_ && !in_front && launched_ != steady_clock::time_point{} && now - launched_ > 5s) {
         void* prompt = prompt_in_front();
         if (prompt != prompt_) {
             prompt_ = prompt;
             prompt_since_ = now;
         } else if (prompt && now - prompt_since_ >= 3s) {
             attention_ = true;
-            TCL_INFO("game", "a window is waiting for the player in front of the game: showing it on the TV");
+            const HWND hwnd = HWND(prompt);
+            TCL_INFO("game", "a window is waiting for the player in front of the game: showing it on the TV ({})",
+                     describe(hwnd, window_program(hwnd)));
             return Event::NeedsAttention;
         }
     }

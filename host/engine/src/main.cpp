@@ -406,6 +406,7 @@ int main(int argc, char** argv) {
 
     // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
     tcl::GamepadHub gamepads;
+    std::atomic<bool> manual_mouse{false};  // menu "Mouse" on the TV
     tcl::PadMouse pad_mouse;  // the controller as mouse/keyboard while a window waits for the player
     const bool gamepads_ok = gamepads.init([&](uint8_t pad, uint8_t large_motor, uint8_t small_motor) {
         const uint64_t p = audio_peer;
@@ -508,7 +509,17 @@ int main(int argc, char** argv) {
                          (opt.insecure || tclproto::InputState::verify(packet, input_key));
                 }
                 if (ok) {
-                    gamepads.apply(*in);
+                    // Mouse mode: the first controller drives the mouse, the game sees it idle.
+                    if (manual_mouse && in->pad_index == 0) {
+                        tclproto::InputState idle;
+                        idle.session_id = in->session_id;
+                        idle.pad_index = 0;
+                        idle.connected = in->connected;
+                        idle.seq = in->seq;
+                        gamepads.apply(idle);
+                    } else {
+                        gamepads.apply(*in);
+                    }
                     pad_mouse.update(*in);
                     last_input = steady_clock::now().time_since_epoch().count();
                     if (in->sent_us) {
@@ -802,6 +813,11 @@ int main(int argc, char** argv) {
                             TCL_WARN("encoder", "{}", encoder.error());
                         }
                     }
+                } else if (msg->type == PacketType::MouseMode) {
+                    // Menu "Mouse" on the TV: the controller drives the PC's mouse until turned off.
+                    const bool on = msg->value != 0;
+                    if (on != manual_mouse) TCL_INFO("padmouse", "mouse mode {} from the TV", on ? "on" : "off");
+                    manual_mouse = on;
                 } else if (msg->type == PacketType::CloseGame) {
                     // In a Big Picture session with no game open, "Fechar jogo" closes Big Picture
                     // (the session then ends as usual and the TV goes back to its home screen).
@@ -854,7 +870,10 @@ int main(int argc, char** argv) {
             }
             if (ready) {
                 launch_ready_pending = false;
-                if (peer_game) TCL_INFO("session", "ready to start the game");
+                if (peer_game) {
+                    TCL_INFO("session", "ready to start the game");
+                    game_watch.launched();
+                }
                 tcl::emit_event("launch_ready");
             }
         }
@@ -867,7 +886,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < 3; ++i)
                     send_control(*peer, PacketType::GameReady, attention ? tclproto::kGameNeedsAttention : tclproto::kGameOnScreen);
             }
-            pad_mouse.set_active(peer_game && game_watch.waiting_for_player());
+            pad_mouse.set_active(manual_mouse || (peer_game && game_watch.waiting_for_player()));
             const bool bp_closed = !peer_game && console.big_picture_closed();
             if (bp_closed || game == tcl::SteamGameWatch::Event::Closed) {
                 TCL_INFO("session", "{}: ending the session", bp_closed ? "Big Picture closed" : "game closed");
@@ -882,7 +901,9 @@ int main(int argc, char** argv) {
         }
 
         // Session over (or not a game session): the controller is a controller again.
-        if (pad_mouse.active() && (!peer || !peer_game)) pad_mouse.set_active(false);
+        if (!peer) manual_mouse = false;
+        if (manual_mouse && peer && !pad_mouse.active()) pad_mouse.set_active(true);
+        if (pad_mouse.active() && (!peer || (!peer_game && !manual_mouse))) pad_mouse.set_active(false);
 
         // --- capture ---
         // A fresh desktop frame is encoded as soon as it is captured (waiting for the next 60 Hz

@@ -149,6 +149,10 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeCloseGame(JNIE
     self(h)->close_game();
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetMouseMode(JNIEnv*, jclass, jlong h, jboolean on) {
+    self(h)->set_mouse_mode(on);
+}
+
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeDisconnect(JNIEnv*, jclass, jlong h) {
     self(h)->disconnect();
 }

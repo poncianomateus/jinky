@@ -52,6 +52,7 @@ enum class PacketType : uint8_t {
     // Network quality
     Nack = 24,       // TV -> host: video fragments that never arrived, to send again (NackMessage)
     NetReport = 25,  // TV -> host: once a second, how the network did (value = NetReport::pack())
+    MouseMode = 26,  // TV -> host: value 1 = the first controller works as mouse/keyboard (menu "Mouse"), 0 = back to the game
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
     Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
