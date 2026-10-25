@@ -83,6 +83,9 @@ inline constexpr uint32_t kHelloDesktop = 1u << 9;
 // Hello.value flag: a game chosen in the TV's own library — the TV hides Big Picture behind its own
 // launch screen until the game is up; the session ends when the game is closed.
 inline constexpr uint32_t kHelloGame = 1u << 10;
+// Hello.value flag: pairing only ("Parear um PC"): once the TV is authenticated (the code was
+// confirmed), no session starts. Older PCs ignore it (a session starts and the TV leaves at once).
+inline constexpr uint32_t kHelloPairOnly = 1u << 11;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {

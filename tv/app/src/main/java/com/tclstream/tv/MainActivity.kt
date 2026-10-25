@@ -55,6 +55,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
     private var pairingPc = 0L  // a PC picked in "Parear um PC": shown until its code is confirmed
+    private var pairingOnly = false  // connected only to pair (no session): leave once paired
     private var wasInSession = false
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
@@ -202,11 +203,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             pcPicker = PcPickerScreen(this@MainActivity,
                 onChoose = { h ->
-                    if (!isPaired(h) && h.id !in pairingStore.hosts().keys) pairingPc = h.id  // pairing it now
                     settings.preferredPc = h.id
                     gamesFrom = null  // load the chosen PC's library
                     showPage(Page.HOME)
-                    updateHome()
+                    if (!isPaired(h) && h.id !in pairingStore.hosts().keys) {
+                        // "Parear um PC": the code right away (no game starts); once the PC
+                        // accepts, the TV keeps this PC until someone chooses another.
+                        pairingPc = h.id
+                        pairingOnly = true
+                        homeScreen.visibility = View.GONE
+                        startScreen.setShown(true)
+                        receiver?.connect(h.ip, h.port, false, pairOnly = true)
+                    } else updateHome()
                 },
                 onBack = { showPage(Page.HOME) }).apply { visibility = View.GONE }
             addView(pcPicker, FrameLayout.LayoutParams(-1, -1))
@@ -780,6 +788,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             pairingStore.save(host, b.copyOfRange(8, 40))
             pairing = null
             pairingCode = null
+            if (pairingOnly) {
+                // Paired: back to the home screen, now on this PC (nothing started on it).
+                pairingOnly = false
+                pairingPc = 0L
+                settings.preferredPc = host
+                r.disconnect()
+                startScreen.setShown(false)
+                showPage(Page.HOME)
+                return
+            }
         }
         r?.takeForgottenHost()?.takeIf { it != 0L }?.let { pairingStore.remove(it) }
 
@@ -923,6 +941,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     @Deprecated("Back opens/closes the menu instead of leaving")
     override fun onBackPressed() {
+        // Pairing a PC ("Parear um PC"): Back gives up and returns to the home screen.
+        if (pairingOnly) {
+            pairingOnly = false
+            pairingPc = 0L
+            receiver?.disconnect()
+            startScreen.setShown(false)
+            showPage(Page.HOME)
+            return
+        }
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
         if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)

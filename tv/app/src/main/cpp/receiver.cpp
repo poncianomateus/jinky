@@ -48,9 +48,10 @@ void Receiver::stop() {
     sock_.close();
 }
 
-void Receiver::connect(uint32_t ip, uint16_t port, bool desktop, bool game) {
+void Receiver::connect(uint32_t ip, uint16_t port, bool desktop, bool game, bool pair_only) {
     connect_desktop_ = desktop;
     connect_game_ = game;
+    connect_pair_only_ = pair_only;
     connect_port_ = port;
     connect_ip_ = ip;
 }
@@ -118,6 +119,7 @@ void Receiver::apply_connect_requests() {
         last_packet_ms_ = now_ms();
         desktop_ = connect_desktop_.load();
         game_ = connect_game_.load();
+        pair_only_ = connect_pair_only_.load();
         game_ready_ = -1;
         end_reason_ = 0;
         session_wanted_ = true;
@@ -391,7 +393,7 @@ void Receiver::net_loop() {
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
             send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
-                       (game_ ? tclproto::kHelloGame : 0u));
+                       (game_ ? tclproto::kHelloGame : 0u) | (pair_only_ ? tclproto::kHelloPairOnly : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
                 std::string name;

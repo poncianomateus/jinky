@@ -702,6 +702,10 @@ int main(int argc, char** argv) {
                     continue;
                 }
             }
+            if (msg->type == PacketType::Hello && (msg->value & tclproto::kHelloPairOnly)) {
+                // "Parear um PC" on the TV: it is paired (authenticated) and leaves; nothing starts.
+                continue;
+            }
             if (msg->type == PacketType::Hello) {
                 const bool takeover = msg->value & tclproto::kHelloTakeover;
                 if (peer && *peer != from && steady_clock::now() - last_peer_msg < 5s) {

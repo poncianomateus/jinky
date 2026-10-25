@@ -41,7 +41,8 @@ public:
     // `game`: a game chosen in the TV's library (console mode without Big Picture; the PC says
     // when the game is on screen and ends the session when it closes).
     // [port]: the PC's streaming port from its answer to discovery (0 = keep the current one).
-    void connect(uint32_t ip, uint16_t port, bool desktop, bool game = false);
+    // [pair_only]: "Parear um PC" — authenticate (show the code) but start no session.
+    void connect(uint32_t ip, uint16_t port, bool desktop, bool game = false, bool pair_only = false);
     // -1 = not yet; else tclproto::GameReadyReason (on screen / a prompt waits for the player).
     int game_ready() const { return game_ready_; }
     int end_reason() const { return end_reason_; }
@@ -164,6 +165,8 @@ private:
     std::atomic<uint16_t> connect_port_{0};
     std::atomic<bool> connect_desktop_{false};
     std::atomic<bool> connect_game_{false};
+    std::atomic<bool> connect_pair_only_{false};
+    std::atomic<bool> pair_only_{false};
     std::atomic<bool> game_{false};
     std::atomic<int> game_ready_{-1};
     std::atomic<int> end_reason_{0};

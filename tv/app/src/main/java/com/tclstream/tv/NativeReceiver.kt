@@ -14,7 +14,8 @@ class NativeReceiver : AutoCloseable {
     // --- home screen ---
     /** Starts a session with the PC at [ip]: console mode, or just its screen when [desktop]. */
     /** [port]: the PC's streaming port from discovery (several Jinkys can share one PC); 0 = the usual one. */
-    fun connect(ip: String, port: Int, desktop: Boolean, game: Boolean = false) = nativeConnect(handle, ip, port, desktop, game)
+    fun connect(ip: String, port: Int, desktop: Boolean, game: Boolean = false, pairOnly: Boolean = false) =
+        nativeConnect(handle, ip, port, desktop, game, pairOnly)
     /** Game session: -1 still starting, 0 the game is on screen, 1 a launcher/prompt waits for the player. */
     fun gameReady(): Int = nativeGameReady(handle)
     /** Video arriving right now (last second), kbit/s; the PC adjusts it to the network. */
@@ -102,7 +103,7 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeStart(handle: Long, port: Int): String?
         @JvmStatic external fun nativeStop(handle: Long)
-        @JvmStatic external fun nativeConnect(handle: Long, ip: String, port: Int, desktop: Boolean, game: Boolean)
+        @JvmStatic external fun nativeConnect(handle: Long, ip: String, port: Int, desktop: Boolean, game: Boolean, pairOnly: Boolean)
         @JvmStatic external fun nativeGameReady(handle: Long): Int
         @JvmStatic external fun nativeVideoKbps(handle: Long): Int
         @JvmStatic external fun nativeEndReason(handle: Long): Int
