@@ -17,6 +17,7 @@ class PcPickerScreen(
 ) : TvPage(context) {
 
     private val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val intro = text(11f, Jinky.MUTED).apply { setLineSpacing(0f, 1.25f) }
     private val back = smallButton("Voltar").apply { setOnClickListener { onBack() } }
 
     init {
@@ -25,24 +26,26 @@ class PcPickerScreen(
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(back, LinearLayout.LayoutParams(-2, -2))
         })
-        root.addView(text(11f, Jinky.MUTED).apply {
-            text = "Cada usuário do Windows com o Jinky aberto aparece como um PC: escolha em qual jogar."
-            setLineSpacing(0f, 1.25f)
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        root.addView(intro, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         root.addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; addView(list) },
             LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(16) })
         addView(root, LayoutParams(-1, -1))
     }
 
     /**
-     * Lists the PCs paired with this TV (the one in use first) and focuses the one in use. The
-     * others on the network (e.g. another Windows user's Jinky on the same PC) stay behind
-     * "Adicionar outro PC", which is how a new PC gets paired. A TV paired with none sees them all.
+     * Lists the PCs paired with this TV (the one in use first) and focuses the one in use. PCs not
+     * paired with it never show here; "Parear um PC novo" (or a TV paired with none) switches to
+     * pairing: the other PCs on the network, the first connection then asks for the code.
      */
-    fun show(hosts: List<HomeHost>, currentId: Long?, paired: Set<Long>, showAll: Boolean = false) {
+    fun show(hosts: List<HomeHost>, currentId: Long?, paired: Set<Long>, pairing: Boolean = false) {
         list.removeAllViews()
         var focus: View? = null
-        val shown = if (showAll || paired.isEmpty()) hosts else hosts.filter { it.id in paired || it.id == currentId }
+        val pairingMode = pairing || paired.isEmpty()
+        val shown = if (pairingMode) hosts.filter { it.id !in paired } else hosts.filter { it.id in paired }
+        intro.text = if (pairingMode)
+            "Parear um PC: escolha o PC (cada usuário do Windows com o Jinky aberto aparece como um PC). " +
+                "Na primeira conexão ele mostra um código, confirme no Jinky do PC. Só PCs pareados aparecem depois."
+        else "Os PCs pareados com esta TV: escolha em qual jogar."
         for (h in shown.sortedWith(compareByDescending<HomeHost> { it.id == currentId }.thenByDescending { it.id in paired })) {
             val status = when (h.status) {
                 HomeHost.Status.READY -> "Pronto"
@@ -57,16 +60,20 @@ class PcPickerScreen(
             list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { if (list.childCount > 0) topMargin = dp(10) })
             if (h.id == currentId) focus = row
         }
-        if (hosts.isEmpty()) {
+        if (hosts.isEmpty() && !pairingMode) {
             list.addView(text(13f, Jinky.MUTED).apply { text = "Nenhum PC com o Jinky foi encontrado na rede." })
         }
-        val others = hosts.size - shown.size
-        if (others > 0) {
-            val add = smallButton("Adicionar outro PC  ·  $others na rede").apply {
-                setOnClickListener { show(hosts, currentId, paired, showAll = true) }
+        val others = hosts.count { it.id !in paired }
+        if (!pairingMode) {
+            val add = smallButton(if (others > 0) "Parear um PC novo  ·  $others na rede" else "Parear um PC novo").apply {
+                setOnClickListener { show(hosts, currentId, paired, pairing = true) }
             }
             list.addView(add, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(16) })
             if (focus == null && shown.isEmpty()) focus = add
+        } else if (shown.isEmpty()) {
+            list.addView(text(13f, Jinky.MUTED).apply {
+                text = "Nenhum outro PC com o Jinky aberto na rede. Abra o Jinky no PC e volte aqui."
+            })
         }
         (focus ?: list.getChildAt(0) ?: back).let { v -> post { v.requestFocus() } }
     }

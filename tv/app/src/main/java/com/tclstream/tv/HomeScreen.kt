@@ -259,7 +259,7 @@ class HomeScreen(
     // --- state from MainActivity (every 500 ms) ---
 
     /** [updateStatus]: progress/result of an update in progress, else null. */
-    fun show(h: HomeHost?, searching: Boolean, waking: Boolean, updateStatus: String? = null) {
+    fun show(h: HomeHost?, searching: Boolean, waking: Boolean, updateStatus: String? = null, unpairedAround: Int = 0) {
         clock.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
         updateNote.text = updateStatus ?: ""
         updateNote.gone(updateStatus == null)
@@ -269,6 +269,13 @@ class HomeScreen(
         host = h
         this.waking = waking
         when {
+            h == null && unpairedAround > 0 -> {
+                // PCs answer, but none is paired with this TV: they only show once paired.
+                setStatus(Jinky.BLUE, 1, "Parear um PC")
+                showMessage("Nenhum PC pareado com esta TV",
+                    "Há ${if (unpairedAround == 1) "1 PC" else "$unpairedAround PCs"} com o Jinky na rede. " +
+                        "Aperte OK em \"Parear um PC\", no topo, e confirme o código no Jinky do PC.", null)
+            }
             h == null -> {
                 setStatus(Jinky.BLUE, 1, if (searching) "Procurando o PC" else "Nenhum PC")
                 showMessage("Procurando seu PC", "Abra o Jinky no computador. A TV e o PC precisam estar na mesma rede de casa.", null)

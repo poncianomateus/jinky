@@ -54,6 +54,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
+    private var pairingPc = 0L  // a PC picked in "Parear um PC": shown until its code is confirmed
     private var wasInSession = false
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
@@ -201,6 +202,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             pcPicker = PcPickerScreen(this@MainActivity,
                 onChoose = { h ->
+                    if (!isPaired(h) && h.id !in pairingStore.hosts().keys) pairingPc = h.id  // pairing it now
                     settings.preferredPc = h.id
                     gamesFrom = null  // load the chosen PC's library
                     showPage(Page.HOME)
@@ -690,6 +692,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (known && !pairedHere && id in pairingStore.hosts().keys) {
             Log.i(TAG, "PC ${p[5]} no longer has this TV paired: forgetting it")
             pairingStore.remove(id)
+            if (settings.preferredPc == id) settings.preferredPc = 0L
         }
         HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
             HostCache.parseMac(p[3]), p.getOrNull(7)?.toIntOrNull() ?: 0, p.getOrNull(8)?.toIntOrNull() ?: 0,
@@ -718,17 +721,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val preferred = settings.preferredPc
         val chosenOffline = if (preferred == 0L || online.any { it.id == preferred }) null
             else hostCache.all().firstOrNull { it.id == preferred }?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
-        // Without a choice, never a PC this TV isn't paired with while it is paired with some
-        // (e.g. another Windows user's Jinky on the same PC that removed this TV).
+        // The base rule: a PC shows up only once it is paired with this TV (the code confirmed on
+        // the PC), or while the user is pairing it (chose it in "Parear um PC"). Never another
+        // Windows user's Jinky on the same PC just because it answers.
         val paired = pairingStore.hosts().keys
-        val candidates = online.filter(::isPaired).ifEmpty { if (paired.isEmpty()) online else emptyList() }
-        val host = online.firstOrNull { it.id == preferred }
-            ?: chosenOffline
+        fun allowed(h: HomeHost) = isPaired(h) || h.id in paired || h.id == pairingPc
+        val candidates = online.filter(::isPaired)
+        val host = (online.firstOrNull { it.id == preferred } ?: chosenOffline)?.takeIf(::allowed)
             ?: candidates.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
-            ?: hostCache.all().let { all -> all.firstOrNull { it.id in paired } ?: if (paired.isEmpty()) all.firstOrNull() else null }
-                ?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
-            ?: online.firstOrNull()
-        if (preferred == 0L && candidates.size > 1 && !askedForPc && page == Page.HOME) {
+            ?: hostCache.all().firstOrNull { it.id in paired }?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
+            ?: online.firstOrNull { it.id == pairingPc }
+        // Several paired PCs and none chosen: ask. None paired yet but PCs around: "Parear um PC".
+        if (!askedForPc && page == Page.HOME &&
+            ((preferred == 0L && candidates.size > 1) || (host == null && online.isNotEmpty()))) {
             askedForPc = true
             ui.post { showPage(Page.PCS) }
         }
@@ -736,7 +741,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         homeHost = host
         lastPictureMs = 0L
         host?.let(::loadGames)
-        homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status)
+        homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status,
+            unpairedAround = if (host == null) online.count { !isPaired(it) } else 0)
     }
 
     /** One of the TV's own screens (or the menu) is in front, not the game. */
