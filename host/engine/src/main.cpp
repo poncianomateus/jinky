@@ -803,7 +803,12 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else if (msg->type == PacketType::CloseGame) {
-                    game_watch.close_game();
+                    // In a Big Picture session with no game open, "Fechar jogo" closes Big Picture
+                    // (the session then ends as usual and the TV goes back to its home screen).
+                    if (!game_watch.close_game() && !peer_game && console.active()) {
+                        TCL_INFO("game", "no game open: closing Big Picture instead");
+                        tcl::ConsoleMode::close_big_picture();
+                    }
                 } else if (msg->type == PacketType::Bye) {
                     TCL_INFO("session", "receiver left");
                     tcl::emit_event("disconnected", "\"reason\":\"left\"");

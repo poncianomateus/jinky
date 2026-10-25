@@ -46,7 +46,7 @@ data class HomeHost(
  * aside, like a console. Below: the game's logo, how long it has been played, and Jogar.
  *
  * Controller: A opens the game's page, Y searches the library, X pins/unpins, R1 goes to the
- * Biblioteca tab. Nothing here is an advert: only the user's own games.
+ * Biblioteca tab, L1 to Amigos. Nothing here is an advert: only the user's own games.
  */
 class HomeScreen(
     context: Context,
@@ -59,6 +59,7 @@ class HomeScreen(
     private val onSettings: () -> Unit,
     private val onLibrary: (HomeHost, search: Boolean) -> Unit,
     private val onProfile: () -> Unit,
+    private val onFriends: () -> Unit,
     private val onChoosePc: () -> Unit,
 ) : TvPage(context) {
 
@@ -100,6 +101,16 @@ class HomeScreen(
         }
     }
     private val libraryTab = tab("Biblioteca")
+    private val friendsTab = tab("Amigos")
+    private val friendsBadge = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f)
+        typeface = Jinky.mono(context, 700)
+        setTextColor(Jinky.INK)
+        gravity = Gravity.CENTER
+        setPadding(dp(5), 0, dp(5), 0)
+        background = Jinky.rounded(Jinky.GREEN, dp(8).toFloat())
+        visibility = View.GONE
+    }
 
     private val rowItems = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -183,6 +194,8 @@ class HomeScreen(
                 LinearLayout.LayoutParams(dp(57), dp(19)).apply { marginStart = dp(8) })
             addView(activeTab("Início"), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(30) })
             addView(libraryTab, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
+            addView(friendsTab, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(4) })
+            addView(friendsBadge, LinearLayout.LayoutParams(-2, dp(15)).apply { marginStart = dp(1) })
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(update, LinearLayout.LayoutParams(-2, dp(28)).apply { marginEnd = dp(10) })
             // The PC chip: OK opens "Escolher PC" (a PC can run one Jinky per Windows user).
@@ -230,6 +243,8 @@ class HomeScreen(
 
         for (b in listOf(primary, details, pinButton)) b.id = View.generateViewId()
         libraryTab.id = View.generateViewId()
+        friendsTab.id = View.generateViewId()
+        friendsTab.setOnClickListener { onFriends() }
         settings.setOnClickListener { onSettings() }
         profileButton.setOnClickListener { onProfile() }
         avatarInitial.text = "?"
@@ -247,6 +262,8 @@ class HomeScreen(
         if (event.action == KeyEvent.ACTION_DOWN) {
             touched = true
             val h = host
+            // Amigos works while another TV plays on the PC too.
+            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 && h != null && h.status != HomeHost.Status.OFFLINE) { onFriends(); return true }
             if (h != null && h.status == HomeHost.Status.READY) when (event.keyCode) {
                 KeyEvent.KEYCODE_BUTTON_Y -> { onLibrary(h, true); return true }
                 KeyEvent.KEYCODE_BUTTON_X -> { togglePin(); return true }
@@ -257,6 +274,12 @@ class HomeScreen(
     }
 
     // --- state from MainActivity (every 500 ms) ---
+
+    /** Friends playing right now: a small green count next to the Amigos tab (0 hides it). */
+    fun setFriendsPlaying(n: Int) {
+        friendsBadge.text = n.toString()
+        friendsBadge.gone(n <= 0)
+    }
 
     /** [updateStatus]: progress/result of an update in progress, else null. */
     fun show(h: HomeHost?, searching: Boolean, waking: Boolean, updateStatus: String? = null, unpairedAround: Int = 0) {
@@ -746,16 +769,18 @@ class HomeScreen(
         add(Jinky.hint(context, Jinky.Button.OK, "Abrir"))
         add(Jinky.hint(context, Jinky.Button.SEARCH, "Buscar"))
         add(Jinky.hint(context, Jinky.Button.PIN, "Fixar"))
-        add(LinearLayout(context).apply {
+        fun bumper(key: String, label: String) = add(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(mono(7.5f, Jinky.TEXT, 700).apply {
-                text = "R1"
+                text = key
                 setPadding(dp(5), dp(1), dp(5), dp(1))
                 background = Jinky.rounded(Jinky.LINE, dp(4).toFloat())
             })
-            addView(text(9f, Jinky.SOFT).apply { text = "Biblioteca" }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(5) })
+            addView(text(9f, Jinky.SOFT).apply { text = label }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(5) })
         })
+        bumper("L1", "Amigos")
+        bumper("R1", "Biblioteca")
     }
 
     // --- views ---

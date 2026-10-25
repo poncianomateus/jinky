@@ -21,10 +21,13 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("force_h264", false)
         set(v) = prefs.edit().putBoolean("force_h264", v).apply()
 
-    /** Show the performance panel as soon as a game starts. */
-    var showStats: Boolean
-        get() = prefs.getBoolean("show_stats", false)
-        set(v) = prefs.edit().putBoolean("show_stats", v).apply()
+    /**
+     * Performance on screen while playing: "off", "compact" (a small pill in the corner) or
+     * "full" (the technical panel). Older versions had an on/off switch for the panel.
+     */
+    var statsMode: String
+        get() = prefs.getString("stats_mode", null) ?: if (prefs.getBoolean("show_stats", false)) "full" else "off"
+        set(v) = prefs.edit().putString("stats_mode", v).apply()
 
     /** Look of the whole app: "jinky", "midnight" or "retro" (UiTheme keys). */
     var theme: String

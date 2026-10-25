@@ -25,6 +25,11 @@ import com.tclstream.tv.StartScreen.Step as S
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
+    private lateinit var perfHud: PerfHud
+    private var statsMode = "off"  // performance on screen during this game: off, compact, full
+    private var lastPresented = 0L
+    private var lastPresentedAt = 0L
+    private var shownFps = Double.NaN
     private lateinit var startScreen: StartScreen
     private lateinit var homeScreen: HomeScreen
     private lateinit var settingsScreen: SettingsScreen
@@ -34,12 +39,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var gameScreen: GameScreen
     private lateinit var achievementsScreen: AchievementsScreen
     private lateinit var profileScreen: ProfileScreen
+    private lateinit var friendsScreen: FriendsScreen
     private lateinit var toast: AchievementToast
+    private var bootSplash: BootSplash? = null
     private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
     private var achievementsOverGame = false        // the achievements page opened from the menu
     private var unlocksAfter = -1L                  // PC clock of the last unlock check (-1 = learn it)
     private var unlockPolling = false
     private var lastUnlockPoll = 0L
+    private var friendsOrigin = Page.HOME  // where Back returns from Amigos
     private var gameOrigin = Page.HOME  // where Back returns from a game's page
     private lateinit var launchScreen: LaunchScreen
     private lateinit var hint: TextView
@@ -50,7 +58,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS, FRIENDS }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
@@ -97,7 +105,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (inSession != wasInSession) {
                 wasInSession = inSession
                 // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
-                statusText.visibility = if (inSession && settings.showStats) View.VISIBLE else View.GONE
+                statsMode = if (inSession) settings.statsMode else "off"
+                applyStatsMode()
                 if (!inSession) gamesFrom = null  // "last played" changed: reload the home row
                 if (inSession) unlocksAfter = -1L
                 else {
@@ -120,6 +129,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (menu.isOpen) menu.updateStream(streamLine())
             val text = buildOverlay()
             statusText.text = text
+            if (perfHud.visibility == View.VISIBLE) updateHud()
             // Same diagnostics in logcat every 5 s, for remote debugging over adb.
             if (++ticks % 10 == 0) Log.i(TAG, "status: " + text.lines().filter { it.startsWith("áudio") }.joinToString(" | "))
             ui.postDelayed(this, 500)
@@ -185,6 +195,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         profileScreen.show(h.ip, h.updatePort)
                     }
                 },
+                onFriends = ::openFriends,
                 onChoosePc = { showPage(Page.PCS) })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
@@ -197,7 +208,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onTestToast = {
                     toast.show(AchievementUnlock(0, 0, "Jinky", "teste", "Conquista de exemplo",
                         "Assim aparece uma conquista durante o jogo.", "", 4.2, 12, 46))
-                }).apply { visibility = View.GONE }
+                },
+                pcAddress = { homeHost?.takeIf { it.updatePort > 0 }?.let { it.ip to it.updatePort } }).apply { visibility = View.GONE }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
@@ -241,8 +253,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     }
                 },
                 onChoosePc = { showPage(Page.PCS) },
-                onSettings = { showPage(Page.SETTINGS) }).apply { visibility = View.GONE }
+                onSettings = { showPage(Page.SETTINGS) },
+                onFriends = ::openFriends).apply { visibility = View.GONE }
             addView(profileScreen, FrameLayout.LayoutParams(-1, -1))
+            friendsScreen = FriendsScreen(this@MainActivity,
+                ownedGame = { id -> pcGames.firstOrNull { it.id == id } },
+                onOpenGame = { g -> openGame(g, Page.FRIENDS) },
+                onPlayGame = { g -> homeHost?.let { playGame(it, g) } }).apply { visibility = View.GONE }
+            addView(friendsScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             hint = TextView(this@MainActivity).apply {
@@ -263,6 +281,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
             statusParams.setMargins(margin, margin, margin, margin)
             addView(statusText, statusParams)
+            perfHud = PerfHud(this@MainActivity).apply { visibility = View.GONE }
+            addView(perfHud, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                val m = (resources.displayMetrics.heightPixels * 0.04).toInt()
+                setMargins(m, m, (resources.displayMetrics.widthPixels * 0.03).toInt(), m)
+            })
             menu = GameMenu(this@MainActivity,
                 onResume = { hideMenu() },
                 onCloseGame = {
@@ -271,7 +294,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     hideMenu()
                 },
                 onToggleStats = {
-                    statusText.visibility = if (statusText.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    // Off -> compact -> detailed -> off, for this game.
+                    statsMode = when (statsMode) { "off" -> "compact"; "compact" -> "full"; else -> "off" }
+                    applyStatsMode()
                     hideMenu()
                 },
                 onHome = {
@@ -292,8 +317,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             // The opening, like a console's boot (not when the screens were just rebuilt for a new look).
             if (savedInstanceState == null && settings.boot != "off") {
                 val splash = BootSplash(this@MainActivity)
+                bootSplash = splash
                 addView(splash, FrameLayout.LayoutParams(-1, -1))
-                splash.play(fast = settings.boot == "fast") { removeView(splash) }
+                splash.play(fast = settings.boot == "fast") { removeView(splash); bootSplash = null }
             }
         })
         // A new look rebuilt the screens: back to where the user was choosing it.
@@ -406,6 +432,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             achievementsScreen.visibility == View.VISIBLE -> Page.ACHIEVEMENTS
             profileScreen.visibility == View.VISIBLE -> Page.PROFILE
             pcPicker.visibility == View.VISIBLE -> Page.PCS
+            friendsScreen.visibility == View.VISIBLE -> Page.FRIENDS
             else -> null
         }
         if (p != null) page = p
@@ -417,6 +444,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
         profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
         pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
+        friendsScreen.visibility = if (p == Page.FRIENDS) View.VISIBLE else View.GONE
+        if (before == Page.FRIENDS && p != Page.FRIENDS) friendsScreen.hidden()
+        if (p == Page.FRIENDS && before != Page.FRIENDS) friendsScreen.resumed()  // back from a game's page
         if (p == Page.PCS && before != Page.PCS) {
             val pcs = knownPcs()
             pcPicker.show(pcs, homeHost?.id, pcs.filter(::isPaired).map { it.id }.toSet())
@@ -434,6 +464,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.ACHIEVEMENTS -> achievementsScreen
                 Page.PROFILE -> profileScreen
                 Page.PCS -> pcPicker
+                Page.FRIENDS -> friendsScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -451,6 +482,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.ACHIEVEMENTS -> achievementsScreen.focusFirst()
             Page.PROFILE -> profileScreen.focusFirst()
             Page.PCS -> pcPicker.focusFirst()
+            Page.FRIENDS -> friendsScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -464,9 +496,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         gameScreen.show(game, host.ip, host.updatePort, when (from) {
             Page.HOME -> "Início"
             Page.PROFILE -> "Perfil"
+            Page.FRIENDS -> "Amigos"
             else -> "Biblioteca"
         })
         gameScreen.focusFirst()
+    }
+
+    private var friendsPolledAt = 0L
+
+    /** How many friends are playing now, for the badge on Home's Amigos tab (once a minute). */
+    private fun pollFriends(host: HomeHost) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (homeScreen.visibility != View.VISIBLE || host.status == HomeHost.Status.OFFLINE || host.updatePort <= 0) return
+        if (friendsPolledAt != 0L && now - friendsPolledAt < 60_000) return
+        friendsPolledAt = now
+        Thread {
+            val playing = try { SteamFriend.fetch(host.ip, host.updatePort).first?.count { it.playing } } catch (e: Exception) { null }
+            ui.post { homeScreen.setFriendsPlaying(playing ?: 0) }
+        }.start()
+    }
+
+    /** Amigos: the Steam friends list, from Home or the Perfil (Back returns there). */
+    private fun openFriends() {
+        val host = homeHost ?: return
+        if (host.status == HomeHost.Status.OFFLINE || host.updatePort <= 0) return
+        friendsOrigin = if (profileScreen.visibility == View.VISIBLE) Page.PROFILE else Page.HOME
+        showPage(Page.FRIENDS)
+        friendsScreen.show(host.ip, host.updatePort)
     }
 
     /** A game's achievements: from its page, or over the game from the menu ([overGame]). */
@@ -644,6 +700,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // Gamepad input goes to the PC; everything else (the TV remote) keeps working normally.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // While the opening plays, any button skips it (and nothing moves behind it).
+        bootSplash?.let { if (event.action == KeyEvent.ACTION_DOWN) it.skip(); return true }
         val ok = event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)
         // Session on another TV: OK on the remote or A on a controller brings it here.
@@ -749,6 +807,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         homeHost = host
         lastPictureMs = 0L
         host?.let(::loadGames)
+        host?.let(::pollFriends)
         homeScreen.show(host, searching = true, waking = now < wakingUntil, updateStatus = updater.status,
             unpairedAround = if (host == null) online.count { !isPaired(it) } else 0)
     }
@@ -757,7 +816,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun uiShown() = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
-        profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE || menu.isOpen
+        profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||
+        friendsScreen.visibility == View.VISIBLE || menu.isOpen
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
@@ -907,6 +967,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startScreen.show(model)
     }
 
+    private fun applyStatsMode() {
+        statusText.visibility = if (statsMode == "full") View.VISIBLE else View.GONE
+        perfHud.visibility = if (statsMode == "compact") View.VISIBLE else View.GONE
+        if (statsMode == "compact") { lastPresentedAt = 0L; shownFps = Double.NaN; updateHud() }
+    }
+
+    /** The compact corner pill: frames shown per second (over the last tick), latency, quality, ping. */
+    private fun updateHud() {
+        val p = pipeline
+        val now = android.os.SystemClock.elapsedRealtime()
+        val presented = p?.framesPresented?.get() ?: 0L
+        if (lastPresentedAt > 0 && now > lastPresentedAt && presented >= lastPresented) {
+            val fps = (presented - lastPresented) * 1000.0 / (now - lastPresentedAt)
+            // A little smoothing so the number doesn't flicker between 59 and 61.
+            shownFps = if (shownFps.isNaN()) fps else shownFps * 0.6 + fps * 0.4
+        }
+        lastPresented = presented
+        lastPresentedAt = now
+        val r = receiver
+        r?.clock(clock)
+        val rtt = if (r != null && clock[0] == 1L) clock[2] / 1000.0 else Double.NaN
+        val latency = p?.latency?.last?.totalAvgMs ?: Double.NaN
+        perfHud.update(shownFps, latency, (r?.videoKbps() ?: 0) / 1000.0, rtt)
+    }
+
     /** Live line for the menu: latency, codec and quality of the stream. */
     private fun streamLine(): String {
         val p = pipeline
@@ -923,7 +1008,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val game = sessionGame
         val host = homeHost
         menu.open(sessionTitle.ifEmpty { "Jinky" }, streamLine(), canClose = !sessionDesktop,
-            statsShown = statusText.visibility == View.VISIBLE, game = game, art = host?.let { it.ip to it.updatePort })
+            stats = statsMode, game = game, art = host?.let { it.ip to it.updatePort })
         gamepads?.menuOpen = true
         // The achievements the user follows in this game, once the PC answers.
         if (game != null && host != null && settings.tracked(game.id).isNotEmpty()) Thread {
@@ -952,7 +1037,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
+        if (friendsScreen.visibility == View.VISIBLE) { if (!friendsScreen.backToList()) showPage(friendsOrigin) }
+        else if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (achievementsScreen.visibility == View.VISIBLE) { if (!achievementsScreen.closeDetail()) closeAchievements() }
         else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }
         else if (helpScreen.visibility == View.VISIBLE) showPage(Page.SETTINGS)

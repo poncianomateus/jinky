@@ -113,15 +113,16 @@ class GameMenu(
 
     /**
      * [game]: what is playing (null for Big Picture / desktop); [art]: PC address for its cover;
-     * [canClose]: a game can be closed from here; [statsShown]: the performance panel is on.
+     * [canClose]: a game can be closed from here; [stats]: performance on screen ("off",
+     * "compact" or "full"; the tile goes to the next one).
      */
-    fun open(name: String, streamLine: String, canClose: Boolean, statsShown: Boolean, game: LibraryGame?, art: Pair<String, Int>?) {
+    fun open(name: String, streamLine: String, canClose: Boolean, stats: String, game: LibraryGame?, art: Pair<String, Int>?) {
         title.text = name
         line = streamLine
         updateStats()
         closeGame.gone(!canClose)
         achievements.gone(game == null || game.nonSteam)
-        setLabel(statsTile, if (statsShown) "Desempenho: ligado" else "Desempenho")
+        setLabel(statsTile, when (stats) { "compact" -> "Desempenho: compacto"; "full" -> "Desempenho: detalhado"; else -> "Desempenho" })
         cover.setImageDrawable(Jinky.rounded(Jinky.RAISED, dp(6).toFloat()))
         if (game != null && art != null) ArtLoader.load(art.first, art.second, game.id, "cover", 2) { bmp -> if (bmp != null) cover.setImageBitmap(bmp) }
         trackCard.gone(true)

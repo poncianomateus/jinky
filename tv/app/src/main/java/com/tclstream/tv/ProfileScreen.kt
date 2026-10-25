@@ -65,6 +65,7 @@ class ProfileScreen(
     private val onOpenAchievements: (gameId: Int, achievementId: String?, lockedOnly: Boolean) -> Unit,
     private val onChoosePc: () -> Unit,
     private val onSettings: () -> Unit,
+    private val onFriends: () -> Unit,
 ) : TvPage(context) {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -86,6 +87,7 @@ class ProfileScreen(
     private val message = text(12f, Jinky.MUTED)
     private val choosePc = smallButton("Trocar de PC").apply { setOnClickListener { onChoosePc() } }
     private val settings = smallButton("Configurações").apply { setOnClickListener { onSettings() } }
+    private val friendsButton = smallButton("Amigos").apply { setOnClickListener { onFriends() } }
     private val scroll = ScrollView(context).apply {
         isVerticalScrollBarEnabled = false
         clipToPadding = false
@@ -138,6 +140,7 @@ class ProfileScreen(
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(choosePc)
+                    addView(friendsButton, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
                     addView(settings, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
                 }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             }, LinearLayout.LayoutParams(dp(600), -2).apply { marginStart = dp(18) })
@@ -329,6 +332,7 @@ class ProfileScreen(
                         ellipsize = TextUtils.TruncateAt.END
                     })
                 }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(9) })
+                setOnClickListener { onFriends() }
             }, LinearLayout.LayoutParams(-1, -2).apply { if (friends.childCount > 0) topMargin = dp(7) })
         }
         post { focusFirst() }

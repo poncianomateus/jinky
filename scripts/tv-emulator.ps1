@@ -42,6 +42,7 @@ if ($Build) {
 function Emulator { ((& $adb devices) -match '^emulator-\d+\s+device' | Select-Object -First 1) -replace '\s+device$', '' }
 function Start-Emulator {
     Write-Host "== Starting the emulator"
+    $ErrorActionPreference = 'Continue'  # adb complains on stderr ("device offline") while it boots
     Start-Process $emulator -ArgumentList "-avd $avd -no-snapshot-save -no-boot-anim -netdelay none -netspeed full"
     do { Start-Sleep 2; $script:serial = Emulator } until ($script:serial)
     do { Start-Sleep 2 } until ((& $adb -s $script:serial shell getprop sys.boot_completed 2>$null) -match '1')

@@ -13,7 +13,9 @@ namespace Jinky;
 /// POST /tv/diagnostics?tv=Name -> a TV's diagnostic report, saved next to the PC's logs;
 /// GET /library -> installed Steam games (JSON); GET /library/art?id=N&kind=cover|hero|logo -> artwork;
 /// POST /library/launch?id=N -> starts that game when a TV streams from this PC (right away, or as
-/// soon as the session the TV is opening starts).
+/// soon as the session the TV is opening starts); GET /profile -> the Steam account;
+/// GET /friends -> the Steam friends list with status; GET /friends/games?id=STEAMID -> what that
+/// friend played lately.
 /// </summary>
 public sealed class TvService : IDisposable
 {
@@ -307,6 +309,31 @@ public sealed class TvService : IDisposable
                             friends = p.Friends.Select(f => new { name = f.Name, avatar = f.Avatar, game = f.Game, state = f.State }),
                             played = p.Played.Select(g => new { id = g.Id, name = g.Name, minutes = g.Minutes, unlocked = g.Unlocked, total = g.Total }),
                         });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/friends"))
+                {
+                    var list = await Task.Run(() => SteamProfile.AllFriends(SteamApiKey?.Invoke()));
+                    var json = list is null
+                        ? System.Text.Json.JsonSerializer.Serialize(new { error = SteamProfile.LastError ?? "erro" })
+                        : System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            now = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                            friends = list.Select(f => new
+                            {
+                                id = f.Id, name = f.Name, avatar = f.Avatar, gameId = f.GameId, game = f.Game,
+                                state = f.State, lastOff = f.LastOff, since = f.Since,
+                            }),
+                        });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/friends/games") && request.Query("id") is { } friendId)
+                {
+                    var games = await Task.Run(() => SteamProfile.FriendRecentGames(SteamApiKey?.Invoke(), friendId));
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        games = games.Select(g => new { id = g.Id, name = g.Name, recent = g.Minutes2Weeks, total = g.MinutesTotal }),
+                    });
                     await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if (request.Is("GET", "/achievements/unlocks"))

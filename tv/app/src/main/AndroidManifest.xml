@@ -3,6 +3,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Updates come from the Jinky PC app; Android still asks the user to confirm each one. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

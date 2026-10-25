@@ -26,6 +26,7 @@ class SettingsScreen(
     private val onHelp: () -> Unit,
     private val onLookChanged: () -> Unit,
     private val onTestToast: () -> Unit,
+    private val pcAddress: () -> Pair<String, Int>?,
 ) : TvPage(context) {
 
     private enum class Section(val label: String, val icon: Int, val subtitle: String) {
@@ -50,6 +51,7 @@ class SettingsScreen(
     private val note = text(10f, Jinky.BLUE_SOFT)
     private var section = Section.PICTURE
     private var forgetArmedUntil = 0L
+    private var lastTest: NetworkTest.Result? = null
 
     init {
         // --- left: categories ---
@@ -133,6 +135,7 @@ class SettingsScreen(
         rows.removeAllViews()
         when (section) {
             Section.PICTURE -> {
+                networkTest()
                 cycle("Qualidade máxima", {
                     val m = settings.bitrateMbps
                     if (m == 0) "a do PC" else "$m Mbit/s"
@@ -152,8 +155,13 @@ class SettingsScreen(
                     settings.forceH264 = !settings.forceH264
                     onChanged()
                 }
-                toggle("Desempenho na tela", "Latência, quadros e rede durante o jogo", { settings.showStats }) {
-                    settings.showStats = !settings.showStats
+                cycle("Desempenho na tela", { when (settings.statsMode) { "compact" -> "Compacto"; "full" -> "Detalhado"; else -> "Desligado" } },
+                    { when (settings.statsMode) {
+                        "compact" -> "Quadros, latência, qualidade e ping num cantinho"
+                        "full" -> "O painel técnico completo, para achar problemas"
+                        else -> "Ligue no menu do jogo quando quiser"
+                    } }) {
+                    settings.statsMode = when (settings.statsMode) { "off" -> "compact"; "compact" -> "full"; else -> "off" }
                     onChanged()
                 }
                 info("Qualidade e formato valem a partir da próxima conexão.")
@@ -210,6 +218,91 @@ class SettingsScreen(
                     }
                 }
                 action("Ajuda e informações", "Controles, dicas de rede e dados desta TV") { onHelp() }
+            }
+        }
+    }
+
+    /** "Testar a rede": the row, and the last result under it (kept while the TV app is open). */
+    private fun networkTest() {
+        val row = action("Testar a rede", "Ping, variação, perda e velocidade até o PC") {}
+        val detail = (row.getChildAt(0) as LinearLayout).getChildAt(1) as TextView
+        val card = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        rows.addView(card, LinearLayout.LayoutParams(-1, -2))
+        lastTest?.let { fillTest(card, it) }
+        row.setOnClickListener {
+            val pc = pcAddress()
+            if (pc == null) {
+                setNote("Nenhum PC disponível agora. Abra o Jinky no PC e tente de novo.")
+                return@setOnClickListener
+            }
+            detail.text = "Medindo… não mexa na rede por uns segundos"
+            NetworkTest.run(context, pc.first, pc.second,
+                progress = { f, line -> detail.text = "$line  ${(f * 100).toInt()}%" },
+                done = { result, error ->
+                    if (result == null) detail.text = "Não deu para testar: $error"
+                    else {
+                        lastTest = result
+                        detail.text = "Pronto. Aperte de novo para repetir."
+                        if (card.isAttachedToWindow) fillTest(card, result)
+                    }
+                })
+        }
+    }
+
+    private fun fillTest(card: LinearLayout, r: NetworkTest.Result) {
+        card.removeAllViews()
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = Jinky.rounded(Jinky.SURFACE, dp(11).toFloat(), dp(1), Jinky.LINE)
+        }
+        // Verdict first, then the numbers, then what to do about it.
+        box.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(View(context).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(r.grade.color) } },
+                LinearLayout.LayoutParams(dp(9), dp(9)).apply { marginEnd = dp(8) })
+            addView(text(13f, Jinky.TEXT, bold = true).apply { text = "Rede ${r.grade.label.lowercase()}" })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(mono(8.5f, Jinky.MUTED).apply {
+                val l = r.link
+                text = when {
+                    l == null -> ""
+                    l.wired -> "TV no cabo"
+                    else -> listOfNotNull("Wi-Fi", l.wifiBand, l.signalDbm?.let { "$it dBm" }, l.linkMbps?.let { "$it Mbit/s" }).joinToString(" · ")
+                }
+            })
+        })
+        val stats = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        fun stat(value: String, label: String, good: Boolean) = stats.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            background = Jinky.rounded(Jinky.ink(0xFF), dp(9).toFloat())
+            addView(mono(15f, if (good) Jinky.TEXT else Jinky.AMBER, 700).apply { text = value })
+            addView(text(8.5f, Jinky.MUTED).apply { text = label })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { if (stats.childCount > 0) marginStart = dp(8) })
+        stat(String.format(java.util.Locale.US, "%.1f ms", r.pingMs), "Ping", r.pingMs <= 15)
+        stat(String.format(java.util.Locale.US, "%.1f ms", r.jitterMs), "Variação", r.jitterMs <= 6)
+        stat(if (r.lossPct == 0.0) "0%" else String.format(java.util.Locale.US, "%.1f%%", r.lossPct), "Perda", r.lossPct < 1)
+        stat(r.mbps?.let { if (it >= 100) "${it.toInt()} Mbit/s" else String.format(java.util.Locale.US, "%.0f Mbit/s", it) } ?: "—",
+            "Velocidade", r.mbps == null || r.mbps >= 30)
+        box.addView(stats, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        box.addView(text(9.5f, Jinky.SOFT).apply { text = r.advice; setLineSpacing(0f, 1.25f) },
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        card.addView(box, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        // One click to the quality that fits, when the current one asks for more than the network gives.
+        val current = settings.bitrateMbps
+        if (r.grade == NetworkTest.Grade.FAIR || r.grade == NetworkTest.Grade.POOR) {
+            if (current == 0 || current > r.suggestedMbps) {
+                val apply = action("Usar ${r.suggestedMbps} Mbit/s", "A qualidade que cabe nesta rede (dá para mudar abaixo)") {}
+                rows.removeView(apply)
+                card.addView(apply, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+                apply.setOnClickListener {
+                    settings.bitrateMbps = r.suggestedMbps
+                    onChanged()
+                    build()
+                    setNote("Qualidade máxima: ${r.suggestedMbps} Mbit/s, a partir da próxima conexão.")
+                }
             }
         }
     }
