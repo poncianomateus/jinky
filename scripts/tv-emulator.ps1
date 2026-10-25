@@ -40,17 +40,42 @@ if ($Build) {
 
 # Always address the emulator by its serial: "-e" would also match a TV connected over the network.
 function Emulator { ((& $adb devices) -match '^emulator-\d+\s+device' | Select-Object -First 1) -replace '\s+device$', '' }
-$serial = Emulator
-if (-not $serial) {
+function Start-Emulator {
     Write-Host "== Starting the emulator"
     Start-Process $emulator -ArgumentList "-avd $avd -no-snapshot-save -no-boot-anim -netdelay none -netspeed full"
-    do { Start-Sleep 2; $serial = Emulator } until ($serial)
-    do { Start-Sleep 2 } until ((& $adb -s $serial shell getprop sys.boot_completed 2>$null) -match '1')
+    do { Start-Sleep 2; $script:serial = Emulator } until ($script:serial)
+    do { Start-Sleep 2 } until ((& $adb -s $script:serial shell getprop sys.boot_completed 2>$null) -match '1')
 }
+
+# Opens Jinky and waits (up to ~15 s) for it to be the window in front.
+function Open-Jinky {
+    $ErrorActionPreference = 'Continue'  # adb's notes on stderr ("Broken pipe") are not failures
+    & $adb -s $serial shell input keyevent KEYCODE_WAKEUP | Out-Null
+    & $adb -s $serial shell am start -n com.jinky.tv/com.tclstream.tv.MainActivity | Out-Null
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep 1
+        if ((& $adb -s $serial shell dumpsys window 2>$null | Select-String 'mCurrentFocus' | Select-Object -First 1) -match 'com.jinky.tv') { return $true }
+    }
+    return $false
+}
+
+$serial = Emulator
+if (-not $serial) { Start-Emulator }
 
 Write-Host "== Installing Jinky"
 & $adb -s $serial install -r $apk | Out-Null
-& $adb -s $serial shell am start -n com.jinky.tv/com.tclstream.tv.MainActivity | Out-Null
+if (-not (Open-Jinky)) {
+    # An emulator left open can freeze on a black screen: start it over once.
+    Write-Host "== The emulator did not show Jinky: restarting it"
+    $ErrorActionPreference = 'Continue'
+    & $adb -s $serial emu kill 2>$null | Out-Null
+    Start-Sleep 5
+    Get-Process qemu-system-x86_64, emulator -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep 2
+    Start-Emulator
+    & $adb -s $serial install -r $apk | Out-Null
+    Open-Jinky | Out-Null
+}
 Write-Host "== Jinky is open in the emulator window (arrows, Enter = OK, Esc = Back)"
 
 # A DualSense on the PC drives the emulator too (it doesn't pass host controllers through).
