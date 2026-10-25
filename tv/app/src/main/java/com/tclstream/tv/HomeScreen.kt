@@ -33,6 +33,8 @@ data class HomeHost(
     val updateVersion: Int = 0,  // TV app version the PC offers (0 = none)
     val updatePort: Int = 0,
     val port: Int = 0,  // its streaming port (several Jinkys, one per Windows user, can share a PC)
+    val pairingKnown: Boolean = false,  // the PC said whether it has this TV paired (newer PCs)
+    val pairedHere: Boolean = false,
 ) {
     enum class Status { READY, BUSY, OFFLINE }
 }

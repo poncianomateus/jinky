@@ -45,6 +45,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var hint: TextView
     private var launching: LibraryGame? = null  // a game starting on the PC, picture not revealed yet
     private var launchedAt = 0L
+    private var pcGames: List<LibraryGame> = emptyList()  // the PC's games (the profile opens them by id)
     private var gamesFrom: String? = null  // PC whose games the home row shows ("ip:port")
     private val settings by lazy { TvSettings(this) }
 
@@ -219,7 +220,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(gameScreen, FrameLayout.LayoutParams(-1, -1))
             achievementsScreen = AchievementsScreen(this@MainActivity, settings) { closeAchievements() }.apply { visibility = View.GONE }
             addView(achievementsScreen, FrameLayout.LayoutParams(-1, -1))
-            profileScreen = ProfileScreen(this@MainActivity) { showPage(Page.HOME) }.apply { visibility = View.GONE }
+            profileScreen = ProfileScreen(this@MainActivity,
+                onBack = { showPage(Page.HOME) },
+                onOpenGame = { id -> pcGames.firstOrNull { it.id == id }?.let { openGame(it, Page.PROFILE) } },
+                onOpenAchievements = { id, achievement, lockedOnly ->
+                    pcGames.firstOrNull { it.id == id }?.let { g ->
+                        // Through the game's page, so Back walks back: achievements, game, profile.
+                        openGame(g, Page.PROFILE)
+                        openAchievements(g, overGame = false, focusId = achievement, lockedOnly = lockedOnly)
+                    }
+                },
+                onChoosePc = { showPage(Page.PCS) },
+                onSettings = { showPage(Page.SETTINGS) }).apply { visibility = View.GONE }
             addView(profileScreen, FrameLayout.LayoutParams(-1, -1))
             launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
@@ -395,7 +407,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         achievementsScreen.visibility = if (p == Page.ACHIEVEMENTS) View.VISIBLE else View.GONE
         profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
         pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
-        if (p == Page.PCS && before != Page.PCS) pcPicker.show(knownPcs(), homeHost?.id, pairingStore.hosts().keys)
+        if (p == Page.PCS && before != Page.PCS) {
+            val pcs = knownPcs()
+            pcPicker.show(pcs, homeHost?.id, pcs.filter(::isPaired).map { it.id }.toSet())
+        }
         if (p != Page.GAME) gameScreen.closeViewer()
         if (p == Page.HELP) helpScreen.show(homeHost, decoderSummary())
         if (p != null && p != before) {
@@ -436,16 +451,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (host.status != HomeHost.Status.READY) return
         gameOrigin = from
         showPage(Page.GAME)
-        gameScreen.show(game, host.ip, host.updatePort, if (from == Page.HOME) "Início" else "Biblioteca")
+        gameScreen.show(game, host.ip, host.updatePort, when (from) {
+            Page.HOME -> "Início"
+            Page.PROFILE -> "Perfil"
+            else -> "Biblioteca"
+        })
         gameScreen.focusFirst()
     }
 
     /** A game's achievements: from its page, or over the game from the menu ([overGame]). */
-    private fun openAchievements(game: LibraryGame, overGame: Boolean) {
+    private fun openAchievements(game: LibraryGame, overGame: Boolean, focusId: String? = null, lockedOnly: Boolean = false) {
         val host = homeHost ?: return
         achievementsOverGame = overGame
         showPage(Page.ACHIEVEMENTS)
-        achievementsScreen.show(game, host.ip, host.updatePort)
+        achievementsScreen.show(game, host.ip, host.updatePort, focusId, lockedOnly)
     }
 
     private fun closeAchievements() {
@@ -552,7 +571,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Log.w(TAG, "home games: $e")
                 null
             }
-            ui.post { homeScreen.setGames(games, host.ip, host.updatePort) }
+            ui.post {
+                pcGames = games.orEmpty()
+                homeScreen.setGames(games, host.ip, host.updatePort)
+            }
             // The Steam account for the profile button (the PC caches it).
             val profile = try { SteamProfileData.fetch(host.ip, host.updatePort).first } catch (e: Exception) { null }
             if (profile != null) ui.post { homeScreen.setProfile(profile.name, profile.avatar) }
@@ -661,10 +683,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val age = p[4].toLongOrNull() ?: Long.MAX_VALUE
         hostCache.remember(id, p[5], p[1], p[3])
         if (age > 6000) return@mapNotNull null  // not answering any more
+        val flags = p.getOrNull(10)?.toIntOrNull() ?: 0
+        val known = flags and 1 != 0
+        val pairedHere = flags and 2 != 0
+        // The PC removed this TV (its "Remover" in TVs pareadas): forget it here too.
+        if (known && !pairedHere && id in pairingStore.hosts().keys) {
+            Log.i(TAG, "PC ${p[5]} no longer has this TV paired: forgetting it")
+            pairingStore.remove(id)
+        }
         HomeHost(id, p[5], p[1], if (p[2] == "1") HomeHost.Status.BUSY else HomeHost.Status.READY, p[6],
             HostCache.parseMac(p[3]), p.getOrNull(7)?.toIntOrNull() ?: 0, p.getOrNull(8)?.toIntOrNull() ?: 0,
-            p.getOrNull(9)?.toIntOrNull() ?: 0)
+            p.getOrNull(9)?.toIntOrNull() ?: 0, known, pairedHere)
     }
+
+    /** Paired with this TV: as the PC itself says (newer PCs), else as this TV remembers. */
+    private fun isPaired(h: HomeHost) = if (h.pairingKnown) h.pairedHere else h.id in pairingStore.hosts().keys
 
     /** For "Escolher PC": the ones online, then the others this TV has seen. */
     private fun knownPcs(): List<HomeHost> {
@@ -688,14 +721,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // Without a choice, never a PC this TV isn't paired with while it is paired with some
         // (e.g. another Windows user's Jinky on the same PC that removed this TV).
         val paired = pairingStore.hosts().keys
-        val candidates = if (paired.isEmpty()) online else online.filter { it.id in paired }
+        val candidates = online.filter(::isPaired).ifEmpty { if (paired.isEmpty()) online else emptyList() }
         val host = online.firstOrNull { it.id == preferred }
             ?: chosenOffline
             ?: candidates.minByOrNull { if (it.status == HomeHost.Status.READY) 0 else 1 }
             ?: hostCache.all().let { all -> all.firstOrNull { it.id in paired } ?: if (paired.isEmpty()) all.firstOrNull() else null }
                 ?.let { HomeHost(it.id, it.name, it.ip, HomeHost.Status.OFFLINE, "", it.mac) }
             ?: online.firstOrNull()
-        if (preferred == 0L && online.size > 1 && !askedForPc && page == Page.HOME) {
+        if (preferred == 0L && candidates.size > 1 && !askedForPc && page == Page.HOME) {
             askedForPc = true
             ui.post { showPage(Page.PCS) }
         }

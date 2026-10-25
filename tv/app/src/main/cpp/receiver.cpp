@@ -80,7 +80,7 @@ std::string Receiver::hosts() const {
         }
         out += "|" + std::to_string(now - h.seen_ms) + "|" + h.info.name + "|" + h.info.busy_with + "|" +
                std::to_string(h.info.tv_version_code) + "|" + std::to_string(h.info.update_port) + "|" +
-               std::to_string(h.port) + "\n";
+               std::to_string(h.port) + "|" + std::to_string(int(h.info.flags)) + "\n";
     }
     return out;
 }
@@ -357,7 +357,8 @@ void Receiver::net_loop() {
             }
             if (now - last_discover_ms_ >= (answered ? 2000 : 500)) {
                 uint8_t d[tclproto::ControlMessage::kSize];
-                tclproto::ControlMessage{PacketType::Discover, 0, 0}.write(d);
+                // Our device id rides along, so each PC can say whether it still has us paired.
+                tclproto::ControlMessage{PacketType::Discover, uint32_t(device_id_ >> 32), uint32_t(device_id_)}.write(d);
                 // Every Jinky a PC may run (one per Windows user / ASTER workplace) has its own port.
                 for (int k = 0; k < tclproto::kMaxHostsPerPc; ++k) {
                     const uint16_t port = uint16_t(tclproto::kDefaultMediaPort + k * tclproto::kMediaPortStep);

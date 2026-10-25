@@ -655,6 +655,13 @@ int main(int argc, char** argv) {
                 replied = steady_clock::now();
                 tclproto::HostInfo hi;
                 hi.host_id = paired.host_id();
+                // Newer TVs put their device id in the Discover (session_id:value): tell them
+                // whether they are still paired here, so a TV removed on this PC forgets it.
+                if (auto d = tclproto::ControlMessage::read(packet)) {
+                    const uint64_t device = uint64_t(d->session_id) << 32 | d->value;
+                    if (device) hi.flags = tclproto::HostInfo::kPairingKnown |
+                                           (paired.find(device) ? tclproto::HostInfo::kPairedWithYou : 0);
+                }
                 const bool busy = peer && *peer != from && steady_clock::now() - last_peer_msg < 5s;
                 hi.state = busy ? tclproto::HostInfo::kBusy : tclproto::HostInfo::kIdle;
                 hi.mac = tcl::mac_toward(from.ip);

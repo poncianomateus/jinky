@@ -34,11 +34,16 @@ class PcPickerScreen(
         addView(root, LayoutParams(-1, -1))
     }
 
-    /** Lists [hosts] (the one in use, then the ones paired with this TV) and focuses the one in use. */
-    fun show(hosts: List<HomeHost>, currentId: Long?, paired: Set<Long>) {
+    /**
+     * Lists the PCs paired with this TV (the one in use first) and focuses the one in use. The
+     * others on the network (e.g. another Windows user's Jinky on the same PC) stay behind
+     * "Adicionar outro PC", which is how a new PC gets paired. A TV paired with none sees them all.
+     */
+    fun show(hosts: List<HomeHost>, currentId: Long?, paired: Set<Long>, showAll: Boolean = false) {
         list.removeAllViews()
         var focus: View? = null
-        for (h in hosts.sortedWith(compareByDescending<HomeHost> { it.id == currentId }.thenByDescending { it.id in paired })) {
+        val shown = if (showAll || paired.isEmpty()) hosts else hosts.filter { it.id in paired || it.id == currentId }
+        for (h in shown.sortedWith(compareByDescending<HomeHost> { it.id == currentId }.thenByDescending { it.id in paired })) {
             val status = when (h.status) {
                 HomeHost.Status.READY -> "Pronto"
                 HomeHost.Status.BUSY -> if (h.busyWith.isNotEmpty()) "Jogando em ${h.busyWith}" else "Em uso"
@@ -54,6 +59,14 @@ class PcPickerScreen(
         }
         if (hosts.isEmpty()) {
             list.addView(text(13f, Jinky.MUTED).apply { text = "Nenhum PC com o Jinky foi encontrado na rede." })
+        }
+        val others = hosts.size - shown.size
+        if (others > 0) {
+            val add = smallButton("Adicionar outro PC  ·  $others na rede").apply {
+                setOnClickListener { show(hosts, currentId, paired, showAll = true) }
+            }
+            list.addView(add, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(16) })
+            if (focus == null && shown.isEmpty()) focus = add
         }
         (focus ?: list.getChildAt(0) ?: back).let { v -> post { v.requestFocus() } }
     }

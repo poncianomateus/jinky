@@ -303,7 +303,8 @@ public sealed class TvService : IDisposable
                         {
                             name = p.Name, avatar = p.Avatar, level = p.Level, games = p.Games, minutes = p.Minutes,
                             unlocked = p.Unlocked, total = p.Total, legendary = p.Legendary, epic = p.Epic, perfect = p.Perfect,
-                            recent = p.Recent.Select(r => new { gameId = r.GameId, game = r.Game, name = r.Name, icon = r.Icon, percent = r.Percent, time = r.Time }),
+                            recent = p.Recent.Select(r => new { gameId = r.GameId, game = r.Game, id = r.Id, name = r.Name, icon = r.Icon, percent = r.Percent, time = r.Time }),
+                            friends = p.Friends.Select(f => new { name = f.Name, avatar = f.Avatar, game = f.Game, state = f.State }),
                             played = p.Played.Select(g => new { id = g.Id, name = g.Name, minutes = g.Minutes, unlocked = g.Unlocked, total = g.Total }),
                         });
                     await RespondText(stream, json, "application/json; charset=utf-8");

@@ -148,6 +148,10 @@ struct HostInfo {
     // TV app update offered by this PC (appended after the strings; older TVs ignore it).
     uint32_t tv_version_code = 0;  // 0 = none
     uint16_t update_port = 0;      // HTTP port serving /tv/jinky.apk
+    // About the TV that asked (its Discover carries its device id): whether this PC still has it
+    // paired. A TV forgets a PC that removed it, and doesn't list PCs it isn't paired with.
+    enum Flags : uint8_t { kPairingKnown = 1, kPairedWithYou = 2 };
+    uint8_t flags = 0;
 
     static constexpr size_t kHeader = 24;
     static constexpr size_t kMaxText = 64;

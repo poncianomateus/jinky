@@ -237,24 +237,40 @@ class AchievementsScreen(
             setOnClickListener { onClick() }
             actions.addView(this, LinearLayout.LayoutParams(-2, -2).apply { if (actions.childCount > 0) marginStart = dp(10) })
         }
-        val first = if (secret) action("Revelar") { revealed += a.id; rebuild(keepFocus = false); openDetail(a, from) }
+        // The list is rebuilt by these: the panel then belongs to the achievement's new row.
+        val first = if (secret) action("Revelar") { revealed += a.id; rebuild(keepFocus = false); openDetail(a, rowFor(a.id) ?: from) }
             else action("Como conseguir · YouTube") { openGuide(g, a) }
         if (!a.achieved) action(if (tracked) "Parar de acompanhar" else "Acompanhar no jogo") {
             toggleTrack(a)
-            openDetail(a, from)
+            openDetail(a, rowFor(a.id) ?: from)
         }
         action("Fechar") { closeDetail() }
         card.addView(actions, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
         detail.addView(card, LayoutParams(dp(520), -2, Gravity.CENTER))
         detail.visibility = View.VISIBLE
+        trapFocus(true)
         first.post { first.requestFocus() }
     }
+
+    /**
+     * With the panel open, only its buttons take focus: the list, filters and "ocultas" behind it
+     * would otherwise grab the D-pad (the list kept moving under the panel).
+     */
+    private fun trapFocus(on: Boolean) {
+        val mode = if (on) android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS else android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+        list.descendantFocusability = mode
+        chips.descendantFocusability = mode
+        hiddenChip.isFocusable = !on
+    }
+
+    private fun rowFor(id: String): View? = rows.firstOrNull { it.second.id == id }?.first
 
     /** Back with the panel open closes the panel (not the page). Returns whether it did. */
     fun closeDetail(): Boolean {
         if (detail.visibility != View.VISIBLE) return false
         detail.visibility = View.GONE
         detailFor = null
+        trapFocus(false)
         detailRow?.requestFocus()
         return true
     }
@@ -281,17 +297,25 @@ class AchievementsScreen(
         main.postDelayed({ showMessage(null) }, 6000)
     }
 
-    /** Opens the achievements of [g] from the PC at [pcIp]. */
-    fun show(g: LibraryGame, pcIp: String, port: Int) {
+    // From the profile: open straight on one achievement, or on the ones still missing.
+    private var openOn: String? = null
+
+    /**
+     * Opens the achievements of [g] from the PC at [pcIp]; [focusId] opens that achievement's
+     * panel once loaded, [lockedOnly] starts on "Bloqueadas" (what is left to unlock).
+     */
+    fun show(g: LibraryGame, pcIp: String, port: Int, focusId: String? = null, lockedOnly: Boolean = false) {
         val gen = ++generation
         game = g
         pc = pcIp to port
         data = null
-        filter = Filter.ALL
+        openOn = focusId
+        filter = if (lockedOnly) Filter.LOCKED else Filter.ALL
         showHidden = false
         revealed.clear()
         detail.visibility = View.GONE
         detailFor = null
+        trapFocus(false)
         hints.removeAllViews()
         crumb.text = "${g.name}   /   Conquistas"
         clock.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
@@ -390,6 +414,13 @@ class AchievementsScreen(
         refreshHints()
         rebuild(keepFocus = false)
         rows.firstOrNull()?.first?.requestFocusFromTouch()
+        openOn?.let { id ->
+            openOn = null
+            rows.firstOrNull { it.second.id == id }?.let { (row, a) ->
+                row.requestFocusFromTouch()
+                openDetail(a, row)
+            }
+        }
     }
 
     private fun sorted(d: AchievementList): List<Achievement> = when (filter) {

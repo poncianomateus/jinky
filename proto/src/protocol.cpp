@@ -229,7 +229,7 @@ size_t HostInfo::write(std::span<uint8_t> out) const {
     for (int i = 0; i < 8; ++i) p[8 + i] = uint8_t(host_id >> (8 * i));
     std::memcpy(p + 16, mac.data(), 6);
     p[22] = uint8_t(blen);
-    p[23] = 0;
+    p[23] = flags;
     std::memcpy(p + kHeader, name.data(), nlen);
     std::memcpy(p + kHeader + nlen, busy_with.data(), blen);
     uint8_t* t = p + kHeader + nlen + blen;
@@ -246,6 +246,7 @@ std::optional<HostInfo> HostInfo::read(std::span<const uint8_t> in) {
     if (nlen > kMaxText || blen > kMaxText || in.size() < kHeader + nlen + blen) return std::nullopt;
     HostInfo h;
     h.state = p[6] == kBusy ? kBusy : kIdle;
+    h.flags = p[23];
     for (int i = 0; i < 8; ++i) h.host_id |= uint64_t(p[8 + i]) << (8 * i);
     std::memcpy(h.mac.data(), p + 16, 6);
     h.name.assign(reinterpret_cast<const char*>(p + kHeader), nlen);
