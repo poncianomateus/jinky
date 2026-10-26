@@ -209,6 +209,14 @@
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding RemotePlayOn}" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="Jogar fora de casa (Tailscale)" FontWeight="Bold"/>
+                                    <TextBlock Text="Com o Tailscale (grátis) neste PC e na TV, na mesma conta, a TV joga deste PC de qualquer lugar. Pareie a TV em casa primeiro. O Windows pede permissão para liberar o firewall."
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                    <TextBlock Text="{Binding RemotePlayText}" Style="{StaticResource Hint}" Foreground="{StaticResource Accent}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding StartWithWindows}">
                                 <StackPanel>
                                     <TextBlock Text="Iniciar com o Windows" FontWeight="Bold"/>

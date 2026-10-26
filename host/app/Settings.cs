@@ -16,6 +16,9 @@ public sealed class Settings
     /// <summary>A paired TV may put this PC to sleep or shut it down ("Suspender/Desligar o PC" on the TV).</summary>
     public bool AllowTvPower { get; set; } = true;
 
+    /// <summary>"Jogar fora de casa (Tailscale)": TVs may reach this PC over Tailscale (100.64.0.0/10).</summary>
+    public bool RemotePlay { get; set; }
+
     /// <summary>Console sessions cap games at the stream's 60 fps (NVIDIA driver), leaving GPU room for the stream.</summary>
     public bool CapGames { get; set; } = true;
 

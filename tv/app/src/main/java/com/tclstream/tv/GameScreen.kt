@@ -71,6 +71,8 @@ class GameScreen(
     private val primary = action(R.drawable.ic_play, primary = true)
     private val trailer = action(R.drawable.ic_play).apply { text = "Trailer" }
     private val pin = action(R.drawable.ic_pin)
+    private val preset = action(R.drawable.ic_gauge)
+    private val presetNote = text(9f, Jinky.MUTED).apply { shadow() }
 
     // Achievements card
     private val achCard = FrameLayout(context).apply {
@@ -164,7 +166,9 @@ class GameScreen(
                 addView(primary, LinearLayout.LayoutParams(-2, dp(42)))
                 addView(trailer, LinearLayout.LayoutParams(-2, dp(42)).apply { marginStart = dp(8) })
                 addView(pin, LinearLayout.LayoutParams(-2, dp(42)).apply { marginStart = dp(8) })
+                addView(preset, LinearLayout.LayoutParams(-2, dp(42)).apply { marginStart = dp(8) })
             }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
+            addView(presetNote, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
         }
         addView(column, LayoutParams(dp(560), -2).apply { setMargins(dp(48), dp(70), 0, 0) })
 
@@ -217,7 +221,7 @@ class GameScreen(
         }
         viewerVideo.setOnCompletionListener { closeViewer() }
 
-        for (b in listOf(primary, trailer, pin)) {
+        for (b in listOf(primary, trailer, pin, preset)) {
             b.id = View.generateViewId()
             b.nextFocusDownId = achCard.id
         }
@@ -237,6 +241,18 @@ class GameScreen(
             pin.text = if (g.id in pins.pinned) "Fixado" else "Fixar"
         }
         achCard.setOnClickListener { game?.let(onAchievements) }
+        preset.setOnClickListener {
+            val g = game ?: return@setOnClickListener
+            pins.setGamePreset(g.id, (pins.gamePreset(g.id) + 1) % PRESETS.size)
+            showPreset(g)
+        }
+    }
+
+    /** The game's "Ajuste" on the button, and what it means under the buttons. */
+    private fun showPreset(g: LibraryGame) {
+        val p = pins.gamePreset(g.id)
+        preset.text = "Ajuste: ${PRESETS[p].first}"
+        presetNote.text = PRESETS[p].second
     }
 
     /** Opens the page of [g] from the PC at [pcIp]; [from] names the screen Back returns to. */
@@ -264,6 +280,9 @@ class GameScreen(
         }
         pin.gone(g.state == LibraryGame.State.NOT_INSTALLED)
         pin.text = if (g.id in pins.pinned) "Fixado" else "Fixar"
+        preset.gone(g.state == LibraryGame.State.NOT_INSTALLED)
+        presetNote.gone(g.state == LibraryGame.State.NOT_INSTALLED)
+        showPreset(g)
         timeValue.text = Jinky.hours(g.minutes).ifEmpty { "—" }
         timeLast.text = lastPlayed(g.lastPlayed)
         timeSize.text = ""
@@ -542,5 +561,13 @@ class GameScreen(
 
     companion object {
         private const val TAG = "Jinky"
+
+        /** "Ajuste" presets (see TvSettings.gamePreset): name and what it does. */
+        val PRESETS = listOf(
+            "Padrão" to "Este jogo usa a qualidade e a resolução das Configurações.",
+            "Nítido" to "Este jogo: 1080p na maior qualidade do PC.",
+            "Leve" to "Este jogo: 720p e 20 Mbit/s. Menos atraso em TVs e redes mais fracas.",
+            "Estável" to "Este jogo: 1080p a 20 Mbit/s, para Wi-Fi que oscila.",
+        )
     }
 }

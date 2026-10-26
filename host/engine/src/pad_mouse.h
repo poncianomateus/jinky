@@ -10,11 +10,16 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include "tclproto/protocol.h"
 
 namespace tcl {
+
+// Menu "Teclado" on the TV: types [utf8] on the PC as if on a keyboard (any language: Unicode
+// key events), then Enter if asked. [backspace] presses Backspace once instead.
+void type_text(const std::string& utf8, bool enter, bool backspace);
 
 class PadMouse {
 public:

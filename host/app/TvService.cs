@@ -170,8 +170,12 @@ public sealed class TvService : IDisposable
         }
     }
 
+    /// <summary>"Jogar fora de casa": Tailscale addresses count as home too.</summary>
+    public static bool AllowTailscale { get; set; }
+
     static bool IsHomeNetwork(IPAddress a)
     {
+        if (AllowTailscale && RemotePlay.IsTailscale(a)) return true;
         if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
         var b = a.GetAddressBytes();
         return b.Length == 4 && (b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||

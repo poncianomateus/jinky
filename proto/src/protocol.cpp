@@ -287,6 +287,83 @@ std::optional<NameMessage> NameMessage::read(std::span<const uint8_t> in) {
     return m;
 }
 
+// Layout: magic(4) version(1) type(1) pad(1) flags(1) session(4) seq(4)
+//         2 x touch [id(1) down(1) x(2) y(2)] gyro(3 x 2) accel(3 x 2) = 40 bytes
+void PadExtras::write(std::span<uint8_t> out) const {
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::PadExtras);
+    p[6] = pad_index;
+    p[7] = flags;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, seq);
+    uint8_t* q = p + 16;
+    for (const Touch& t : touch) {
+        q[0] = t.id;
+        q[1] = t.down ? 1 : 0;
+        q[2] = uint8_t(t.x);
+        q[3] = uint8_t(t.x >> 8);
+        q[4] = uint8_t(t.y);
+        q[5] = uint8_t(t.y >> 8);
+        q += 6;
+    }
+    for (int16_t v : gyro) { q[0] = uint8_t(v); q[1] = uint8_t(uint16_t(v) >> 8); q += 2; }
+    for (int16_t v : accel) { q[0] = uint8_t(v); q[1] = uint8_t(uint16_t(v) >> 8); q += 2; }
+}
+
+std::optional<PadExtras> PadExtras::read(std::span<const uint8_t> in) {
+    if (in.size() < kSize) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::PadExtras)) return std::nullopt;
+    PadExtras e;
+    e.pad_index = p[6];
+    e.flags = p[7];
+    e.session_id = get_u32(p + 8);
+    e.seq = get_u32(p + 12);
+    const uint8_t* q = p + 16;
+    for (Touch& t : e.touch) {
+        t.id = q[0];
+        t.down = q[1] != 0;
+        t.x = uint16_t(q[2] | q[3] << 8);
+        t.y = uint16_t(q[4] | q[5] << 8);
+        q += 6;
+    }
+    for (int16_t& v : e.gyro) { v = int16_t(uint16_t(q[0] | q[1] << 8)); q += 2; }
+    for (int16_t& v : e.accel) { v = int16_t(uint16_t(q[0] | q[1] << 8)); q += 2; }
+    return e;
+}
+
+// Layout: magic(4) version(1) type(1) length(1) flags(1) session(4) seq(4) text
+size_t TextMessage::write(std::span<uint8_t> out) const {
+    size_t len = std::min(text.size(), kMaxText);
+    while (len > 0 && len < text.size() && (uint8_t(text[len]) & 0xC0) == 0x80) --len;
+    uint8_t* p = out.data();
+    put_u32(p + 0, kMagic);
+    p[4] = kVersion;
+    p[5] = uint8_t(PacketType::TypeText);
+    p[6] = uint8_t(len);
+    p[7] = flags;
+    put_u32(p + 8, session_id);
+    put_u32(p + 12, seq);
+    std::memcpy(p + kHeader, text.data(), len);
+    return kHeader + len;
+}
+
+std::optional<TextMessage> TextMessage::read(std::span<const uint8_t> in) {
+    if (in.size() < kHeader) return std::nullopt;
+    const uint8_t* p = in.data();
+    if (get_u32(p) != kMagic || p[4] != kVersion || p[5] != uint8_t(PacketType::TypeText)) return std::nullopt;
+    const size_t len = p[6];
+    if (len > kMaxText || in.size() < kHeader + len) return std::nullopt;
+    TextMessage m;
+    m.flags = p[7];
+    m.session_id = get_u32(p + 8);
+    m.seq = get_u32(p + 12);
+    m.text.assign(reinterpret_cast<const char*>(p + kHeader), len);
+    return m;
+}
+
 uint32_t NetReport::pack() const {
     return std::min<uint32_t>(lost_permille, 1000) | std::min<uint32_t>(frames_unrecovered, 255) << 10 |
            std::min<uint32_t>(packets / 4, 0x3FFF) << 18;

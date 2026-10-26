@@ -53,10 +53,12 @@ enum class PacketType : uint8_t {
     Nack = 24,       // TV -> host: video fragments that never arrived, to send again (NackMessage)
     NetReport = 25,  // TV -> host: once a second, how the network did (value = NetReport::pack())
     Screenshot = 27,  // TV -> host: save the picture being streamed (menu "Capturar tela")
+    TypeText = 28,    // TV -> host: type this on the PC (menu "Teclado"), see TextMessage  // TV -> host: save the picture being streamed (menu "Capturar tela")
     MouseMode = 26,  // TV -> host: value 1 = the first controller works as mouse/keyboard (menu "Mouse"), 0 = back to the game
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
     Rumble = 31,  // host -> receiver: vibration request (see RumbleMessage)
+    PadExtras = 32,  // receiver -> host: a PlayStation controller's touchpad and motion (see PadExtras)
     // Pairing and authentication (see auth.h)
     AuthRequired = 40,   // host -> TV
     AuthHello = 41,      // TV -> host
@@ -68,6 +70,7 @@ enum class PacketType : uint8_t {
 enum PacketFlags : uint8_t {
     kFlagKeyframe = 1 << 0,
     kFlagHevc = 1 << 1,  // video frame is H.265/HEVC (otherwise H.264)
+    kFlagHdr = 1 << 2,   // HDR10 (HEVC Main10, BT.2020, PQ): the TV sets its decoder up for HDR
 };
 
 // Hello.value: video codecs the receiver can decode in hardware (bit mask).
@@ -92,6 +95,9 @@ inline constexpr uint32_t kHelloPairOnly = 1u << 11;
 // only from a paired TV that proved its key (AuthHello); nothing else starts.
 inline constexpr uint32_t kHelloPowerSleep = 1u << 12;
 inline constexpr uint32_t kHelloPowerOff = 1u << 13;
+// Hello.value flag: "HDR" on the TV (its screen does HDR10 and it decodes HEVC Main10). The PC
+// streams HDR10 when its monitor can do Windows HDR (console mode turns it on for the session).
+inline constexpr uint32_t kHelloHdr = 1u << 14;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {
@@ -109,6 +115,12 @@ enum SessionEndReason : uint32_t {
 // setting).
 inline constexpr uint32_t kHelloBitrateShift = 16;
 inline constexpr uint32_t hello_bitrate_mbps(uint32_t value) { return (value >> kHelloBitrateShift) & 0xFF; }
+
+// Hello.value bits 24..25: picture size the TV asks for ("Resolução"): 0 = the PC's own (1080p),
+// 1 = 1280x720 (half the decoding work: less delay on weak TV sticks).
+inline constexpr uint32_t kHelloSizeShift = 24;
+enum HelloSize : uint32_t { kSizeDefault = 0, kSize720p = 1 };
+inline constexpr uint32_t hello_size(uint32_t value) { return (value >> kHelloSizeShift) & 0x3; }
 
 // What the TV saw of the network in the last second, for the PC's automatic quality.
 // Packed into ControlMessage.value: bits 0..9 video packets that had to be asked for again, per
@@ -179,6 +191,25 @@ struct NameMessage {
     // Returns the number of bytes written (header + name).
     size_t write(std::span<uint8_t> out) const;
     static std::optional<NameMessage> read(std::span<const uint8_t> in);
+};
+
+// TypeText: text typed on the TV's keyboard, to be typed on the PC (menu "Teclado"). The TV sends
+// each one a few times (UDP); [seq] lets the PC type it once.
+struct TextMessage {
+    enum Flags : uint8_t {
+        kEnter = 1,      // press Enter after the text
+        kBackspace = 2,  // just press Backspace (text ignored)
+    };
+    uint32_t session_id = 0;
+    uint32_t seq = 0;
+    uint8_t flags = 0;
+    std::string text;  // UTF-8, cut at kMaxText bytes
+
+    static constexpr size_t kHeader = 16;
+    static constexpr size_t kMaxText = 200;
+
+    size_t write(std::span<uint8_t> out) const;
+    static std::optional<TextMessage> read(std::span<const uint8_t> in);
 };
 
 // Header that precedes every media fragment.
@@ -269,6 +300,32 @@ struct InputState {
     void write(std::span<uint8_t> out, std::span<const uint8_t> key = {}) const;
     static std::optional<InputState> read(std::span<const uint8_t> in);
     static bool verify(std::span<const uint8_t> in, std::span<const uint8_t> key);
+};
+
+// "Controle PlayStation no PC": with it the PC plugs a virtual DualShock 4 instead of an Xbox pad,
+// and feeds it the touchpad and motion the TV reads from the DualSense / DualShock. Sent with the
+// pad's InputState (same session and pad index), whenever touch or motion changes.
+struct PadExtras {
+    enum Flags : uint8_t {
+        kPlayStation = 1,  // plug this pad as a DualShock 4
+        kTouchClick = 2,   // the touchpad is pressed down
+    };
+    struct Touch {
+        uint8_t id = 0;
+        bool down = false;
+        uint16_t x = 0, y = 0;  // DualShock 4 touchpad: x 0..1919, y 0..942
+    };
+    uint32_t session_id = 0;
+    uint8_t pad_index = 0;
+    uint8_t flags = 0;
+    uint32_t seq = 0;
+    Touch touch[2];
+    int16_t gyro[3] = {};   // DualShock 4 units: 16 per degree/s (pitch, yaw, roll)
+    int16_t accel[3] = {};  // DualShock 4 units: 8192 per g
+
+    static constexpr size_t kSize = 40;
+    void write(std::span<uint8_t> out) const;
+    static std::optional<PadExtras> read(std::span<const uint8_t> in);
 };
 
 struct RumbleMessage {

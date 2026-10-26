@@ -13,6 +13,10 @@ public:
     // `display` is the GDI device name of the captured monitor (e.g. \\.\DISPLAY1).
     // `big_picture`: also open Steam Big Picture (not for a game started from the TV's library).
     void enter(const std::wstring& display, bool big_picture = true);
+    // HDR sessions (the TV asked for HDR): turns Windows HDR on for the display, if it supports it
+    // and it was off; leave() (or restore_if_left after a crash) turns it off again.
+    void set_hdr(bool on);
+    bool hdr_turned_on() const { return hdr_turned_on_; }
     // [close_big_picture] false: the display and sound go back to normal but Big Picture stays
     // open, so the next game starts sooner (closed when Jinky itself closes).
     void leave(bool close_big_picture = true);
@@ -34,6 +38,10 @@ public:
 
 private:
     static bool set_refresh_60(const std::wstring& display, int& previous_hz);
+    // Windows HDR ("advanced color") of the monitor shown as [display]: reads it, or sets it.
+    static bool windows_hdr(const std::wstring& display, bool* supported, bool* enabled);
+    static bool set_windows_hdr(const std::wstring& display, bool on);
+    void write_marker() const;
     static void restore_display(const std::wstring& display);
 
     bool active_ = false;
@@ -41,6 +49,7 @@ private:
     bool bp_opened_ = false;
     std::chrono::steady_clock::time_point bp_missing_since_{};
     std::wstring display_;
+    bool hdr_turned_on_ = false;  // this session turned Windows HDR on (to undo when it ends)
 };
 
 }  // namespace tcl

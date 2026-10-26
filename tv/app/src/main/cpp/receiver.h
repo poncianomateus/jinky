@@ -52,6 +52,10 @@ public:
     void set_mouse_mode(bool on);
     // Menu "Capturar tela": the PC saves the picture being streamed.
     void screenshot();
+    // Menu "Teclado": types [text] on the PC (flags: tclproto::TextMessage::Flags).
+    void type_text(const std::string& text, uint8_t flags);
+    // A PlayStation pad's touchpad and motion ("Controle PlayStation no PC").
+    void send_extras(tclproto::PadExtras extras);
     void disconnect();
     bool in_session() const { return session_wanted_; }
     // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith|tvVersion|updatePort".
@@ -174,6 +178,7 @@ private:
     std::atomic<bool> pair_only_{false};
     std::atomic<uint32_t> connect_power_{0};
     std::atomic<uint32_t> power_{0};
+    std::atomic<uint32_t> text_seq_{0};
     std::atomic<bool> game_{false};
     std::atomic<int> game_ready_{-1};
     std::atomic<int> end_reason_{0};

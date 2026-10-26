@@ -1,6 +1,7 @@
 package com.tclstream.tv
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Handler
@@ -108,7 +109,9 @@ class VideoPipeline(
         vsyncThread.quitSafely()
     }
 
-    private fun createDecoder(mime: String): MediaCodec? {
+    @Volatile private var codecHdr = false
+
+    private fun createDecoder(mime: String, hdr: Boolean = false): MediaCodec? {
         val best = HardwareInfo.bestDecoder(mime)
         val codecName = if (mime == MIME_HEVC) "HEVC" else "H.264"
         if (best == null) {
@@ -121,6 +124,13 @@ class VideoPipeline(
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_FRAME_BYTES)
                 if (Build.VERSION.SDK_INT >= 23) setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
                 if (Build.VERSION.SDK_INT >= 30 && best.lowLatency) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                if (hdr && Build.VERSION.SDK_INT >= 24) {
+                    // HDR10: the TV switches its picture to HDR for this video.
+                    setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10)
+                    setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
+                    setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_ST2084)
+                    setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                }
                 // Undocumented but honoured by Amlogic (TCL) and MediaTek (Fire TV Stick) decoders:
                 // output each frame as soon as it is decoded instead of holding one back.
                 // Measured: TCL -3 ms; Fire TV Stick 3rd gen 89 -> 72 ms (queued == decoded).
@@ -141,7 +151,7 @@ class VideoPipeline(
                 onRendered(pts, renderNanos / 1000)
             }, callbackHandler)
             c.start()
-            decoderName = "$codecName · ${best.name}" + if (best.lowLatency) " (baixa latência)" else ""
+            decoderName = "$codecName${if (hdr) " HDR10" else ""} · ${best.name}" + if (best.lowLatency) " (baixa latência)" else ""
             Log.i(TAG, "decoder created: ${best.name} ($mime) lowLatency=${best.lowLatency} tuning=$tuning refresh=$refreshRate")
             c
         } catch (e: Exception) {
@@ -217,10 +227,12 @@ class VideoPipeline(
                 }
                 if (pendingSize > 0) {
                     val mime = if (pendingFlags and FLAG_HEVC != 0L) MIME_HEVC else MIME_AVC
+                    val hdr = mime == MIME_HEVC && pendingFlags and FLAG_HDR != 0L
                     var c = codec
-                    if (c == null || mime != codecMime) {
+                    if (c == null || mime != codecMime || hdr != codecHdr) {
                         releaseCodec()
-                        c = createDecoder(mime)
+                        c = createDecoder(mime, hdr)
+                        codecHdr = hdr
                         if (c == null) {
                             pendingSize = 0
                             SystemClock.sleep(2000)
@@ -367,6 +379,7 @@ class VideoPipeline(
         private val AUD_HEVC = byteArrayOf(0, 0, 0, 1, 0x46, 0x01, 0x50)
         private const val FLAG_KEYFRAME = 1L
         private const val FLAG_HEVC = 2L
+        private const val FLAG_HDR = 4L  // HDR10 (HEVC Main10, BT.2020, PQ)
         private const val MAX_FRAME_BYTES = 4 * 1024 * 1024
         private const val STALL_MS = 3000L
         private const val MAX_RECOVERIES_PER_MINUTE = 3

@@ -53,6 +53,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     if (!check(api_.nvEncOpenEncodeSessionEx(&session, &encoder_), "nvEncOpenEncodeSessionEx")) return false;
 
     const bool hevc = cfg.codec == VideoCodec::HEVC;
+    const bool hdr = hevc && cfg.hdr;
+    cfg_.hdr = hdr;
     const GUID codec_guid = hevc ? NV_ENC_CODEC_HEVC_GUID : NV_ENC_CODEC_H264_GUID;
     // P4 instead of P1: noticeably cleaner detail (foliage, fine edges) for ~1 ms more on an RTX 50.
     const GUID preset_guid = NV_ENC_PRESET_P4_GUID;
@@ -67,7 +69,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
 
     config_ = preset.presetCfg;
     NV_ENC_CONFIG& enc = config_;
-    enc.profileGUID = hevc ? NV_ENC_HEVC_PROFILE_MAIN_GUID : NV_ENC_H264_PROFILE_HIGH_GUID;
+    enc.profileGUID = hdr ? NV_ENC_HEVC_PROFILE_MAIN10_GUID : hevc ? NV_ENC_HEVC_PROFILE_MAIN_GUID : NV_ENC_H264_PROFILE_HIGH_GUID;
     enc.gopLength = NVENC_INFINITE_GOPLENGTH;
     enc.frameIntervalP = 1;  // IPPP, no B-frames
     enc.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
@@ -83,9 +85,9 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
     vui.videoFullRangeFlag = 0;  // matches the converter's 16-235 output
     vui.colourDescriptionPresentFlag = 1;
-    vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-    vui.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-    vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+    vui.colourPrimaries = hdr ? NV_ENC_VUI_COLOR_PRIMARIES_BT2020 : NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+    vui.transferCharacteristics = hdr ? NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084 : NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+    vui.colourMatrix = hdr ? NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL : NV_ENC_VUI_MATRIX_COEFFS_BT709;
     // Tells the decoder there is no frame reordering (max_num_reorder_frames = 0). Without it many
     // TV decoders hold several frames in the DPB "just in case", adding 50+ ms of latency.
     vui.bitstreamRestrictionFlag = 1;
@@ -98,6 +100,20 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
         h.chromaFormatIDC = 1;
         h.maxNumRefFramesInDPB = cfg.max_ref_frames;
         h.hevcVUIParameters = vui;
+        if (hdr) {
+            h.inputBitDepth = h.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+            h.outputMasteringDisplay = 1;
+            h.outputMaxCll = 1;
+            // BT.2020 primaries and D65 white in 0.00002 units; luminance in 0.0001 cd/m2.
+            mastering_.g = {8500, 39850};
+            mastering_.b = {6550, 2300};
+            mastering_.r = {35400, 14600};
+            mastering_.whitePoint = {15635, 16450};
+            mastering_.maxLuma = uint32_t(cfg.hdr_max_nits * 10000);
+            mastering_.minLuma = uint32_t(cfg.hdr_min_nits * 10000);
+            light_.maxContentLightLevel = uint16_t(cfg.hdr_max_nits);
+            light_.maxPicAverageLightLevel = uint16_t(cfg.hdr_max_fall_nits);
+        }
     } else {
         auto& h = enc.encodeCodecConfig.h264Config;
         h.idrPeriod = NVENC_INFINITE_GOPLENGTH;
@@ -128,7 +144,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     reg.width = cfg.width;
     reg.height = cfg.height;
     reg.resourceToRegister = input;
-    reg.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+    reg.bufferFormat = hdr ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
     reg.bufferUsage = NV_ENC_INPUT_IMAGE;
     if (!check(api_.nvEncRegisterResource(encoder_, &reg), "nvEncRegisterResource")) return false;
     registered_ = reg.registeredResource;
@@ -156,6 +172,11 @@ bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.inputTimeStamp = timestamp;
     if (force_idr) pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+    if (cfg_.hdr) {
+        // HDR10 metadata (mastering display, content light level) with the picture.
+        pic.codecPicParams.hevcPicParams.pMasteringDisplay = &mastering_;
+        pic.codecPicParams.hevcPicParams.pMaxCll = &light_;
+    }
     bool ok = check(api_.nvEncEncodePicture(encoder_, &pic), "nvEncEncodePicture");
 
     if (ok) {
@@ -194,7 +215,7 @@ bool NvencEncoder::set_bitrate(uint32_t kbps) {
 
 std::string NvencEncoder::description() const {
     return std::format("NVENC {} {}x{}@{} CBR {} kbit/s, P4 ultra-low-latency",
-                       cfg_.codec == VideoCodec::HEVC ? "HEVC Main" : "H.264 High", cfg_.width, cfg_.height,
+                       cfg_.hdr ? "HEVC Main10 HDR10" : cfg_.codec == VideoCodec::HEVC ? "HEVC Main" : "H.264 High", cfg_.width, cfg_.height,
                        cfg_.fps, cfg_.bitrate_kbps);
 }
 

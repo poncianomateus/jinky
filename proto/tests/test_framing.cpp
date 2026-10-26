@@ -134,6 +134,35 @@ static void test_name_and_session_messages() {
     NameMessage long_name{1, std::string(100, 'x') + "é"};
     CHECK(long_name.write(buf) == NameMessage::kHeader + NameMessage::kMaxName);
 
+    // PlayStation pad extras: touch and motion survive a round trip (negative motion too).
+    {
+        uint8_t e[PadExtras::kSize];
+        PadExtras pe;
+        pe.pad_index = 1;
+        pe.flags = PadExtras::kPlayStation | PadExtras::kTouchClick;
+        pe.seq = 9;
+        pe.touch[0] = {3, true, 1919, 942};
+        pe.gyro[0] = -1234;
+        pe.accel[2] = 8192;
+        pe.write(e);
+        auto back = PadExtras::read(e);
+        CHECK(back && back->pad_index == 1 && back->flags == pe.flags && back->seq == 9);
+        CHECK(back && back->touch[0].down && back->touch[0].x == 1919 && back->touch[0].y == 942 && back->touch[0].id == 3);
+        CHECK(back && back->gyro[0] == -1234 && back->accel[2] == 8192 && !back->touch[1].down);
+    }
+
+    // Text typed on the TV: round trip, and a long text is cut without splitting a UTF-8 character.
+    {
+        uint8_t t[TextMessage::kHeader + TextMessage::kMaxText];
+        TextMessage tm{7, 42, TextMessage::kEnter, "olá, mundo"};
+        const size_t n = tm.write(t);
+        auto back = TextMessage::read(std::span<const uint8_t>(t, n));
+        CHECK(back && back->seq == 42 && back->flags == TextMessage::kEnter && back->text == "olá, mundo");
+        TextMessage big{1, 1, 0, std::string(199, 'a') + "é"};  // 201 bytes: the é must not be split
+        const size_t m = big.write(t);
+        CHECK(m == TextMessage::kHeader + 199);
+    }
+
     // Every host<->TV control message must survive a round trip (a type left out of the
     // parser is silently dropped by the other side).
     for (auto t : {PacketType::Displaced, PacketType::SessionEnd, PacketType::GameReady, PacketType::CloseGame,

@@ -31,6 +31,12 @@ class NativeReceiver : AutoCloseable {
     fun setMouseMode(on: Boolean) = nativeSetMouseMode(handle, on)
     /** Menu "Capturar tela": the PC saves the picture being streamed (Pictures\Jinky). */
     fun screenshot() = nativeScreenshot(handle)
+    /** Menu "Teclado": types [text] on the PC, then Enter if [enter]. */
+    fun typeText(text: String, enter: Boolean) = nativeTypeText(handle, text, if (enter) 1 else 0)
+    /** A PlayStation pad's touchpad and motion (see GamepadInput); layout in jni_bridge.cpp. */
+    fun sendExtras(values: IntArray) = nativeSendExtras(handle, values)
+    /** Menu "Teclado": Backspace on the PC. */
+    fun backspace() = nativeTypeText(handle, "", 2)
     /** Ends the session and goes back to discovering PCs. */
     fun disconnect() = nativeDisconnect(handle)
     fun inSession(): Boolean = nativeInSession(handle)
@@ -120,6 +126,8 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeCloseGame(handle: Long)
         @JvmStatic external fun nativeSetMouseMode(handle: Long, on: Boolean)
         @JvmStatic external fun nativeScreenshot(handle: Long)
+        @JvmStatic external fun nativeTypeText(handle: Long, text: String, flags: Int)
+        @JvmStatic external fun nativeSendExtras(handle: Long, values: IntArray)
         @JvmStatic external fun nativeDisconnect(handle: Long)
         @JvmStatic external fun nativeInSession(handle: Long): Boolean
         @JvmStatic external fun nativeHosts(handle: Long): String

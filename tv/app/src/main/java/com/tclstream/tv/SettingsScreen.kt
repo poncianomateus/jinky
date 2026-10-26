@@ -29,6 +29,7 @@ class SettingsScreen(
     private val pcAddress: () -> Pair<String, Int>?,
     private val currentPc: () -> HomeHost?,
     private val onPower: (off: Boolean) -> Unit,
+    private val onAddRemotePc: () -> Unit,
 ) : TvPage(context) {
 
     private enum class Section(val label: String, val icon: Int, val subtitle: String) {
@@ -154,6 +155,21 @@ class SettingsScreen(
                     settings.bitrateMbps = all[(all.indexOf(settings.bitrateMbps) + 1) % all.size]
                     onChanged()
                 }
+                // Weak sticks (no HEVC, no low-latency decoder: the Fire TV Stick Lite) decode 720p in about half the time.
+                val weak = HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC) == null
+                cycle("Resolução", { if (settings.resolution == 1) "720p" else "1080p" },
+                    { if (settings.resolution == 1) "Menos atraso e menos travadinhas em aparelhos mais fracos"
+                      else if (weak) "Este aparelho é mais simples: 720p deve deixar o jogo mais leve"
+                      else "A imagem mais nítida" }) {
+                    settings.resolution = if (settings.resolution == 1) 0 else 1
+                    onChanged()
+                }
+                if (HardwareInfo.hdr10(context)) toggle("HDR (experimental)",
+                    "Cores e brilho de HDR10. O PC liga o HDR do Windows durante o jogo e volta ao normal depois.",
+                    { settings.hdr && !settings.forceH264 }, enabled = !settings.forceH264) {
+                    settings.hdr = !settings.hdr
+                    onChanged()
+                }
                 cycle("Formato do vídeo", { if (settings.forceH264) "H.264" else "Automático" },
                     { if (settings.forceH264) "O mais compatível, para defeitos na imagem" else "HEVC quando a TV aceita: mais qualidade" }) {
                     settings.forceH264 = !settings.forceH264
@@ -175,7 +191,7 @@ class SettingsScreen(
                     settings.audioDelayMs = steps[(steps.indexOf(settings.audioDelayMs).coerceAtLeast(0) + 1) % steps.size]
                     onChanged()
                 }
-                info("Qualidade e formato valem a partir da próxima conexão; a sincronia, na hora.")
+                info("Qualidade, resolução e formato valem a partir da próxima conexão; a sincronia, na hora.")
             }
             Section.LOOK -> {
                 themes()
@@ -228,6 +244,16 @@ class SettingsScreen(
                         setNote("Aperte de novo para confirmar. A TV vai pedir um novo pareamento na próxima conexão.")
                     }
                 }
+                toggle("Controle PlayStation no PC (beta)",
+                    "DualSense/DualShock vira um DualShock 4 no PC: botões PlayStation nos jogos, touchpad e movimento (TVs com Android 12+). Precisa do Steam Input ligado para jogos sem suporte a PlayStation.",
+                    { settings.psPad }) {
+                    settings.psPad = !settings.psPad
+                    onChanged()
+                }
+                val remote = settings.remotePcs
+                action("PC pela internet",
+                    if (remote.isEmpty()) "Jogar fora de casa com o Tailscale: digite o endereço que o Jinky do PC mostra"
+                    else "Procurando também em ${remote.joinToString()}. Aperte para trocar.") { onAddRemotePc() }
                 powerRow(off = false)
                 powerRow(off = true)
                 action("Ajuda e informações", "Controles, dicas de rede e dados desta TV") { onHelp() }

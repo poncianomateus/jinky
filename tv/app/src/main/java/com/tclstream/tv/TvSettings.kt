@@ -29,6 +29,35 @@ class TvSettings(context: Context) {
         get() = prefs.getString("stats_mode", null) ?: if (prefs.getBoolean("show_stats", false)) "full" else "off"
         set(v) = prefs.edit().putString("stats_mode", v).apply()
 
+    /** "PC pela internet": addresses (Tailscale) where to look for the PC besides the home network. */
+    var remotePcs: Set<String>
+        get() = prefs.getStringSet("remote_pcs", emptySet())!!.toSet()
+        set(v) = prefs.edit().putStringSet("remote_pcs", v).apply()
+
+    /** "Controle PlayStation no PC (beta)": a DualSense/DualShock becomes a DualShock 4 on the PC. */
+    var psPad: Boolean
+        get() = prefs.getBoolean("ps_pad", false)
+        set(v) = prefs.edit().putBoolean("ps_pad", v).apply()
+
+    /** "HDR (experimental)": ask the PC for HDR10 (only offered when this TV can show it). */
+    var hdr: Boolean
+        get() = prefs.getBoolean("hdr", false)
+        set(v) = prefs.edit().putBoolean("hdr", v).apply()
+
+    /** "Resolução": 0 = 1080p (the PC's own), 1 = 720p (half the decoding work: less delay on weak sticks). */
+    var resolution: Int
+        get() = prefs.getInt("resolution", 0)
+        set(v) = prefs.edit().putInt("resolution", v).apply()
+
+    /**
+     * "Ajuste" on a game's page: 0 = Padrão (the settings above), 1 = Nítido (1080p, the PC's top
+     * quality), 2 = Leve (720p, 20 Mbit/s), 3 = Estável (1080p, 20 Mbit/s). Per game, on this TV.
+     */
+    fun gamePreset(gameId: Int): Int = prefs.getInt("game_preset_$gameId", 0)
+    fun setGamePreset(gameId: Int, preset: Int) = prefs.edit().apply {
+        if (preset == 0) remove("game_preset_$gameId") else putInt("game_preset_$gameId", preset)
+    }.apply()
+
     /** "Sincronia do áudio": hold the sound back this long (ms) when it comes before the picture. */
     var audioDelayMs: Int
         get() = prefs.getInt("audio_delay_ms", 0)

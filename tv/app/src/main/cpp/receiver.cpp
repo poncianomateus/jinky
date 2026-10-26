@@ -79,6 +79,14 @@ void Receiver::screenshot() {
     for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);  // the PC takes one per burst
 }
 
+void Receiver::type_text(const std::string& text, uint8_t flags) {
+    if (!host_known_ || !session_wanted_) return;
+    uint8_t buf[tclproto::TextMessage::kHeader + tclproto::TextMessage::kMaxText];
+    const size_t n = tclproto::TextMessage{session_id_, ++text_seq_, flags, text}.write(buf);
+    // UDP: thrice; the PC types each seq once.
+    for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, std::span<const uint8_t>(buf, n));
+}
+
 void Receiver::disconnect() { disconnect_requested_ = true; }
 
 std::string Receiver::hosts() const {
@@ -735,6 +743,14 @@ void Receiver::send_input(tclproto::InputState state) {
     }
     sock_.send_to(tclproto::Endpoint{ip, host_port_}, buf);
     inputs_sent_++;
+}
+
+void Receiver::send_extras(tclproto::PadExtras extras) {
+    if (!host_known_) return;
+    extras.session_id = session_id_;
+    uint8_t buf[tclproto::PadExtras::kSize];
+    extras.write(buf);
+    sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);
 }
 
 std::optional<tclproto::RumbleMessage> Receiver::poll_rumble() {

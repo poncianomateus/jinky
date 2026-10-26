@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <vector>
 
 #include "log.h"
 
@@ -41,6 +42,47 @@ double axis(int16_t v) {
 }
 
 }  // namespace
+
+void type_text(const std::string& utf8, bool enter, bool backspace) {
+    if (backspace) {
+        key(VK_BACK, true);
+        key(VK_BACK, false);
+        return;
+    }
+    std::wstring text;
+    if (!utf8.empty()) {
+        const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), nullptr, 0);
+        text.resize(size_t(std::max(n, 0)));
+        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), text.data(), n);
+    }
+    std::vector<INPUT> events;
+    events.reserve(text.size() * 2 + 2);
+    for (wchar_t c : text) {
+        if (c == L'\r') continue;
+        if (c == L'\n') {  // a line break is Enter
+            for (bool down : {true, false}) {
+                INPUT in{};
+                in.type = INPUT_KEYBOARD;
+                in.ki.wVk = VK_RETURN;
+                in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+                events.push_back(in);
+            }
+            continue;
+        }
+        for (bool down : {true, false}) {
+            INPUT in{};
+            in.type = INPUT_KEYBOARD;
+            in.ki.wScan = c;
+            in.ki.dwFlags = KEYEVENTF_UNICODE | (down ? 0 : KEYEVENTF_KEYUP);
+            events.push_back(in);
+        }
+    }
+    if (!events.empty()) SendInput(UINT(events.size()), events.data(), sizeof(INPUT));
+    if (enter) {
+        key(VK_RETURN, true);
+        key(VK_RETURN, false);
+    }
+}
 
 PadMouse::~PadMouse() { set_active(false); }
 

@@ -93,6 +93,7 @@ struct Options {
     int output = 0;
     bool test_pattern = false;
     bool stress = false;
+    bool probe_hdr = false;  // check that this GPU can convert and encode HDR10, then exit
     bool audio = true;
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
@@ -116,6 +117,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--output" && (v = next())) o.output = std::atoi(v);
         else if (a == "--test-pattern") o.test_pattern = true;
         else if (a == "--stress") o.test_pattern = o.stress = true;
+        else if (a == "--probe-hdr") o.probe_hdr = true;
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--mute-pc") o.mute_pc = true;
         else if (a == "--console") o.console = true;
@@ -221,6 +223,67 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (opt.probe_hdr) {
+        // HDR10 path without touching the display: scRGB -> P010 conversion and HEVC Main10.
+        tcl::Nv12Converter c;
+        const bool conv = c.init(capture.device(), capture.context(), 1920, 1080, 1920, 1080, true);
+        std::printf("hdr converter: %s\n", conv ? "ok" : c.error().c_str());
+        if (conv) {
+            tcl::EncoderConfig cfg = opt.enc;
+            cfg.codec = tcl::VideoCodec::HEVC;
+            cfg.hdr = true;
+            tcl::NvencEncoder e;
+            const bool enc = e.open(capture.device(), c.output(), cfg);
+            std::printf("hdr encoder: %s\n", enc ? e.description().c_str() : e.error().c_str());
+            // A synthetic scRGB picture, all white at 1.0 (80 nits): through the shaders, then read
+            // back. PQ(80 nits) = 0.4818 -> Y code 64 + 876 * 0.4818 = 486; CbCr 512 (no colour).
+            {
+                D3D11_TEXTURE2D_DESC td{};
+                td.Width = 1920;
+                td.Height = 1080;
+                td.MipLevels = td.ArraySize = 1;
+                td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                td.SampleDesc.Count = 1;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                std::vector<uint16_t> white(size_t(1920) * 1080 * 4, 0x3C00);  // half-float 1.0
+                D3D11_SUBRESOURCE_DATA init{white.data(), 1920 * 8, 0};
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> src, staging;
+                capture.device()->CreateTexture2D(&td, &init, &src);
+                const bool converted = src && c.convert(src.Get());
+                D3D11_TEXTURE2D_DESC sd{};
+                c.output()->GetDesc(&sd);
+                sd.Usage = D3D11_USAGE_STAGING;
+                sd.BindFlags = 0;
+                sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                capture.device()->CreateTexture2D(&sd, nullptr, &staging);
+                D3D11_MAPPED_SUBRESOURCE m{};
+                if (converted && staging) {
+                    capture.context()->CopyResource(staging.Get(), c.output());
+                    if (SUCCEEDED(capture.context()->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                        const auto* y = static_cast<const uint16_t*>(m.pData);
+                        const auto* uv = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(m.pData) + size_t(m.RowPitch) * 1080);
+                        std::printf("hdr white 80 nits: Y code %u (expect ~486), Cb %u Cr %u (expect 512)\n",
+                                    unsigned(y[960] >> 6), unsigned(uv[960] >> 6), unsigned(uv[961] >> 6));
+                        capture.context()->Unmap(staging.Get(), 0);
+                    }
+                } else {
+                    std::printf("hdr conversion failed: %s\n", c.error().c_str());
+                }
+            }
+            if (enc) {
+                std::vector<uint8_t> out;
+                bool key = false;
+                const bool frame = e.encode(true, 0, out, key);
+                std::printf("hdr frame: %s, %zu bytes, keyframe %d\n", frame ? "ok" : e.error().c_str(), out.size(), int(key));
+            }
+        }
+        float mx = 0, mn = 0, fall = 0;
+        capture.luminance(mx, mn, fall);
+        std::printf("monitor luminance: max %.0f, min %.4f, full frame %.0f nits; Windows HDR %s\n", mx, mn, fall,
+                    capture.display_hdr_on() ? "on" : "off");
+        return 0;
+    }
+
     // --- Milestone 2: encoder ---
     tcl::TestPattern pattern;
     uint64_t pattern_frame = 0;
@@ -243,7 +306,34 @@ int main(int argc, char** argv) {
     // encoder again on the current texture, at the bitrate it was using. Without this a game
     // switching resolution left every later frame failing until Jinky was restarted.
     uint32_t encode_failures = 0;
+    // The converter's output must be what the encoder expects: 10-bit HDR10 only with an HDR
+    // capture and HEVC, else 8-bit SDR. Call before (re)opening the encoder; sets opt.enc.hdr.
+    auto sync_converter = [&]() {
+        const bool want_hdr = capture.hdr() && opt.enc.codec == tcl::VideoCodec::HEVC;
+        if (converter.hdr() != want_hdr || converter.src_width() != capture.width() || converter.src_height() != capture.height()) {
+            if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(), opt.enc.width,
+                                opt.enc.height, want_hdr)) {
+                if (!want_hdr) {
+                    TCL_ERROR("convert", "{}", converter.error());
+                    return false;
+                }
+                // This GPU can't make HDR10 from the desktop: stay in SDR.
+                TCL_WARN("convert", "{}; streaming in SDR", converter.error());
+                capture.want_hdr(false);
+                capture.reopen();
+                if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(), opt.enc.width,
+                                    opt.enc.height, false)) {
+                    TCL_ERROR("convert", "{}", converter.error());
+                    return false;
+                }
+            }
+        }
+        opt.enc.hdr = converter.hdr();
+        if (opt.enc.hdr) capture.luminance(opt.enc.hdr_max_nits, opt.enc.hdr_min_nits, opt.enc.hdr_max_fall_nits);
+        return true;
+    };
     auto reopen_encoder = [&](const char* why) {
+        if (!sync_converter()) return false;
         const uint32_t kbps = encoder.bitrate_kbps();
         encoder.close();
         if (!encoder.open(capture.device(), converter.output(), opt.enc)) {
@@ -277,6 +367,8 @@ int main(int argc, char** argv) {
     std::optional<tclproto::Endpoint> peer;
     bool peer_desktop = false;  // the TV chose "Área de trabalho": no console mode for this session
     bool peer_game = false;     // a game chosen in the TV's library: console mode without Big Picture
+    bool peer_hdr = false;      // the TV asked for HDR (and decodes HEVC)
+    bool capture_reopen = false;  // capture again now (HDR turned on/off for the session)
     tcl::SteamGameWatch game_watch;
     std::string peer_name;
     bool busy_logged = false;
@@ -379,12 +471,17 @@ int main(int argc, char** argv) {
                 // Games from the TV's library also start inside Big Picture (it handles Steam's
                 // prompts and controller input in launchers); the TV hides it until the game shows.
                 console.enter(capture.display_name(), true);
+                console.set_hdr(peer_hdr);
                 if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
                 return;
             }
             if (keep_console && console.active()) return;
             console.leave(!opt.keep_big_picture);  // no-op unless a console session just ended
+            if (!peer && capture.hdr()) {
+                capture.want_hdr(false);
+                capture_reopen = true;  // back to the SDR capture
+            }
             if (frame_cap.active()) {
                 frame_cap.leave();
                 tcl::emit_event("frame_cap", "\"on\":false");
@@ -408,6 +505,7 @@ int main(int argc, char** argv) {
     // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
     tcl::GamepadHub gamepads;
     auto last_power_request = steady_clock::now() - 1h;  // "Suspender/Desligar o PC" from a TV
+    uint32_t last_text_seq = 0;                           // "Teclado": the last text typed
     auto last_screenshot = steady_clock::now() - 1h;     // "Capturar tela" from a TV
     std::atomic<bool> manual_mouse{false};  // menu "Mouse" on the TV
     tcl::PadMouse pad_mouse;  // the controller as mouse/keyboard while a window waits for the player
@@ -419,7 +517,7 @@ int main(int argc, char** argv) {
         sock.send_to({uint32_t(p >> 16), uint16_t(p & 0xFFFF)}, msg);
     });
     tcl::emit_event("gamepads", std::string("\"available\":") + (gamepads_ok ? "true" : "false"));
-    if (gamepads_ok) TCL_INFO("gamepad", "ViGEmBus ready: TV controllers will appear as Xbox 360 pads");
+    if (gamepads_ok) TCL_INFO("gamepad", "ViGEmBus ready: TV controllers will appear as Xbox 360 (or DualShock 4) pads");
     else TCL_WARN("gamepad", "{}", gamepads.error());
     // In test-pattern mode the bar restarts every 180 frames; the beep marks that moment.
     const uint64_t pattern_epoch_us = now_us() + 500'000;
@@ -454,6 +552,7 @@ int main(int argc, char** argv) {
     uint64_t last_send_us = 0, send_gap_max_us = 0, late_sends = 0;  // send-interval jitter
     std::vector<uint8_t> bitstream;
     const uint32_t default_bitrate_kbps = opt.enc.bitrate_kbps;
+    const uint32_t default_width = opt.enc.width, default_height = opt.enc.height;  // a TV may ask for 720p
 
     // Recently sent video frames (about a second), so fragments a TV missed can be sent again.
     struct SentFrame {
@@ -537,6 +636,17 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                continue;
+            }
+            if (type == PacketType::PadExtras) {
+                // A PlayStation pad's touchpad and motion: straight to the virtual DualShock 4.
+                auto ex = tclproto::PadExtras::read(packet);
+                bool ok;
+                {
+                    std::lock_guard lock(rx_mu);
+                    ok = ex && input_peer && from == *input_peer;
+                }
+                if (ok) gamepads.apply_extras(*ex);
                 continue;
             }
             if (type == PacketType::Nack) {
@@ -629,6 +739,15 @@ int main(int argc, char** argv) {
                     peer_name = nm->name;
                     TCL_INFO("session", "receiver is \"{}\"", peer_name);
                     tcl::emit_event("tv_name", "\"name\":" + tcl::json_str(peer_name));
+                }
+                continue;
+            }
+            if (tclproto::peek_type(packet) == PacketType::TypeText) {
+                // Menu "Teclado": only from the TV in the session; each text once (it comes thrice).
+                if (auto tm = tclproto::TextMessage::read(packet); tm && peer && from == *peer && tm->seq != last_text_seq) {
+                    last_text_seq = tm->seq;
+                    tcl::type_text(tm->text, tm->flags & tclproto::TextMessage::kEnter, tm->flags & tclproto::TextMessage::kBackspace);
+                    TCL_INFO("input", "typed {} characters from the TV's keyboard", tm->text.size());
                 }
                 continue;
             }
@@ -765,10 +884,26 @@ int main(int argc, char** argv) {
                     // Quality chosen on the TV (Configurações), else the PC's own setting.
                     const uint32_t tv_mbps = tclproto::hello_bitrate_mbps(msg->value);
                     const uint32_t want_kbps = tv_mbps >= 5 && tv_mbps <= 150 ? tv_mbps * 1000 : default_bitrate_kbps;
-                    if (want != opt.enc.codec || want_kbps != opt.enc.bitrate_kbps) {
+                    // Picture size chosen on the TV ("Resolução"), else the PC's own.
+                    const bool want_720 = tclproto::hello_size(msg->value) == tclproto::kSize720p;
+                    const uint32_t want_w = want_720 ? 1280 : default_width, want_h = want_720 ? 720 : default_height;
+                    if (want_w != opt.enc.width || want_h != opt.enc.height) {
+                        opt.enc.width = want_w;
+                        opt.enc.height = want_h;
+                        TCL_INFO("encoder", "picture size for this TV: {}x{}", want_w, want_h);
+                        if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(), want_w, want_h,
+                                            capture.hdr() && want == tcl::VideoCodec::HEVC)) {
+                            TCL_ERROR("convert", "{}", converter.error());
+                            return 1;
+                        }
+                        encoder.close();  // reopened below at the new size
+                    }
+                    if (want != opt.enc.codec || want_kbps != opt.enc.bitrate_kbps || !encoder.is_open() ||
+                        converter.hdr() != (capture.hdr() && want == tcl::VideoCodec::HEVC)) {
                         opt.enc.codec = want;
                         opt.enc.bitrate_kbps = want_kbps;
                         encoder.close();
+                        if (!sync_converter()) return 1;
                         if (!encoder.open(capture.device(), converter.output(), opt.enc)) {
                             TCL_ERROR("encoder", "{}", encoder.error());
                             return 1;
@@ -786,6 +921,13 @@ int main(int argc, char** argv) {
                     peer_desktop = msg->value & tclproto::kHelloDesktop;
                     if (peer_desktop) TCL_INFO("session", "desktop mode: showing the PC as it is (no console mode)");
                     peer_game = !peer_desktop && (msg->value & tclproto::kHelloGame);
+                    // HDR: asked by the TV, and only with HEVC (Main10).
+                    peer_hdr = (msg->value & tclproto::kHelloHdr) && opt.enc.codec == tcl::VideoCodec::HEVC;
+                    if (peer_hdr) TCL_INFO("session", "the TV asks for HDR");
+                    capture.want_hdr(peer_hdr);
+                    // Windows HDR already on: capture it in HDR now (when console mode turns it on,
+                    // the display change makes the capture start over by itself).
+                    if (peer_hdr != capture.hdr()) capture_reopen = true;
                     if (peer_game) {
                         TCL_INFO("session", "game session: Big Picture hidden behind the TV's launch screen");
                         game_watch.reset();
@@ -949,7 +1091,9 @@ int main(int argc, char** argv) {
             }
         }
         Microsoft::WRL::ComPtr<ID3D11Texture2D> desktop;
-        switch (opt.test_pattern ? tcl::DesktopCapture::Result::Timeout : capture.acquire(int(std::clamp<long long>(wait, 0, 100)), desktop)) {
+        switch (opt.test_pattern  ? tcl::DesktopCapture::Result::Timeout
+                : capture_reopen ? tcl::DesktopCapture::Result::AccessLost  // HDR on/off: capture again
+                                 : capture.acquire(int(std::clamp<long long>(wait, 0, 100)), desktop)) {
         case tcl::DesktopCapture::Result::NewFrame:
             // Keep a copy so the duplication frame can be released at once and the cursor can be
             // redrawn later when only the mouse moves.
@@ -981,16 +1125,15 @@ int main(int argc, char** argv) {
             break;
         case tcl::DesktopCapture::Result::AccessLost:
         case tcl::DesktopCapture::Result::Error:
-            TCL_WARN("capture", "capture lost ({}), reopening", capture.error());
+            if (!capture_reopen) TCL_WARN("capture", "capture lost ({}), reopening", capture.error());
+            capture_reopen = false;
             while (!g_quit && !capture.reopen()) std::this_thread::sleep_for(500ms);
             if (capture.width() != converter.src_width() || capture.height() != converter.src_height()) {
                 TCL_INFO("capture", "desktop resolution changed to {}x{}", capture.width(), capture.height());
-                if (!converter.init(capture.device(), capture.context(), capture.width(), capture.height(),
-                                    opt.enc.width, opt.enc.height)) {
-                    TCL_ERROR("convert", "{}", converter.error());
-                    return 1;
-                }
                 if (!reopen_encoder("a resolution change")) return 1;
+            } else if (converter.hdr() != (capture.hdr() && opt.enc.codec == tcl::VideoCodec::HEVC)) {
+                TCL_INFO("capture", "{}", capture.hdr() ? "HDR desktop: streaming HDR10" : "SDR desktop: streaming SDR");
+                if (!reopen_encoder(capture.hdr() ? "switching to HDR" : "switching to SDR")) return 1;
             }
             idr_pending = true;
             continue;
@@ -1039,7 +1182,8 @@ int main(int argc, char** argv) {
         tclproto::MediaHeader h;
         h.type = PacketType::Video;
         h.flags = uint8_t((key ? tclproto::kFlagKeyframe : 0) |
-                          (opt.enc.codec == tcl::VideoCodec::HEVC ? tclproto::kFlagHevc : 0));
+                          (opt.enc.codec == tcl::VideoCodec::HEVC ? tclproto::kFlagHevc : 0) |
+                          (opt.enc.hdr ? tclproto::kFlagHdr : 0));
         h.session_id = session_id;
         h.frame_id = frame_id++;
         // 0 = repeated old content (heartbeat/keyframe), so the receiver must not count it as latency.

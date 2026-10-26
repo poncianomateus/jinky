@@ -77,10 +77,42 @@ bool DesktopCapture::init(int output_index) {
     return open_duplication();
 }
 
+bool DesktopCapture::display_hdr_on() {
+    ComPtr<IDXGIOutput6> o6;
+    DXGI_OUTPUT_DESC1 d{};
+    return SUCCEEDED(output_.As(&o6)) && SUCCEEDED(o6->GetDesc1(&d)) && d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+}
+
+void DesktopCapture::luminance(float& max_nits, float& min_nits, float& max_fall) const {
+    ComPtr<IDXGIOutput6> o6;
+    DXGI_OUTPUT_DESC1 d{};
+    if (SUCCEEDED(output_.As(&o6)) && SUCCEEDED(o6->GetDesc1(&d)) && d.MaxLuminance > 0) {
+        max_nits = d.MaxLuminance;
+        min_nits = d.MinLuminance;
+        max_fall = d.MaxFullFrameLuminance > 0 ? d.MaxFullFrameLuminance : d.MaxLuminance;
+    }
+}
+
 bool DesktopCapture::open_duplication() {
     release();
     dup_.Reset();
-    HRESULT hr = output_->DuplicateOutput(device_.Get(), &dup_);
+    hdr_ = false;
+    HRESULT hr = E_FAIL;
+    if (want_hdr_ && display_hdr_on()) {
+        // The HDR desktop as Windows composes it. DuplicateOutput1 needs per-monitor DPI awareness;
+        // set only now, so SDR capture stays exactly as it was.
+        static const bool aware = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) ||
+                                  GetLastError() == ERROR_ACCESS_DENIED;  // (already set)
+        (void)aware;
+        ComPtr<IDXGIOutput5> o5;
+        const DXGI_FORMAT formats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT};
+        if (SUCCEEDED(output_.As(&o5))) {
+            hr = o5->DuplicateOutput1(device_.Get(), 0, UINT(std::size(formats)), formats, &dup_);
+            if (SUCCEEDED(hr)) hdr_ = true;
+            else TCL_WARN("capture", "HDR capture unavailable ({}); capturing in SDR", hr_str(hr));
+        }
+    }
+    if (!hdr_) hr = output_->DuplicateOutput(device_.Get(), &dup_);
     if (FAILED(hr)) {
         // E_ACCESSDENIED happens on the secure desktop (UAC, lock screen); caller retries.
         error_ = "DuplicateOutput failed " + hr_str(hr);

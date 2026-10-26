@@ -2,7 +2,7 @@
 #pragma once
 
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_6.h>
 #include <wrl/client.h>
 
 #include <string>
@@ -24,6 +24,17 @@ public:
 
     // Re-creates the duplication after AccessLost (mode change, UAC prompt, fullscreen switch...).
     bool reopen();
+
+    // HDR sessions: capture the desktop as Windows composes it in HDR (16-bit float scRGB)
+    // instead of the 8-bit SDR copy. Takes effect at the next (re)open; only when Windows HDR is
+    // on for this monitor.
+    void want_hdr(bool on) { want_hdr_ = on; }
+    // Frames come in HDR (16-bit float) right now.
+    bool hdr() const { return hdr_; }
+    // Windows HDR is on for the captured monitor.
+    bool display_hdr_on();
+    // The monitor's luminance (nits) as Windows reports it: max, min, max full-frame.
+    void luminance(float& max_nits, float& min_nits, float& max_fall) const;
 
     // Waits up to timeout_ms for a new desktop image. On NewFrame, `frame` is valid until release().
     // The mouse cursor is not part of the image (DXGI delivers it separately; not drawn yet).
@@ -50,6 +61,7 @@ private:
     ComPtr<IDXGIOutput1> output_;
     ComPtr<IDXGIOutputDuplication> dup_;
     bool holding_frame_ = false;
+    bool want_hdr_ = false, hdr_ = false;
     CursorOverlay cursor_;
     uint64_t present_time_us_ = 0;
     UINT width_ = 0, height_ = 0;

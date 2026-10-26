@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <vector>
 
 #include "audio_capture.h"
 #include "log.h"
@@ -62,6 +63,88 @@ bool ConsoleMode::set_refresh_60(const std::wstring& display, int& previous_hz) 
     best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
     // Not CDS_UPDATEREGISTRY: a temporary change; the saved (registry) mode stays 240 Hz.
     return ChangeDisplaySettingsExW(display.c_str(), &best, nullptr, 0, nullptr) == DISP_CHANGE_SUCCESSFUL;
+}
+
+namespace {
+
+// The display path whose source is [display] (GDI name like \\.\DISPLAY1); calls f(path).
+template <typename F>
+bool with_display_path(const std::wstring& display, F f) {
+    UINT32 np = 0, nm = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &np, &nm) != ERROR_SUCCESS) return false;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(np);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(nm);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &np, paths.data(), &nm, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+    for (UINT32 i = 0; i < np; ++i) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+        src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        src.header.size = sizeof src;
+        src.header.adapterId = paths[i].sourceInfo.adapterId;
+        src.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&src.header) == ERROR_SUCCESS && display == src.viewGdiDeviceName) return f(paths[i]);
+    }
+    return false;
+}
+
+}  // namespace
+
+bool ConsoleMode::windows_hdr(const std::wstring& display, bool* supported, bool* enabled) {
+    return with_display_path(display, [&](const DISPLAYCONFIG_PATH_INFO& p) {
+        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO info{};
+        info.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+        info.header.size = sizeof info;
+        info.header.adapterId = p.targetInfo.adapterId;
+        info.header.id = p.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&info.header) != ERROR_SUCCESS) return false;
+        if (supported) *supported = info.advancedColorSupported;
+        if (enabled) *enabled = info.advancedColorEnabled;
+        return true;
+    });
+}
+
+bool ConsoleMode::set_windows_hdr(const std::wstring& display, bool on) {
+    return with_display_path(display, [&](const DISPLAYCONFIG_PATH_INFO& p) {
+        DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE state{};
+        state.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
+        state.header.size = sizeof state;
+        state.header.adapterId = p.targetInfo.adapterId;
+        state.header.id = p.targetInfo.id;
+        state.enableAdvancedColor = on ? 1 : 0;
+        return DisplayConfigSetDeviceInfo(&state.header) == ERROR_SUCCESS;
+    });
+}
+
+void ConsoleMode::write_marker() const {
+    // Line 1: the display (its refresh rate goes back); line 2: "hdr" if Windows HDR must go off.
+    if (const auto marker = marker_path(); !marker.empty()) {
+        std::wofstream out(marker);
+        out << display_;
+        if (hdr_turned_on_) out << L"\nhdr";
+    }
+}
+
+void ConsoleMode::set_hdr(bool on) {
+    if (!active_) return;
+    if (on && !hdr_turned_on_) {
+        bool supported = false, enabled = false;
+        if (!windows_hdr(display_, &supported, &enabled) || !supported) {
+            TCL_WARN("console", "HDR asked by the TV, but {} doesn't support Windows HDR", narrow(display_));
+            return;
+        }
+        if (enabled) return;  // already on (the user's choice): leave it as it is
+        if (set_windows_hdr(display_, true)) {
+            hdr_turned_on_ = true;
+            write_marker();
+            TCL_INFO("console", "Windows HDR turned on for {} (the TV asked for HDR)", narrow(display_));
+        } else {
+            TCL_WARN("console", "could not turn Windows HDR on for {}", narrow(display_));
+        }
+    } else if (!on && hdr_turned_on_) {
+        set_windows_hdr(display_, false);
+        hdr_turned_on_ = false;
+        write_marker();
+        TCL_INFO("console", "Windows HDR turned off again for {}", narrow(display_));
+    }
 }
 
 void ConsoleMode::restore_display(const std::wstring& display) {
@@ -127,6 +210,10 @@ void ConsoleMode::leave(bool close_big_picture) {
     if (!active_) return;
     active_ = false;
     if (bp_opened_ && close_big_picture) open_url(L"steam://close/bigpicture");
+    if (hdr_turned_on_) {
+        set_windows_hdr(display_, false);
+        hdr_turned_on_ = false;
+    }
     restore_display(display_);
     AudioCapture::set_pc_muted(false);
     if (const auto marker = marker_path(); !marker.empty()) DeleteFileW(marker.c_str());
@@ -141,8 +228,13 @@ void ConsoleMode::close_big_picture() {
 bool ConsoleMode::restore_if_left() {
     const auto marker = marker_path();
     if (marker.empty() || GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
-    std::wstring display;
-    std::getline(std::wifstream(marker), display);
+    std::wstring display, hdr;
+    {
+        std::wifstream in(marker);
+        std::getline(in, display);
+        std::getline(in, hdr);
+    }
+    if (!display.empty() && hdr == L"hdr") set_windows_hdr(display, false);  // a crashed HDR session
     if (!display.empty()) restore_display(display);
     AudioCapture::set_pc_muted(false);
     // Big Picture was opened for that session: don't leave it on the PC's screen.

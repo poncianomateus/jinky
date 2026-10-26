@@ -51,6 +51,27 @@ object HardwareInfo {
                 )
             }
 
+    /**
+     * HDR10 streaming is possible here: the screen shows HDR10 and the hardware HEVC decoder does
+     * Main10 (the PC then sends HDR when the user turns it on).
+     */
+    fun hdr10(context: android.content.Context): Boolean {
+        if (Build.VERSION.SDK_INT < 24) return false
+        val display = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+            ?.getDisplay(android.view.Display.DEFAULT_DISPLAY) ?: return false
+        @Suppress("DEPRECATION")
+        val screen = display.hdrCapabilities?.supportedHdrTypes?.contains(android.view.Display.HdrCapabilities.HDR_TYPE_HDR10) == true
+        if (!screen) return false
+        val best = bestDecoder("video/hevc") ?: return false
+        return try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { it.name == best.name }
+                ?.getCapabilitiesForType("video/hevc")?.profileLevels?.any {
+                    it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
+                        it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10
+                } == true
+        } catch (e: Exception) { false }
+    }
+
     /** First hardware decoder for [mime], or null if the device only has software decoders. */
     fun bestDecoder(mime: String): Decoder? = decoders(mime).firstOrNull { it.hardware }
 

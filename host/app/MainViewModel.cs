@@ -219,8 +219,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool AllowTvPower
     {
         get => _settings.AllowTvPower;
-        set { if (_settings.AllowTvPower == value) return; _settings.AllowTvPower = value; Notify(); _settingsChanged(); }
+        set { if (_settings.AllowTvPower == value) return; _settings.AllowTvPower = value; Notify(); _settings.Save(); }
     }
+
+    /// <summary>"Jogar fora de casa (Tailscale)": firewall rules (administrator, once) and the address to give the TV.</summary>
+    public bool RemotePlayOn
+    {
+        get => _settings.RemotePlay;
+        set
+        {
+            if (_settings.RemotePlay == value) return;
+            if (!RemotePlay.AllowThroughFirewall(value) && value)
+            {
+                Add("Jogar fora de casa: o Windows não deu permissão para liberar o firewall", warning: true);
+                Notify();
+                return;
+            }
+            _settings.RemotePlay = value;
+            TvService.AllowTailscale = value;
+            _settings.Save();
+            Notify();
+            Notify(nameof(RemotePlayText));
+            if (value) Add("Jogar fora de casa ligado · " + RemotePlayText);
+        }
+    }
+
+    public string RemotePlayText => !_settings.RemotePlay ? "" :
+        RemotePlay.TailscaleAddress() is { } ip
+            ? $"Na TV: Configurações › Sistema › PC pela internet, e digite {ip}"
+            : "Instale o Tailscale neste PC e na TV (mesma conta) e volte aqui para ver o endereço.";
 
     public bool KeepBigPicture
     {
@@ -322,6 +349,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // --- engine events --------------------------------------------------------------------------
 
     readonly HashSet<int> _activePads = new();
+    readonly HashSet<int> _ds4Pads = [];
     string? _tvName;
 
     /// <summary>Raised when a TV starts a session (the app hides its window in console mode).</summary>
@@ -411,9 +439,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 break;
             case "pad":
                 var index = (int)(e.Num("index") ?? 0);
-                if (e.Bool("on") == true) { _activePads.Add(index); Add($"Controle {index + 1} conectado"); }
-                else { _activePads.Remove(index); Add($"Controle {index + 1} desconectado"); }
-                PadsConnected = _activePads.Count switch { 0 => "nenhum", 1 => "1 controle Xbox", var n => $"{n} controles Xbox" };
+                var ds4 = e.Bool("ds4") == true;
+                if (e.Bool("on") == true)
+                {
+                    _activePads.Add(index);
+                    if (ds4) _ds4Pads.Add(index); else _ds4Pads.Remove(index);
+                    Add($"Controle {index + 1} conectado" + (ds4 ? " · como DualShock 4" : ""));
+                }
+                else { _activePads.Remove(index); _ds4Pads.Remove(index); Add($"Controle {index + 1} desconectado"); }
+                var kind = _ds4Pads.Count == _activePads.Count && _ds4Pads.Count > 0 ? "PlayStation" : "Xbox";
+                PadsConnected = _activePads.Count switch { 0 => "nenhum", 1 => $"1 controle {kind}", var n => $"{n} controles" };
                 break;
             case "console":
                 Add(e.Bool("on") == true ? "Modo console ligado · Big Picture, 60 Hz, som na TV" : "Modo console desligado · tela e som restaurados");

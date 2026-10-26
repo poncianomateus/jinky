@@ -1,4 +1,5 @@
 // JNI surface for com.tclstream.tv.NativeReceiver.
+#include <algorithm>
 #include <jni.h>
 
 #include <cstring>
@@ -81,6 +82,28 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeReadAudio(JNIE
     env->ReleaseShortArrayElements(dst, p, 0);
 }
 
+// v: [pad, flags, seq, id0, down0, x0, y0, id1, down1, x1, y1, gx, gy, gz, ax, ay, az]
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSendExtras(JNIEnv* env, jclass, jlong h, jintArray values) {
+    if (env->GetArrayLength(values) < 17) return;
+    jint v[17];
+    env->GetIntArrayRegion(values, 0, 17, v);
+    tclproto::PadExtras e;
+    e.pad_index = uint8_t(v[0]);
+    e.flags = uint8_t(v[1]);
+    e.seq = uint32_t(v[2]);
+    for (int i = 0; i < 2; ++i) {
+        e.touch[i].id = uint8_t(v[3 + i * 4]);
+        e.touch[i].down = v[4 + i * 4] != 0;
+        e.touch[i].x = uint16_t(v[5 + i * 4]);
+        e.touch[i].y = uint16_t(v[6 + i * 4]);
+    }
+    for (int i = 0; i < 3; ++i) {
+        e.gyro[i] = int16_t(std::clamp<jint>(v[11 + i], -32768, 32767));
+        e.accel[i] = int16_t(std::clamp<jint>(v[14 + i], -32768, 32767));
+    }
+    self(h)->send_extras(e);
+}
+
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSendInput(
     JNIEnv*, jclass, jlong h, jint pad, jboolean connected, jint seq, jint buttons, jint lt, jint rt, jint lx,
     jint ly, jint rx, jint ry) {
@@ -155,6 +178,12 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetMouseMode(J
 
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeScreenshot(JNIEnv*, jclass, jlong h) {
     self(h)->screenshot();
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeTypeText(JNIEnv* env, jclass, jlong h, jstring text, jint flags) {
+    const char* s = env->GetStringUTFChars(text, nullptr);
+    self(h)->type_text(s ? s : "", uint8_t(flags));
+    if (s) env->ReleaseStringUTFChars(text, s);
 }
 
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeDisconnect(JNIEnv*, jclass, jlong h) {

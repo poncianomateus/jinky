@@ -82,6 +82,7 @@ public partial class App : Application
 
         CreateTray();
 
+        TvService.AllowTailscale = _settings.RemotePlay;
         _tvService = new TvService();
         _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
         _tvService.GameLaunched += name => Dispatcher.Invoke(() => _vm.OnGameLaunched(name));

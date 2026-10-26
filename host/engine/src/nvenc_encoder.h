@@ -24,6 +24,10 @@ struct EncoderConfig {
     // to hold frames back (MediaTek on the Fire TV otherwise keeps 3 queued). 0 = driver default.
     uint32_t max_ref_frames = 1;
     uint32_t bitrate_kbps = 40000;  // measured on the TCL over Wi-Fi: 0 loss up to 50 Mbit/s
+    // HDR10 (HEVC only): 10-bit P010 input in BT.2020 / PQ, Main10 profile, HDR metadata taken
+    // from the PC's monitor (the picture is "mastered" on it).
+    bool hdr = false;
+    float hdr_max_nits = 1000, hdr_min_nits = 0.005f, hdr_max_fall_nits = 400;
 };
 
 class NvencEncoder {
@@ -40,6 +44,7 @@ public:
     // Changes the rate on the fly (automatic quality); no keyframe, no new session.
     bool set_bitrate(uint32_t kbps);
     uint32_t bitrate_kbps() const { return cfg_.bitrate_kbps; }
+    bool is_open() const { return encoder_ != nullptr; }
 
     std::string description() const;
     const std::string& error() const { return error_; }
@@ -55,6 +60,8 @@ private:
     EncoderConfig cfg_;
     NV_ENC_INITIALIZE_PARAMS init_{};  // kept for nvEncReconfigureEncoder
     NV_ENC_CONFIG config_{};
+    MASTERING_DISPLAY_INFO mastering_{};  // HDR10 SEI, sent with every keyframe
+    CONTENT_LIGHT_LEVEL light_{};
     std::string error_;
 };
 

@@ -26,6 +26,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
     private lateinit var perfHud: PerfHud
+    private lateinit var keyboard: KeyboardPanel
     private lateinit var flash: View  // the white blink of "Capturar tela"
     private var mouseMode = false  // menu "Mouse": the controller drives the PC's mouse
     private var statsMode = "off"  // performance on screen during this game: off, compact, full
@@ -110,6 +111,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // A game starts: the chosen panel setting applies; it ends: back to a clean screen.
                 statsMode = if (inSession) settings.statsMode else "off"
                 mouseMode = false  // every session starts with the controller in the game
+                if (!inSession) receiver?.setCodecSupport(helloCapabilities())  // a game's "Ajuste" was for that game only
+                if (!inSession && keyboard.isOpen) keyboard.close()
                 applyStatsMode()
                 if (!inSession) gamesFrom = null  // "last played" changed: reload the home row
                 if (inSession) unlocksAfter = -1L
@@ -135,6 +138,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val text = buildOverlay()
             statusText.text = text
             if (perfHud.visibility == View.VISIBLE) updateHud()
+            updatePointerCapture()
             // Same diagnostics in logcat every 5 s, for remote debugging over adb.
             if (++ticks % 10 == 0) Log.i(TAG, "status: " + text.lines().filter { it.startsWith("áudio") }.joinToString(" | "))
             ui.postDelayed(this, 500)
@@ -155,6 +159,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
 
         surfaceView = SurfaceView(this).also { it.holder.addCallback(this) }
+        if (Build.VERSION.SDK_INT >= 26) surfaceView.setOnCapturedPointerListener { _, e -> gamepads?.onTouchpad(e) == true }
         statusText = TextView(this).apply {
             setTextColor(Color.WHITE)
             setBackgroundColor(0xB0101418.toInt())
@@ -208,6 +213,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onChanged = {
                     receiver?.setCodecSupport(helloCapabilities())
                     audio?.delayMs = settings.audioDelayMs
+                    gamepads?.playStationMode = settings.psPad
                 },
                 onSendDiagnostics = ::sendDiagnostics,
                 onForgetPc = ::forgetPc,
@@ -219,7 +225,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 },
                 pcAddress = { homeHost?.takeIf { it.updatePort > 0 }?.let { it.ip to it.updatePort } },
                 currentPc = { homeHost },
-                onPower = ::requestPower).apply { visibility = View.GONE }
+                onPower = ::requestPower,
+                onAddRemotePc = ::askRemotePc).apply { visibility = View.GONE }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
@@ -294,6 +301,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
             statusParams.setMargins(margin, margin, margin, margin)
             addView(statusText, statusParams)
+            keyboard = KeyboardPanel(this@MainActivity,
+                onType = { text, enter -> receiver?.typeText(text, enter) },
+                onBackspace = { receiver?.backspace() },
+                onClose = { keyboard.close(); updateUiInput() })
+            addView(keyboard, FrameLayout.LayoutParams(-1, -1))
             flash = View(this@MainActivity).apply { setBackgroundColor(Color.WHITE); alpha = 0f; visibility = View.GONE }
             addView(flash, FrameLayout.LayoutParams(-1, -1))
             perfHud = PerfHud(this@MainActivity).apply { visibility = View.GONE }
@@ -311,6 +323,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onScreenshot = {
                     hideMenu()
                     takeScreenshot()
+                },
+                onKeyboard = {
+                    hideMenu()
+                    keyboard.open()
+                    updateUiInput()
                 },
                 onToggleMouse = {
                     mouseMode = !mouseMode
@@ -398,12 +415,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** What the TV asks of the PC in every Hello: decodable codecs and the chosen quality. */
-    private fun helloCapabilities(): Int {
+    /** What this TV asks of the PC; [game]'s "Ajuste" (its page) overrides quality and resolution. */
+    private fun helloCapabilities(game: LibraryGame? = null): Int {
         // Codecs this TV decodes in hardware at 1080p60 (the PC prefers HEVC).
         var codecs = 0
         if (HardwareInfo.bestDecoder(VideoPipeline.MIME_AVC) != null) codecs = codecs or 1
         if (!settings.forceH264 && HardwareInfo.bestDecoder(VideoPipeline.MIME_HEVC)?.supports1080p60 == true) codecs = codecs or 2
-        return codecs or (settings.bitrateMbps shl HELLO_BITRATE_SHIFT)
+        var mbps = settings.bitrateMbps
+        var size = settings.resolution
+        when (game?.let { settings.gamePreset(it.id) } ?: 0) {
+            1 -> { mbps = 0; size = 0 }   // Nítido
+            2 -> { mbps = 20; size = 1 }  // Leve
+            3 -> { mbps = 20; size = 0 }  // Estável
+        }
+        // HDR10: only with HEVC, and only if this TV shows HDR10 (the PC decides if its screen can).
+        val hdr = if (settings.hdr && codecs and 2 != 0 && HardwareInfo.hdr10(this)) HELLO_HDR else 0
+        return codecs or (mbps shl HELLO_BITRATE_SHIFT) or (size shl HELLO_SIZE_SHIFT) or hdr
     }
 
     private fun startReceiver() {
@@ -413,6 +440,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         r.setIdentity(pairingStore.deviceId())
         pairingStore.hosts().forEach { (host, key) -> r.addPairedHost(host, key) }
         hostCache.all().forEach { r.addKnownAddress(it.ip) }
+        settings.remotePcs.forEach { r.addKnownAddress(it) }  // "PC pela internet" (Tailscale)
         // Android emulator on the PC (for trying the screens there): the PC is 10.0.2.2, which
         // broadcast discovery can't reach.
         if (Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish") r.addKnownAddress("10.0.2.2")
@@ -422,7 +450,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
         audio = AudioPlayer(r).also { it.delayMs = settings.audioDelayMs; it.start() }
-        gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.start() }
+        gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.playStationMode = settings.psPad; it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
     }
@@ -560,6 +588,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var lastShotAt = 0L
+
+    /**
+     * "Controle PlayStation no PC": while playing, the DualSense touchpad is captured (raw touches
+     * for the PC's DualShock 4) instead of moving a pointer on the TV.
+     */
+    private fun updatePointerCapture() {
+        val want = settings.psPad && receiver?.inSession() == true && !uiShown() && gamepads?.hasPlayStationPad() == true
+        if (Build.VERSION.SDK_INT < 26) return
+        if (want && !surfaceView.hasPointerCapture()) {
+            surfaceView.isFocusable = true
+            surfaceView.requestFocus()
+            surfaceView.requestPointerCapture()
+        } else if (!want && surfaceView.hasPointerCapture()) {
+            surfaceView.releasePointerCapture()
+        }
+    }
     private var padBatteryCheckedAt = 0L
     private var padBatteryWarnedAt = 101  // the level last warned about (warn again only lower)
 
@@ -600,6 +644,46 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (host.status == HomeHost.Status.OFFLINE || host.updatePort <= 0) return
         showPage(Page.CAPTURES)
         capturesScreen.show(host.ip, host.updatePort)
+    }
+
+    /**
+     * "PC pela internet": the PC's Tailscale address (100.x.y.z) or name. The TV then looks for the
+     * PC there too; a PC paired at home is recognised by its key and plays from anywhere.
+     */
+    private fun askRemotePc() {
+        val field = android.widget.EditText(this).apply {
+            hint = "100.x.y.z ou nome-do-pc"
+            setText(settings.remotePcs.firstOrNull() ?: "")
+            isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("PC pela internet")
+            .setMessage("Com o Tailscale no PC e nesta TV (mesma conta), digite o endereço que o Jinky do PC mostra em \"Jogar fora de casa\". Deixe vazio para parar de procurar.")
+            .setView(field)
+            .setPositiveButton("Salvar") { _, _ ->
+                val text = field.text.toString().trim()
+                if (text.isEmpty()) {
+                    settings.remotePcs = emptySet()
+                    settingsScreen.setNote("PC pela internet: desligado.")
+                    return@setPositiveButton
+                }
+                Thread {
+                    // A Tailscale name (MagicDNS) becomes its address; an address stays as it is.
+                    val ip = try { java.net.InetAddress.getByName(text).hostAddress } catch (e: Exception) { null }
+                    ui.post {
+                        if (ip == null || ip.contains(':')) {
+                            settingsScreen.setNote("Não encontrei \"$text\". Confira o endereço e se o Tailscale está ligado na TV.")
+                        } else {
+                            settings.remotePcs = setOf(ip)
+                            receiver?.addKnownAddress(ip)
+                            settingsScreen.setNote("Procurando o PC em $ip. Ele aparece em Escolher PC quando responder.")
+                        }
+                    }
+                }.start()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     /** Amigos: the Steam friends list, from Home or the Perfil (Back returns there). */
@@ -663,6 +747,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         homeScreen.visibility = View.GONE
         launchScreen.show(game, host.ip, host.updatePort)
         audio?.muted = true  // Big Picture opens behind the launch screen: not a sound of it
+        receiver?.setCodecSupport(helloCapabilities(game))  // the game's own "Ajuste", if any
         receiver?.connect(host.ip, host.port, false, game = true)
         // The PC starts the game as soon as this session begins.
         Thread {
@@ -908,7 +993,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
         profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||
-        friendsScreen.visibility == View.VISIBLE || capturesScreen.visibility == View.VISIBLE || menu.isOpen
+        friendsScreen.visibility == View.VISIBLE || capturesScreen.visibility == View.VISIBLE || menu.isOpen || keyboard.isOpen
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
@@ -1126,6 +1211,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             showPage(Page.HOME)
             return
         }
+        // The keyboard panel (game menu "Teclado"): Back closes it (the TV keyboard closes first).
+        if (keyboard.isOpen) {
+            keyboard.close()
+            updateUiInput()
+            return
+        }
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
         if (capturesScreen.visibility == View.VISIBLE) { if (!capturesScreen.closeViewer()) showPage(Page.PROFILE) }
@@ -1207,6 +1298,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val TAG = "Jinky"
         private const val HOST_PORT = 47100
         private const val HELLO_BITRATE_SHIFT = 16  // tclproto::kHelloBitrateShift
+        private const val HELLO_SIZE_SHIFT = 24     // tclproto::kHelloSizeShift
+        private const val HELLO_HDR = 1 shl 14       // tclproto::kHelloHdr
         private const val STATE_DISPLACED = 1
         private const val STATE_ENDED = 2
         private const val STATE_NEED_PAIRING = 3
