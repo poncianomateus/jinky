@@ -48,7 +48,8 @@ void Receiver::stop() {
     sock_.close();
 }
 
-void Receiver::connect(uint32_t ip, uint16_t port, bool desktop, bool game, bool pair_only) {
+void Receiver::connect(uint32_t ip, uint16_t port, bool desktop, bool game, bool pair_only, uint32_t power) {
+    connect_power_ = power & (tclproto::kHelloPowerSleep | tclproto::kHelloPowerOff);
     connect_desktop_ = desktop;
     connect_game_ = game;
     connect_pair_only_ = pair_only;
@@ -69,6 +70,13 @@ void Receiver::set_mouse_mode(bool on) {
     uint8_t buf[tclproto::ControlMessage::kSize];
     tclproto::ControlMessage{PacketType::MouseMode, session_id_, on ? 1u : 0u}.write(buf);
     for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);  // UDP: say it thrice
+}
+
+void Receiver::screenshot() {
+    if (!host_known_ || !session_wanted_) return;
+    uint8_t buf[tclproto::ControlMessage::kSize];
+    tclproto::ControlMessage{PacketType::Screenshot, session_id_, 0}.write(buf);
+    for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);  // the PC takes one per burst
 }
 
 void Receiver::disconnect() { disconnect_requested_ = true; }
@@ -127,6 +135,7 @@ void Receiver::apply_connect_requests() {
         desktop_ = connect_desktop_.load();
         game_ = connect_game_.load();
         pair_only_ = connect_pair_only_.load();
+        power_ = connect_power_.load();
         game_ready_ = -1;
         end_reason_ = 0;
         session_wanted_ = true;
@@ -400,7 +409,7 @@ void Receiver::net_loop() {
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
             send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
-                       (game_ ? tclproto::kHelloGame : 0u) | (pair_only_ ? tclproto::kHelloPairOnly : 0u));
+                       (game_ ? tclproto::kHelloGame : 0u) | (pair_only_ ? tclproto::kHelloPairOnly | power_.load() : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
                 std::string name;

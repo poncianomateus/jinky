@@ -127,9 +127,9 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetDeviceName(
 
 // --- home screen ---
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeConnect(JNIEnv* env, jclass, jlong h, jstring ip,
-                                                                         jint port, jboolean desktop, jboolean game, jboolean pairOnly) {
+                                                                         jint port, jboolean desktop, jboolean game, jboolean pairOnly, jint power) {
     const char* s = env->GetStringUTFChars(ip, nullptr);
-    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, uint16_t(port), desktop, game, pairOnly);
+    if (auto e = tclproto::Endpoint::parse(s ? s : "", 0)) self(h)->connect(e->ip, uint16_t(port), desktop, game, pairOnly, uint32_t(power));
     if (s) env->ReleaseStringUTFChars(ip, s);
 }
 
@@ -151,6 +151,10 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeCloseGame(JNIE
 
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetMouseMode(JNIEnv*, jclass, jlong h, jboolean on) {
     self(h)->set_mouse_mode(on);
+}
+
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeScreenshot(JNIEnv*, jclass, jlong h) {
+    self(h)->screenshot();
 }
 
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeDisconnect(JNIEnv*, jclass, jlong h) {

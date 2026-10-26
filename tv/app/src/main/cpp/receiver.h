@@ -42,13 +42,16 @@ public:
     // when the game is on screen and ends the session when it closes).
     // [port]: the PC's streaming port from its answer to discovery (0 = keep the current one).
     // [pair_only]: "Parear um PC" — authenticate (show the code) but start no session.
-    void connect(uint32_t ip, uint16_t port, bool desktop, bool game = false, bool pair_only = false);
+    // [power] (with pair_only): Hello flags kHelloPowerSleep / kHelloPowerOff ("Suspender/Desligar o PC").
+    void connect(uint32_t ip, uint16_t port, bool desktop, bool game = false, bool pair_only = false, uint32_t power = 0);
     // -1 = not yet; else tclproto::GameReadyReason (on screen / a prompt waits for the player).
     int game_ready() const { return game_ready_; }
     int end_reason() const { return end_reason_; }
     void close_game();
     // Menu "Mouse": the first controller drives the PC's mouse (true) or the game again (false).
     void set_mouse_mode(bool on);
+    // Menu "Capturar tela": the PC saves the picture being streamed.
+    void screenshot();
     void disconnect();
     bool in_session() const { return session_wanted_; }
     // PCs seen recently, one per line: "hostId|ip|state|mac|ageMs|name|busyWith|tvVersion|updatePort".
@@ -169,6 +172,8 @@ private:
     std::atomic<bool> connect_game_{false};
     std::atomic<bool> connect_pair_only_{false};
     std::atomic<bool> pair_only_{false};
+    std::atomic<uint32_t> connect_power_{0};
+    std::atomic<uint32_t> power_{0};
     std::atomic<bool> game_{false};
     std::atomic<int> game_ready_{-1};
     std::atomic<int> end_reason_{0};

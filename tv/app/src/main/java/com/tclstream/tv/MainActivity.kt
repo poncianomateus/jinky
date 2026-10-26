@@ -26,6 +26,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusText: TextView
     private lateinit var perfHud: PerfHud
+    private lateinit var flash: View  // the white blink of "Capturar tela"
     private var mouseMode = false  // menu "Mouse": the controller drives the PC's mouse
     private var statsMode = "off"  // performance on screen during this game: off, compact, full
     private var lastPresented = 0L
@@ -41,6 +42,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var achievementsScreen: AchievementsScreen
     private lateinit var profileScreen: ProfileScreen
     private lateinit var friendsScreen: FriendsScreen
+    private lateinit var capturesScreen: CapturesScreen
     private lateinit var toast: AchievementToast
     private var bootSplash: BootSplash? = null
     private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
@@ -59,7 +61,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS, FRIENDS }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS, FRIENDS, CAPTURES }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
@@ -117,6 +119,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 }
             }
             if (inSession) {
+                checkPadBattery()
                 // (the achievements page may be open over the game, from the menu)
                 if (!achievementsOverGame) showPage(null)
                 updateStartScreen()
@@ -202,7 +205,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             settingsScreen = SettingsScreen(this@MainActivity, settings,
-                onChanged = { receiver?.setCodecSupport(helloCapabilities()) },
+                onChanged = {
+                    receiver?.setCodecSupport(helloCapabilities())
+                    audio?.delayMs = settings.audioDelayMs
+                },
                 onSendDiagnostics = ::sendDiagnostics,
                 onForgetPc = ::forgetPc,
                 onHelp = { showPage(Page.HELP) },
@@ -211,7 +217,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     toast.show(AchievementUnlock(0, 0, "Jinky", "teste", "Conquista de exemplo",
                         "Assim aparece uma conquista durante o jogo.", "", 4.2, 12, 46))
                 },
-                pcAddress = { homeHost?.takeIf { it.updatePort > 0 }?.let { it.ip to it.updatePort } }).apply { visibility = View.GONE }
+                pcAddress = { homeHost?.takeIf { it.updatePort > 0 }?.let { it.ip to it.updatePort } },
+                currentPc = { homeHost },
+                onPower = ::requestPower).apply { visibility = View.GONE }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
@@ -256,8 +264,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 },
                 onChoosePc = { showPage(Page.PCS) },
                 onSettings = { showPage(Page.SETTINGS) },
-                onFriends = ::openFriends).apply { visibility = View.GONE }
+                onFriends = ::openFriends,
+                onCaptures = ::openCaptures).apply { visibility = View.GONE }
             addView(profileScreen, FrameLayout.LayoutParams(-1, -1))
+            capturesScreen = CapturesScreen(this@MainActivity) { showPage(Page.PROFILE) }.apply { visibility = View.GONE }
+            addView(capturesScreen, FrameLayout.LayoutParams(-1, -1))
             friendsScreen = FriendsScreen(this@MainActivity,
                 ownedGame = { id -> pcGames.firstOrNull { it.id == id } },
                 onOpenGame = { g -> openGame(g, Page.FRIENDS) },
@@ -283,6 +294,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val statusParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
             statusParams.setMargins(margin, margin, margin, margin)
             addView(statusText, statusParams)
+            flash = View(this@MainActivity).apply { setBackgroundColor(Color.WHITE); alpha = 0f; visibility = View.GONE }
+            addView(flash, FrameLayout.LayoutParams(-1, -1))
             perfHud = PerfHud(this@MainActivity).apply { visibility = View.GONE }
             addView(perfHud, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
                 val m = (resources.displayMetrics.heightPixels * 0.04).toInt()
@@ -294,6 +307,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     // The PC closes the game in front; a game session then ends by itself.
                     receiver?.closeGame()
                     hideMenu()
+                },
+                onScreenshot = {
+                    hideMenu()
+                    takeScreenshot()
                 },
                 onToggleMouse = {
                     mouseMode = !mouseMode
@@ -404,7 +421,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startError = r.start(HOST_PORT)
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
-        audio = AudioPlayer(r).also { it.start() }
+        audio = AudioPlayer(r).also { it.delayMs = settings.audioDelayMs; it.start() }
         gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
@@ -443,6 +460,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             profileScreen.visibility == View.VISIBLE -> Page.PROFILE
             pcPicker.visibility == View.VISIBLE -> Page.PCS
             friendsScreen.visibility == View.VISIBLE -> Page.FRIENDS
+            capturesScreen.visibility == View.VISIBLE -> Page.CAPTURES
             else -> null
         }
         if (p != null) page = p
@@ -455,6 +473,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         profileScreen.visibility = if (p == Page.PROFILE) View.VISIBLE else View.GONE
         pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
         friendsScreen.visibility = if (p == Page.FRIENDS) View.VISIBLE else View.GONE
+        capturesScreen.visibility = if (p == Page.CAPTURES) View.VISIBLE else View.GONE
         if (before == Page.FRIENDS && p != Page.FRIENDS) friendsScreen.hidden()
         if (p == Page.FRIENDS && before != Page.FRIENDS) friendsScreen.resumed()  // back from a game's page
         if (p == Page.PCS && before != Page.PCS) {
@@ -475,6 +494,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.PROFILE -> profileScreen
                 Page.PCS -> pcPicker
                 Page.FRIENDS -> friendsScreen
+                Page.CAPTURES -> capturesScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -493,6 +513,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.PROFILE -> profileScreen.focusFirst()
             Page.PCS -> pcPicker.focusFirst()
             Page.FRIENDS -> friendsScreen.focusFirst()
+            Page.CAPTURES -> capturesScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -524,6 +545,61 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val playing = try { SteamFriend.fetch(host.ip, host.updatePort).first?.count { it.playing } } catch (e: Exception) { null }
             ui.post { homeScreen.setFriendsPlaying(playing ?: 0) }
         }.start()
+    }
+
+    /**
+     * "Suspender/Desligar o PC" (Configurações > Sistema): an authenticated request to the PC
+     * (its Jinky checks this TV's pairing key), then the TV lets go.
+     */
+    private fun requestPower(off: Boolean) {
+        val h = homeHost ?: return
+        receiver?.requestPower(h.ip, h.port, off)
+        settingsScreen.setNote(if (off) "Pedido enviado: o PC ${h.name} vai desligar."
+            else "Pedido enviado: o PC ${h.name} vai dormir.")
+        ui.postDelayed({ if (receiver?.inSession() != true) receiver?.disconnect() }, 4000)
+    }
+
+    private var lastShotAt = 0L
+    private var padBatteryCheckedAt = 0L
+    private var padBatteryWarnedAt = 101  // the level last warned about (warn again only lower)
+
+    /** While playing: a note when a controller's battery gets low (15%, then 5%). */
+    private fun checkPadBattery() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - padBatteryCheckedAt < 30_000) return
+        padBatteryCheckedAt = now
+        val pct = PadBattery.lowest() ?: return
+        if (PadBattery.charging()) { padBatteryWarnedAt = 101; return }
+        val step = when { pct <= 5 -> 5; pct <= 15 -> 15; else -> return }
+        if (step >= padBatteryWarnedAt) return
+        padBatteryWarnedAt = step
+        showHint("Bateria do controle baixa: $pct%. Bom ligar no carregador.")
+        ui.postDelayed(hideHint, 6000)
+    }
+
+    /** "Capturar tela": the PC saves what is on screen; the TV blinks and says where it went. */
+    private fun takeScreenshot() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastShotAt < 1500) return
+        lastShotAt = now
+        // After the menu has slid away (it isn't in the PC's picture anyway, but the blink reads better).
+        ui.postDelayed({
+            receiver?.screenshot()
+            UiSounds.play(UiSounds.Sound.SELECT)
+            flash.visibility = View.VISIBLE
+            flash.alpha = 0.7f
+            flash.animate().alpha(0f).setDuration(450).withEndAction { flash.visibility = View.GONE }.start()
+            showHint("Captura salva no PC, em Imagens › Jinky. Veja em Perfil › Capturas.")
+            ui.postDelayed(hideHint, 3500)
+        }, 250)
+    }
+
+    /** Capturas (from the Perfil): the screenshots taken from the TV, kept on the PC. */
+    private fun openCaptures() {
+        val host = homeHost ?: return
+        if (host.status == HomeHost.Status.OFFLINE || host.updatePort <= 0) return
+        showPage(Page.CAPTURES)
+        capturesScreen.show(host.ip, host.updatePort)
     }
 
     /** Amigos: the Steam friends list, from Home or the Perfil (Back returns there). */
@@ -712,6 +788,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // While the opening plays, any button skips it (and nothing moves behind it).
         bootSplash?.let { if (event.action == KeyEvent.ACTION_DOWN) it.skip(); return true }
+        // The controller's Share/Capture button (Xbox Series, some others) takes a screenshot while playing.
+        if (event.keyCode == KeyEvent.KEYCODE_MEDIA_RECORD && receiver?.inSession() == true && !uiShown()) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) takeScreenshot()
+            return true
+        }
         val ok = event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)
         // Session on another TV: OK on the remote or A on a controller brings it here.
@@ -827,7 +908,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
         profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||
-        friendsScreen.visibility == View.VISIBLE || menu.isOpen
+        friendsScreen.visibility == View.VISIBLE || capturesScreen.visibility == View.VISIBLE || menu.isOpen
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
@@ -1047,7 +1128,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
-        if (friendsScreen.visibility == View.VISIBLE) { if (!friendsScreen.backToList()) showPage(friendsOrigin) }
+        if (capturesScreen.visibility == View.VISIBLE) { if (!capturesScreen.closeViewer()) showPage(Page.PROFILE) }
+        else if (friendsScreen.visibility == View.VISIBLE) { if (!friendsScreen.backToList()) showPage(friendsOrigin) }
         else if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (achievementsScreen.visibility == View.VISIBLE) { if (!achievementsScreen.closeDetail()) closeAchievements() }
         else if (gameScreen.visibility == View.VISIBLE) { if (!gameScreen.closeViewer()) showPage(gameOrigin) }

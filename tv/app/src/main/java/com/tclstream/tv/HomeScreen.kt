@@ -102,6 +102,16 @@ class HomeScreen(
     }
     private val libraryTab = tab("Biblioteca")
     private val friendsTab = tab("Amigos")
+    // The controller's battery (Android 12+), lowest of the connected ones; hidden when unknown.
+    private val padIcon = ImageView(context).apply { setImageResource(R.drawable.ic_gamepad) }
+    private val padText = mono(10f, Jinky.SOFT, 600)
+    private val padChip = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        visibility = View.GONE
+        addView(padIcon, LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginEnd = dp(4) })
+        addView(padText)
+    }
     private val friendsBadge = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f)
         typeface = Jinky.mono(context, 700)
@@ -219,6 +229,7 @@ class HomeScreen(
             addView(search, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
             addView(profileButton, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
             addView(settings, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(8) })
+            addView(padChip, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(14) })
             addView(clock, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(14) })
         }
         addView(top, LayoutParams(-1, dp(36)).apply { setMargins(dp(48), dp(22), dp(48), 0) })
@@ -275,6 +286,27 @@ class HomeScreen(
 
     // --- state from MainActivity (every 500 ms) ---
 
+    private var padCheckedAt = 0L
+
+    private fun showPadBattery() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - padCheckedAt < 5000) return
+        padCheckedAt = now
+        val pct = PadBattery.lowest()
+        padChip.gone(pct == null)
+        if (pct == null) return
+        val charging = PadBattery.charging()
+        val color = when {
+            charging -> Jinky.GREEN
+            pct <= 15 -> Jinky.RED
+            pct <= 30 -> Jinky.AMBER
+            else -> Jinky.SOFT
+        }
+        padText.text = if (charging) "$pct% ⚡" else "$pct%"
+        padText.setTextColor(color)
+        padIcon.setColorFilter(color)
+    }
+
     /** Friends playing right now: a small green count next to the Amigos tab (0 hides it). */
     fun setFriendsPlaying(n: Int) {
         friendsBadge.text = n.toString()
@@ -284,6 +316,7 @@ class HomeScreen(
     /** [updateStatus]: progress/result of an update in progress, else null. */
     fun show(h: HomeHost?, searching: Boolean, waking: Boolean, updateStatus: String? = null, unpairedAround: Int = 0) {
         clock.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        showPadBattery()
         updateNote.text = updateStatus ?: ""
         updateNote.gone(updateStatus == null)
         showUpdate(h)

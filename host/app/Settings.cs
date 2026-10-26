@@ -13,6 +13,9 @@ public sealed class Settings
     /// <summary>Big Picture stays open between games (games start sooner); it closes with Jinky.</summary>
     public bool KeepBigPicture { get; set; }
 
+    /// <summary>A paired TV may put this PC to sleep or shut it down ("Suspender/Desligar o PC" on the TV).</summary>
+    public bool AllowTvPower { get; set; } = true;
+
     /// <summary>Console sessions cap games at the stream's 60 fps (NVIDIA driver), leaving GPU room for the stream.</summary>
     public bool CapGames { get; set; } = true;
 

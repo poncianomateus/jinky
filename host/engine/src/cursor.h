@@ -54,6 +54,8 @@ public:
     // Returns the texture to convert: the clean desktop, or a copy with the cursor drawn on it.
     ID3D11Texture2D* compose(ID3D11DeviceContext* context, CursorOverlay& cursor);
     bool has_desktop() const { return clean_ != nullptr; }
+    // The clean desktop image (no cursor), for screenshots. Null before the first frame.
+    ID3D11Texture2D* desktop() const { return clean_.Get(); }
 
 private:
     ComPtr<ID3D11Texture2D> clean_, composed_;

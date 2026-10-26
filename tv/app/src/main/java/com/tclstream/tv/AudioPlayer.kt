@@ -13,6 +13,9 @@ import android.util.Log
  * audio clock; the native buffer absorbs network jitter and clock drift.
  */
 class AudioPlayer(private val receiver: NativeReceiver) {
+    /** "Sincronia do áudio": hold the sound back this long (0..500 ms); takes effect right away. */
+    @Volatile var delayMs = 0
+
     @Volatile private var running = false
     private var thread: Thread? = null
     @Volatile var outputLatencyMs = Double.NaN; private set
@@ -71,6 +74,9 @@ class AudioPlayer(private val receiver: NativeReceiver) {
         var lastUnderruns = 0
 
         val chunk = ShortArray(CHUNK_FRAMES * 2)
+        // "Sincronia do áudio": the sound held back a fixed time (when it comes before the picture,
+        // e.g. a TV that processes the image slowly). A queue of 5 ms chunks, primed with silence.
+        val delayLine = ArrayDeque<ShortArray>()
         val ts = android.media.AudioTimestamp()
         var written = silence.size / 2L  // the pre-fill counts as written
         var lastReport = 0L
@@ -91,7 +97,15 @@ class AudioPlayer(private val receiver: NativeReceiver) {
                     gain = if (target == 0f) 0f else minOf(1f, gain + CHUNK_FRAMES / (RATE * 0.4f))
                     for (i in chunk.indices) chunk[i] = (chunk[i] * gain).toInt().toShort()
                 }
-                track.write(chunk, 0, chunk.size)
+                val delayChunks = (delayMs.coerceIn(0, 500) + 2) / 5
+                if (delayChunks == 0 && delayLine.isEmpty()) track.write(chunk, 0, chunk.size)
+                else {
+                    delayLine.addLast(chunk.copyOf())
+                    // Grow: play silence while the queue fills. Shrink: skip the oldest sound.
+                    while (delayLine.size > delayChunks + 1) delayLine.removeFirst()
+                    val out = if (delayLine.size <= delayChunks) ShortArray(chunk.size) else delayLine.removeFirst()
+                    track.write(out, 0, out.size)
+                }
                 written += CHUNK_FRAMES
                 val now = System.nanoTime()
                 // Grow the device queue quickly if the TV can't keep up with it this small.

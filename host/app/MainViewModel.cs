@@ -216,6 +216,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (_settings.ConsoleMode == value) return; _settings.ConsoleMode = value; Notify(); Notify(nameof(SoundToggleEnabled)); _settingsChanged(); }
     }
 
+    public bool AllowTvPower
+    {
+        get => _settings.AllowTvPower;
+        set { if (_settings.AllowTvPower == value) return; _settings.AllowTvPower = value; Notify(); _settingsChanged(); }
+    }
+
     public bool KeepBigPicture
     {
         get => _settings.KeepBigPicture;
@@ -424,6 +430,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                                    "Feche-o lá (ícone perto do relógio → Sair) e este assume sozinho.";
                     Add("Outro Jinky está atendendo a TV · este espera a vez");
                 }
+                break;
+            case "power":
+                var off = e.Str("action") == "shutdown";
+                if (!_settings.AllowTvPower)
+                {
+                    Add(off ? "A TV pediu para desligar o PC · não permitido nas configurações" : "A TV pediu para suspender o PC · não permitido nas configurações", warning: true);
+                    break;
+                }
+                Add(off ? "A TV pediu para desligar o PC · desligando" : "A TV pediu para suspender o PC · suspendendo");
+                // A moment for the log line, then sleep / shut down (off the UI thread).
+                var action = off ? "shutdown" : "sleep";
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(1500);
+                    if (!Power.Run(action)) System.Windows.Application.Current?.Dispatcher.Invoke(() => Add("Não deu para " + (off ? "desligar" : "suspender") + " o PC", warning: true));
+                });
                 break;
             case "log":
                 if (e.Str("level") == "ERROR") Add(e.Str("msg") ?? "erro", warning: true);

@@ -15,7 +15,8 @@ namespace Jinky;
 /// POST /library/launch?id=N -> starts that game when a TV streams from this PC (right away, or as
 /// soon as the session the TV is opening starts); GET /profile -> the Steam account;
 /// GET /friends -> the Steam friends list with status; GET /friends/games?id=STEAMID -> what that
-/// friend played lately.
+/// friend played lately; GET /captures, GET /captures/file?name=, POST /captures/delete?name= ->
+/// the screenshots taken from the TV (deleted ones go to the Recycle Bin).
 /// </summary>
 public sealed class TvService : IDisposable
 {
@@ -335,6 +336,29 @@ public sealed class TvService : IDisposable
                         games = games.Select(g => new { id = g.Id, name = g.Name, recent = g.Minutes2Weeks, total = g.MinutesTotal }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/captures"))
+                {
+                    var names = _known;
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        captures = Captures.List().Select(c => new
+                        {
+                            name = c.Name, time = c.Time, gameId = c.GameId,
+                            game = c.GameId != 0 && names.TryGetValue(c.GameId, out var g) ? g : "",
+                        }),
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("GET", "/captures/file") && Captures.PathOf(request.Query("name")) is { } capturePath)
+                {
+                    await using var file = File.OpenRead(capturePath);
+                    await Respond(stream, "200 OK", "image/jpeg", file.Length);
+                    await file.CopyToAsync(stream);
+                }
+                else if (request.Is("POST", "/captures/delete"))
+                {
+                    await RespondText(stream, Captures.Delete(request.Query("name")) ? "ok" : "not found");
                 }
                 else if (request.Is("GET", "/achievements/unlocks"))
                 {

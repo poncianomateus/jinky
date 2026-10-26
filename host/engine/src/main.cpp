@@ -27,6 +27,7 @@
 #include "console_mode.h"
 #include "frame_cap.h"
 #include "pad_mouse.h"
+#include "screenshot.h"
 #include "converter.h"
 #include "gamepad.h"
 #include "log.h"
@@ -406,6 +407,8 @@ int main(int argc, char** argv) {
 
     // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
     tcl::GamepadHub gamepads;
+    auto last_power_request = steady_clock::now() - 1h;  // "Suspender/Desligar o PC" from a TV
+    auto last_screenshot = steady_clock::now() - 1h;     // "Capturar tela" from a TV
     std::atomic<bool> manual_mouse{false};  // menu "Mouse" on the TV
     tcl::PadMouse pad_mouse;  // the controller as mouse/keyboard while a window waits for the player
     const bool gamepads_ok = gamepads.init([&](uint8_t pad, uint8_t large_motor, uint8_t small_motor) {
@@ -715,6 +718,16 @@ int main(int argc, char** argv) {
             }
             if (msg->type == PacketType::Hello && (msg->value & tclproto::kHelloPairOnly)) {
                 // "Parear um PC" on the TV: it is paired (authenticated) and leaves; nothing starts.
+                // With a power flag ("Suspender/Desligar o PC"), and only from a TV that proved its
+                // key, the Jinky app puts the PC to sleep or shuts it down. The TV repeats its Hello
+                // every second: act once.
+                const uint32_t power = msg->value & (tclproto::kHelloPowerSleep | tclproto::kHelloPowerOff);
+                if (power && hello_key && steady_clock::now() - last_power_request > 30s) {
+                    last_power_request = steady_clock::now();
+                    const bool off = power & tclproto::kHelloPowerOff;
+                    TCL_INFO("power", "a paired TV asks to {} the PC", off ? "shut down" : "suspend");
+                    tcl::emit_event("power", std::string("\"action\":\"") + (off ? "shutdown" : "sleep") + "\"");
+                }
                 continue;
             }
             if (msg->type == PacketType::Hello) {
@@ -812,6 +825,14 @@ int main(int argc, char** argv) {
                         } else {
                             TCL_WARN("encoder", "{}", encoder.error());
                         }
+                    }
+                } else if (msg->type == PacketType::Screenshot) {
+                    // The TV says it thrice (UDP): one picture per request burst.
+                    if (steady_clock::now() - last_screenshot > 1500ms) {
+                        last_screenshot = steady_clock::now();
+                        if (!tcl::save_screenshot(capture.device(), capture.context(), compositor.desktop(),
+                                                  tcl::SteamGameWatch::running_app_id()))
+                            TCL_WARN("capture", "screenshot: no picture to save");
                     }
                 } else if (msg->type == PacketType::MouseMode) {
                     // Menu "Mouse" on the TV: the controller drives the PC's mouse until turned off.

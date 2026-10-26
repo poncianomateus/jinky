@@ -27,6 +27,8 @@ class SettingsScreen(
     private val onLookChanged: () -> Unit,
     private val onTestToast: () -> Unit,
     private val pcAddress: () -> Pair<String, Int>?,
+    private val currentPc: () -> HomeHost?,
+    private val onPower: (off: Boolean) -> Unit,
 ) : TvPage(context) {
 
     private enum class Section(val label: String, val icon: Int, val subtitle: String) {
@@ -51,6 +53,8 @@ class SettingsScreen(
     private val note = text(10f, Jinky.BLUE_SOFT)
     private var section = Section.PICTURE
     private var forgetArmedUntil = 0L
+    private var powerArmed: Boolean? = null  // which power action waits for the second press
+    private var powerArmedUntil = 0L
     private var lastTest: NetworkTest.Result? = null
 
     init {
@@ -164,7 +168,14 @@ class SettingsScreen(
                     settings.statsMode = when (settings.statsMode) { "off" -> "compact"; "compact" -> "full"; else -> "off" }
                     onChanged()
                 }
-                info("Qualidade e formato valem a partir da próxima conexão.")
+                cycle("Sincronia do áudio", { if (settings.audioDelayMs == 0) "Sem atraso" else "Som +${settings.audioDelayMs} ms" },
+                    { if (settings.audioDelayMs == 0) "Se o som vier antes da imagem, atrase-o aqui"
+                      else "Atrasa o som para casar com a imagem. Som atrasado (fone Bluetooth)? Use a saída da TV por cabo." }) {
+                    val steps = listOf(0, 20, 40, 60, 80, 100, 150, 200)
+                    settings.audioDelayMs = steps[(steps.indexOf(settings.audioDelayMs).coerceAtLeast(0) + 1) % steps.size]
+                    onChanged()
+                }
+                info("Qualidade e formato valem a partir da próxima conexão; a sincronia, na hora.")
             }
             Section.LOOK -> {
                 themes()
@@ -217,6 +228,8 @@ class SettingsScreen(
                         setNote("Aperte de novo para confirmar. A TV vai pedir um novo pareamento na próxima conexão.")
                     }
                 }
+                powerRow(off = false)
+                powerRow(off = true)
                 action("Ajuda e informações", "Controles, dicas de rede e dados desta TV") { onHelp() }
             }
         }
@@ -303,6 +316,31 @@ class SettingsScreen(
                     build()
                     setNote("Qualidade máxima: ${r.suggestedMbps} Mbit/s, a partir da próxima conexão.")
                 }
+            }
+        }
+    }
+
+    /** "Suspender o PC" / "Desligar o PC": press twice (the second press within 5 s) to confirm. */
+    private fun powerRow(off: Boolean) {
+        val name = currentPc()?.name?.takeIf { it.isNotBlank() }?.let { "o PC $it" } ?: "o PC"
+        val row = action(if (off) "Desligar o PC" else "Suspender o PC",
+            if (off) "Desliga $name. Programas abertos podem pedir para salvar."
+            else "Coloca $name para dormir. Acorda com Ligar o PC, no Início (PC no cabo), ou pelo mouse/teclado.") {}
+        row.setOnClickListener {
+            val pc = currentPc()
+            if (pc == null || pc.status == HomeHost.Status.OFFLINE) {
+                setNote("O PC já está desligado ou fora da rede.")
+                return@setOnClickListener
+            }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (powerArmed == off && now < powerArmedUntil) {
+                powerArmed = null
+                onPower(off)
+            } else {
+                powerArmed = off
+                powerArmedUntil = now + 5000
+                val busy = if (pc.status == HomeHost.Status.BUSY) " ${pc.busyWith.ifBlank { "Outra TV" }} está jogando nele agora: o jogo vai fechar." else ""
+                setNote("Aperte de novo para ${if (off) "desligar" else "suspender"} o PC ${pc.name}.$busy")
             }
         }
     }

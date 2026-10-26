@@ -29,6 +29,11 @@ class TvSettings(context: Context) {
         get() = prefs.getString("stats_mode", null) ?: if (prefs.getBoolean("show_stats", false)) "full" else "off"
         set(v) = prefs.edit().putString("stats_mode", v).apply()
 
+    /** "Sincronia do áudio": hold the sound back this long (ms) when it comes before the picture. */
+    var audioDelayMs: Int
+        get() = prefs.getInt("audio_delay_ms", 0)
+        set(v) = prefs.edit().putInt("audio_delay_ms", v).apply()
+
     /** Look of the whole app: "jinky", "midnight" or "retro" (UiTheme keys). */
     var theme: String
         get() = prefs.getString("theme", "jinky")!!

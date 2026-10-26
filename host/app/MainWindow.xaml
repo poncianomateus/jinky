@@ -202,6 +202,13 @@
                                     <TextBlock Text="Silencia as caixas do PC enquanto a TV joga." Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding AllowTvPower}" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="A TV pode suspender ou desligar este PC" FontWeight="Bold"/>
+                                    <TextBlock Text="Nas Configurações do Jinky na TV (Sistema). Só as TVs pareadas com este PC conseguem pedir."
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding StartWithWindows}">
                                 <StackPanel>
                                     <TextBlock Text="Iniciar com o Windows" FontWeight="Bold"/>

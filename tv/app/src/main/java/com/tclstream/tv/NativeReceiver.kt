@@ -15,7 +15,11 @@ class NativeReceiver : AutoCloseable {
     /** Starts a session with the PC at [ip]: console mode, or just its screen when [desktop]. */
     /** [port]: the PC's streaming port from discovery (several Jinkys can share one PC); 0 = the usual one. */
     fun connect(ip: String, port: Int, desktop: Boolean, game: Boolean = false, pairOnly: Boolean = false) =
-        nativeConnect(handle, ip, port, desktop, game, pairOnly)
+        nativeConnect(handle, ip, port, desktop, game, pairOnly, 0)
+
+    /** "Suspender o PC" ([off] false) / "Desligar o PC": an authenticated request; nothing starts. */
+    fun requestPower(ip: String, port: Int, off: Boolean) =
+        nativeConnect(handle, ip, port, false, false, true, if (off) POWER_OFF else POWER_SLEEP)
     /** Game session: -1 still starting, 0 the game is on screen, 1 a launcher/prompt waits for the player. */
     fun gameReady(): Int = nativeGameReady(handle)
     /** Video arriving right now (last second), kbit/s; the PC adjusts it to the network. */
@@ -25,6 +29,8 @@ class NativeReceiver : AutoCloseable {
     fun closeGame() = nativeCloseGame(handle)
     /** Menu "Mouse": the first controller drives the PC's mouse, or the game again. */
     fun setMouseMode(on: Boolean) = nativeSetMouseMode(handle, on)
+    /** Menu "Capturar tela": the PC saves the picture being streamed (Pictures\Jinky). */
+    fun screenshot() = nativeScreenshot(handle)
     /** Ends the session and goes back to discovering PCs. */
     fun disconnect() = nativeDisconnect(handle)
     fun inSession(): Boolean = nativeInSession(handle)
@@ -105,12 +111,15 @@ class NativeReceiver : AutoCloseable {
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeStart(handle: Long, port: Int): String?
         @JvmStatic external fun nativeStop(handle: Long)
-        @JvmStatic external fun nativeConnect(handle: Long, ip: String, port: Int, desktop: Boolean, game: Boolean, pairOnly: Boolean)
+        @JvmStatic external fun nativeConnect(handle: Long, ip: String, port: Int, desktop: Boolean, game: Boolean, pairOnly: Boolean, power: Int)
+        private const val POWER_SLEEP = 1 shl 12  // tclproto::kHelloPowerSleep
+        private const val POWER_OFF = 1 shl 13    // tclproto::kHelloPowerOff
         @JvmStatic external fun nativeGameReady(handle: Long): Int
         @JvmStatic external fun nativeVideoKbps(handle: Long): Int
         @JvmStatic external fun nativeEndReason(handle: Long): Int
         @JvmStatic external fun nativeCloseGame(handle: Long)
         @JvmStatic external fun nativeSetMouseMode(handle: Long, on: Boolean)
+        @JvmStatic external fun nativeScreenshot(handle: Long)
         @JvmStatic external fun nativeDisconnect(handle: Long)
         @JvmStatic external fun nativeInSession(handle: Long): Boolean
         @JvmStatic external fun nativeHosts(handle: Long): String

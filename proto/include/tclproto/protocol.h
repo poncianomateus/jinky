@@ -52,6 +52,7 @@ enum class PacketType : uint8_t {
     // Network quality
     Nack = 24,       // TV -> host: video fragments that never arrived, to send again (NackMessage)
     NetReport = 25,  // TV -> host: once a second, how the network did (value = NetReport::pack())
+    Screenshot = 27,  // TV -> host: save the picture being streamed (menu "Capturar tela")
     MouseMode = 26,  // TV -> host: value 1 = the first controller works as mouse/keyboard (menu "Mouse"), 0 = back to the game
     // Controllers
     Input = 30,   // receiver -> host: full gamepad state (see InputState)
@@ -87,6 +88,10 @@ inline constexpr uint32_t kHelloGame = 1u << 10;
 // Hello.value flag: pairing only ("Parear um PC"): once the TV is authenticated (the code was
 // confirmed), no session starts. Older PCs ignore it (a session starts and the TV leaves at once).
 inline constexpr uint32_t kHelloPairOnly = 1u << 11;
+// Hello.value flags, with kHelloPairOnly: "Suspender o PC" / "Desligar o PC" on the TV. Honoured
+// only from a paired TV that proved its key (AuthHello); nothing else starts.
+inline constexpr uint32_t kHelloPowerSleep = 1u << 12;
+inline constexpr uint32_t kHelloPowerOff = 1u << 13;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {

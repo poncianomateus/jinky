@@ -31,6 +31,7 @@ class GameMenu(
     private val onExit: () -> Unit,
     private val onAchievements: () -> Unit,
     private val onToggleMouse: () -> Unit,
+    private val onScreenshot: () -> Unit,
 ) : TvPage(context) {
 
     private val shade = View(context).apply {
@@ -52,6 +53,7 @@ class GameMenu(
     private val achievements = tile(R.drawable.ic_trophy, "Conquistas")
     private val statsTile = tile(R.drawable.ic_gauge, "Desempenho")
     private val mouseTile = tile(R.drawable.ic_mouse, "Mouse")
+    private val shotTile = tile(R.drawable.ic_camera, "Capturar")
     private val home = tile(R.drawable.ic_home, "Início")
     private val closeGame = tile(R.drawable.ic_power, "Fechar jogo", danger = true)
     private val exit = tile(R.drawable.ic_exit, "Sair do Jinky")
@@ -81,7 +83,7 @@ class GameMenu(
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(11), 0, dp(11), dp(2)) })
             addView(trackCard, LinearLayout.LayoutParams(dp(260), -2))
         })
-        for (t in listOf(resume, achievements, mouseTile, statsTile, home, closeGame, exit))
+        for (t in listOf(resume, shotTile, achievements, mouseTile, statsTile, home, closeGame, exit))
             tiles.addView(t, LinearLayout.LayoutParams(0, dp(80), 1f).apply { if (tiles.childCount > 0) marginStart = dp(8) })
         band.addView(tiles, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         addView(band, LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(48), 0, dp(48), dp(32)) })
@@ -90,6 +92,7 @@ class GameMenu(
         achievements.setOnClickListener { onAchievements() }
         statsTile.setOnClickListener { onToggleStats() }
         mouseTile.setOnClickListener { onToggleMouse() }
+        shotTile.setOnClickListener { onScreenshot() }
         home.setOnClickListener { onHome() }
         exit.setOnClickListener { onExit() }
         closeGame.setOnClickListener {
