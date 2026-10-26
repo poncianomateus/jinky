@@ -212,7 +212,7 @@
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding RemotePlayOn}" Margin="0,0,0,18">
                                 <StackPanel>
                                     <TextBlock Text="Jogar fora de casa (Tailscale)" FontWeight="Bold"/>
-                                    <TextBlock Text="Com o Tailscale (grátis) neste PC e na TV, na mesma conta, a TV joga deste PC de qualquer lugar. Pareie a TV em casa primeiro. O Windows pede permissão para liberar o firewall."
+                                    <TextBlock Text="Usa o Tailscale (grátis): ao ligar, o Jinky instala e abre o login. Entre com a mesma conta no PC e na TV, e a TV joga deste PC de qualquer lugar. Pareie a TV em casa primeiro."
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                     <TextBlock Text="{Binding RemotePlayText}" Style="{StaticResource Hint}" Foreground="{StaticResource Accent}" Margin="0,4,0,0"/>
                                 </StackPanel>

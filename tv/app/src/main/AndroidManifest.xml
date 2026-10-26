@@ -17,6 +17,7 @@
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.amazon.firetv.youtube" />
         <package android:name="com.google.android.youtube" />
+        <package android:name="com.tailscale.ipn" />
     </queries>
 
     <application

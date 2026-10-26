@@ -228,26 +228,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get => _settings.RemotePlay;
         set
         {
-            if (_settings.RemotePlay == value) return;
-            if (!RemotePlay.AllowThroughFirewall(value) && value)
-            {
-                Add("Jogar fora de casa: o Windows não deu permissão para liberar o firewall", warning: true);
-                Notify();
-                return;
-            }
-            _settings.RemotePlay = value;
-            TvService.AllowTailscale = value;
-            _settings.Save();
-            Notify();
-            Notify(nameof(RemotePlayText));
-            if (value) Add("Jogar fora de casa ligado · " + RemotePlayText);
+            if (_settings.RemotePlay == value || _remoteBusy is not null) return;
+            _ = SetRemotePlay(value);
         }
     }
 
-    public string RemotePlayText => !_settings.RemotePlay ? "" :
+    string? _remoteBusy;  // what "Jogar fora de casa" is doing right now (downloading, installing...)
+    System.Windows.Threading.DispatcherTimer? _remoteWatch;
+
+    async Task SetRemotePlay(bool on)
+    {
+        void Show(string text) { _remoteBusy = text; Notify(nameof(RemotePlayText)); }
+        Show(on ? "Preparando…" : "Desligando…");
+        var error = await RemotePlay.SetupAsync(on, text => System.Windows.Application.Current?.Dispatcher.Invoke(() => Show(text)));
+        _remoteBusy = null;
+        if (error is not null)
+        {
+            Add("Jogar fora de casa: " + error, warning: true);
+        }
+        else
+        {
+            _settings.RemotePlay = on;
+            TvService.AllowTailscale = on;
+            _settings.Save();
+            Add(on ? "Jogar fora de casa ligado" : "Jogar fora de casa desligado");
+        }
+        Notify(nameof(RemotePlayOn));
+        Notify(nameof(RemotePlayText));
+        // Until the user signs in to Tailscale there is no address to show: look again now and then.
+        _remoteWatch?.Stop();
+        if (_settings.RemotePlay && RemotePlay.TailscaleAddress() is null)
+        {
+            _remoteWatch = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+            _remoteWatch.Tick += (_, _) =>
+            {
+                Notify(nameof(RemotePlayText));
+                if (RemotePlay.TailscaleAddress() is not null || !_settings.RemotePlay) _remoteWatch?.Stop();
+            };
+            _remoteWatch.Start();
+        }
+    }
+
+    public string RemotePlayText =>
+        _remoteBusy ?? (!_settings.RemotePlay ? "" :
         RemotePlay.TailscaleAddress() is { } ip
-            ? $"Na TV: Configurações › Sistema › PC pela internet, e digite {ip}"
-            : "Instale o Tailscale neste PC e na TV (mesma conta) e volte aqui para ver o endereço.";
+            ? $"Pronto. Na TV: Configurações › Sistema › PC pela internet, e digite {ip}"
+            : RemotePlay.TailscaleInstalled
+                ? "Entre na sua conta do Tailscale (a página abriu no navegador; ou o ícone do Tailscale perto do relógio). Use a mesma conta na TV."
+                : "O Tailscale não está instalado. Desligue e ligue de novo para instalar.");
 
     public bool KeepBigPicture
     {

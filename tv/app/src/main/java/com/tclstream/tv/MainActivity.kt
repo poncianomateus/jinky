@@ -683,7 +683,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 }.start()
             }
             .setNegativeButton("Cancelar", null)
+            .setNeutralButton(if (tailscaleInstalled()) "Abrir o Tailscale" else "Instalar o Tailscale") { _, _ -> openTailscale() }
             .show()
+    }
+
+    private fun tailscaleInstalled(): Boolean = try {
+        packageManager.getPackageInfo(TAILSCALE, 0)
+        true
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Tailscale on this TV: open it (to sign in), or its page in the TV's store to install it. */
+    private fun openTailscale() {
+        if (tailscaleInstalled()) {
+            packageManager.getLeanbackLaunchIntentForPackage(TAILSCALE)?.let { startActivity(it); return }
+            packageManager.getLaunchIntentForPackage(TAILSCALE)?.let { startActivity(it); return }
+        }
+        // market:// opens Google Play on Google TV and the Amazon Appstore on Fire TV.
+        for (uri in listOf("market://details?id=$TAILSCALE", "https://play.google.com/store/apps/details?id=$TAILSCALE")) {
+            try {
+                startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            } catch (e: Exception) {
+            }
+        }
+        settingsScreen.setNote("Não achei a loja nesta TV. Instale o Tailscale pela loja de apps da TV.")
     }
 
     /** Amigos: the Steam friends list, from Home or the Perfil (Back returns there). */
@@ -1300,6 +1326,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val HELLO_BITRATE_SHIFT = 16  // tclproto::kHelloBitrateShift
         private const val HELLO_SIZE_SHIFT = 24     // tclproto::kHelloSizeShift
         private const val HELLO_HDR = 1 shl 14       // tclproto::kHelloHdr
+        private const val TAILSCALE = "com.tailscale.ipn"
         private const val STATE_DISPLACED = 1
         private const val STATE_ENDED = 2
         private const val STATE_NEED_PAIRING = 3
