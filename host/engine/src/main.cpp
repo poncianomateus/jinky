@@ -3,6 +3,7 @@
 // that says Hello. No pairing/encryption yet: LAN testing only (see docs/ARCHITECTURE.md §9).
 #include <windows.h>
 #include <shellapi.h>
+#include <xinput.h>
 #include <avrt.h>
 #include <timeapi.h>
 
@@ -160,6 +161,52 @@ bool parse_args(int argc, char** argv, Options& o) {
     }
     return o.enc.fps > 0 && o.enc.bitrate_kbps > 0 && o.enc.width % 2 == 0 && o.enc.height % 2 == 0;
 }
+
+// Someone playing on the PC itself (keyboard, mouse, or a controller plugged into the PC): a game
+// the TV left behind is then theirs, and is never paused for the TV.
+class LocalPlayer {
+public:
+    void start() {
+        if (!get_state_) {
+            if (HMODULE x = LoadLibraryW(L"xinput1_4.dll"))
+                get_state_ = reinterpret_cast<decltype(get_state_)>(GetProcAddress(x, "XInputGetState"));
+        }
+        active_ = false;
+        since_ = GetTickCount();
+        for (DWORD i = 0; i < 4; ++i) known_[i] = read(i, packet_[i]);
+    }
+    // About once a second: true once anyone touched the PC since start().
+    bool poll() {
+        if (active_) return true;
+        LASTINPUTINFO li{sizeof(li)};
+        if (GetLastInputInfo(&li) && int32_t(li.dwTime - since_) > 0) active_ = true;
+        for (DWORD i = 0; i < 4 && !active_; ++i) {
+            DWORD packet = 0;
+            if (!read(i, packet)) {
+                known_[i] = false;
+            } else if (!known_[i]) {
+                known_[i] = true;  // just plugged in: its first press counts
+                packet_[i] = packet;
+            } else if (packet != packet_[i]) {
+                active_ = true;
+            }
+        }
+        return active_;
+    }
+
+private:
+    bool read(DWORD slot, DWORD& packet) const {
+        XINPUT_STATE st{};
+        if (!get_state_ || get_state_(slot, &st) != ERROR_SUCCESS) return false;
+        packet = st.dwPacketNumber;
+        return true;
+    }
+    DWORD(WINAPI* get_state_)(DWORD, XINPUT_STATE*) = nullptr;
+    bool active_ = false;
+    DWORD since_ = 0;
+    bool known_[4]{};
+    DWORD packet_[4]{};
+};
 
 }  // namespace
 
@@ -378,6 +425,12 @@ int main(int argc, char** argv) {
     // game that starts fast (Resident Evil 7: the game played behind it).
     steady_clock::time_point launch_wait_until{}, bp_seen_at{};
     bool launch_ready_pending = false;
+    // Quick Resume: the TV continues a paused game (no Big Picture needed), and may let the PC
+    // pause the game itself if the TV vanishes (Wi-Fi gone, TV switched off).
+    bool peer_resume = false, peer_auto_pause = false;
+    uint32_t auto_pause_pid = 0;  // the game to pause if the TV that vanished doesn't come back
+    steady_clock::time_point auto_pause_at{};  // ...by then
+    LocalPlayer local_player;
 
     // --- pairing / authentication ---
     tcl::PairedStore paired;
@@ -470,7 +523,7 @@ int main(int argc, char** argv) {
             if (peer && !peer_desktop) {
                 // Games from the TV's library also start inside Big Picture (it handles Steam's
                 // prompts and controller input in launchers); the TV hides it until the game shows.
-                console.enter(capture.display_name(), true);
+                console.enter(capture.display_name(), !peer_resume);
                 console.set_hdr(peer_hdr);
                 if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
@@ -930,7 +983,13 @@ int main(int argc, char** argv) {
                     // Windows HDR already on: capture it in HDR now (when console mode turns it on,
                     // the display change makes the capture start over by itself).
                     if (peer_hdr != capture.hdr()) capture_reopen = true;
-                    if (peer_game) {
+                    peer_resume = peer_game && (msg->value & tclproto::kHelloResume);
+                    peer_auto_pause = peer_game && (msg->value & tclproto::kHelloAutoPause);
+                    auto_pause_pid = 0;
+                    if (peer_resume) {
+                        TCL_INFO("session", "game session: continuing a paused game");
+                        game_watch.reset();
+                    } else if (peer_game) {
                         TCL_INFO("session", "game session: Big Picture hidden behind the TV's launch screen");
                         game_watch.reset();
                     }
@@ -977,6 +1036,8 @@ int main(int argc, char** argv) {
                     if (pid && pid != last_paused_pid) {
                         last_paused_pid = pid;
                         TCL_INFO("game", "the TV pauses the game (process {})", pid);
+                        // Its last picture, for the TV's "paused" card (before it is minimised).
+                        tcl::save_pause_snapshot(capture.device(), capture.context(), compositor.desktop(), pid);
                         tcl::emit_event("pause", "\"pid\":" + std::to_string(pid));
                     }
                 } else if (msg->type == PacketType::Screenshot) {
@@ -1020,6 +1081,13 @@ int main(int argc, char** argv) {
         if (peer && steady_clock::now() - last_peer_msg > 5s) {
             TCL_WARN("session", "receiver {} silent for 5 s, dropping it", peer->to_string());
             tcl::emit_event("disconnected", "\"reason\":\"silent\"");
+            // "Pausar jogos ao sair": if the TV doesn't come back, the game is paused, not left
+            // running (and heard on the PC's speakers) - unless someone plays it on the PC.
+            if (peer_auto_pause && peer_game && last_paused_pid == 0) auto_pause_pid = game_watch.current_pid();
+            if (auto_pause_pid) {
+                local_player.start();
+                auto_pause_at = steady_clock::now() + 90s;
+            }
             peer.reset();
             if (console.active()) {
                 TCL_INFO("console", "keeping console mode for 90 s in case the TV comes back");
@@ -1027,6 +1095,24 @@ int main(int argc, char** argv) {
             }
             publish_peer(true);
             gamepads.unplug_all();
+        }
+        if (!peer && auto_pause_pid && steady_clock::now() - last_bp_check >= 1s) {
+            last_bp_check = steady_clock::now();
+            if (local_player.poll()) {
+                TCL_INFO("game", "someone is using the PC: the game keeps running");
+                auto_pause_pid = 0;
+            }
+        }
+        if (!peer && auto_pause_pid && steady_clock::now() >= auto_pause_at) {
+            if (tcl::SteamGameWatch::alive(auto_pause_pid) && !local_player.poll()) {
+                // Paused first (the Jinky app minimises it, then freezes it); console mode ends a
+                // moment later, once the game is out of the way.
+                TCL_INFO("game", "the TV did not come back: pausing the game it left (process {})", auto_pause_pid);
+                tcl::save_pause_snapshot(capture.device(), capture.context(), compositor.desktop(), auto_pause_pid);
+                tcl::emit_event("pause", "\"pid\":" + std::to_string(auto_pause_pid));
+                if (console_linger_until != steady_clock::time_point{}) console_linger_until = steady_clock::now() + 3s;
+            }
+            auto_pause_pid = 0;
         }
         if (!peer && console_linger_until != steady_clock::time_point{} && steady_clock::now() >= console_linger_until) {
             TCL_INFO("console", "the TV did not come back");
@@ -1042,7 +1128,7 @@ int main(int argc, char** argv) {
         // closing the game ends the session (the TV goes back to its home screen).
         if (peer && launch_ready_pending) {
             const auto now = steady_clock::now();
-            bool ready = !console.active();  // no Big Picture to wait for
+            bool ready = !console.active() || peer_resume;  // no Big Picture to wait for
             if (!ready && bp_seen_at == steady_clock::time_point{} && tcl::ConsoleMode::big_picture_window_open(true))
                 bp_seen_at = now;
             // Big Picture takes the screen as it appears; give it a moment more before the game.

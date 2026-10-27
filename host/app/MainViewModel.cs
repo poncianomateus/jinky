@@ -532,6 +532,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void OnGameLaunched(string name) => Add($"Abrindo {name} pela TV");
 
+    public void OnNotice(string text) => Add(text);
+
     /// <summary>The game being paused: its Steam id and name (from the TV service).</summary>
     public Func<(int Id, string Name)>? GamePausing { get; set; }
 

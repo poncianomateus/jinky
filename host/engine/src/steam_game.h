@@ -38,13 +38,13 @@ public:
     bool close_game();
     // The game's process (the one followed, else the full-screen program in front), 0 if none.
     uint32_t current_pid() const;
+    static bool alive(uint32_t pid);
 
 private:
     // The full-screen program in front, if it looks like a game (not Steam, the desktop, Jinky).
     static uint32_t game_in_front();
     // A window in front that isn't Big Picture, the desktop or Jinky (launcher, Steam dialog...).
     static void* prompt_in_front();
-    static bool alive(uint32_t pid);
     // Whether a process may be the game: a Steam library game, or started during this session.
     bool could_be_the_game(uint32_t pid) const;
     // game_in_front(), if it could be the game.

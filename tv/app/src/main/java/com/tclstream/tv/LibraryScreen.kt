@@ -45,6 +45,8 @@ data class LibraryGame(
     val minutes: Int = 0,  // time played
     val running: Boolean = false,  // running on the PC right now
     val paused: Boolean = false,  // frozen on the PC, continues where it stopped ("Continuar")
+    val pausedAt: Long = 0,  // when it was paused (Unix ms)
+    val snapshot: Boolean = false,  // the PC has its last picture (/library/snapshot)
 ) {
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 
@@ -765,7 +767,9 @@ class LibraryScreen(
                     g.optBoolean("family"),
                     g.optInt("minutes"),
                     g.optBoolean("running"),
-                    g.optBoolean("paused"))
+                    g.optBoolean("paused"),
+                    g.optLong("pausedAt"),
+                    g.optBoolean("snapshot"))
             }
         }
 
@@ -783,6 +787,10 @@ class LibraryScreen(
 
         /** Asks the PC to start [game] (now, or when the session that is opening begins). */
         fun launch(pcIp: String, port: Int, game: LibraryGame): String? = post(pcIp, port, "/library/launch?id=${game.id}")
+
+        /** A paused game's last picture ([LibraryGame.pausedAt] keeps an older one out of the cache). */
+        fun snapshotUrl(pcIp: String, port: Int, game: LibraryGame) =
+            "http://$pcIp:$port/library/snapshot?id=${game.id}&t=${game.pausedAt}"
 
         /** Closes a game that is paused on the PC (to make room for another). */
         fun closePaused(pcIp: String, port: Int, gameId: Int): String? = post(pcIp, port, "/library/close?id=$gameId")

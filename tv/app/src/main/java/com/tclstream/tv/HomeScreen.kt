@@ -671,7 +671,7 @@ class HomeScreen(
                 pinButton.gone(false)
                 showPinState(g)
                 val hours = Jinky.hours(g.minutes).let { if (it.isEmpty()) "" else "$it no total" }
-                if (g.paused) setMeta(Jinky.AMBER, "Pausado · continua de onde parou", hours)
+                if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
                 else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
                 else setMeta(if (g.state == LibraryGame.State.DOWNLOADING) Jinky.BLUE else null,
                     if (g.state == LibraryGame.State.DOWNLOADING) "Baixando no PC · ${(g.progress * 100).toInt()}%" else lastPlayedText(g.lastPlayed), hours)
@@ -700,6 +700,18 @@ class HomeScreen(
         details.gone(true)
         pinButton.gone(true)
         showHero(null)
+    }
+
+    /** "há 12 min ", "há 3 h "... ("" if unknown). */
+    private fun pausedAgo(at: Long): String {
+        if (at <= 0) return ""
+        val min = (System.currentTimeMillis() - at) / 60_000
+        return when {
+            min < 2 -> "agora há pouco "
+            min < 60 -> "há $min min "
+            min < 60 * 24 -> "há ${min / 60} h "
+            else -> "há ${min / (60 * 24)} dia${if (min >= 2 * 60 * 24) "s" else ""} "
+        }
     }
 
     private fun setMeta(dot: Int?, text: String, hours: String) {
@@ -732,7 +744,13 @@ class HomeScreen(
     private val loadArt = Runnable {
         val g = (selected as? Item.Game)?.game ?: return@Runnable
         val (ip, port) = art ?: return@Runnable
-        if (Jinky.showArt) ArtLoader.load(ip, port, g.id, "hero", 1) { bmp ->
+        // A paused game shows the moment it was paused (like a console's Quick Resume).
+        if (Jinky.showArt && g.paused && g.snapshot) ArtLoader.loadUrl(LibraryScreen.snapshotUrl(ip, port, g), 1) { bmp ->
+            if ((selected as? Item.Game)?.game?.id != g.id) return@loadUrl
+            if (bmp != null) showHero(bmp, "snap/${g.id}/${g.pausedAt}")
+            else ArtLoader.load(ip, port, g.id, "hero", 1) { h -> if ((selected as? Item.Game)?.game?.id == g.id) showHero(h, "hero/${g.id}") }
+        }
+        else if (Jinky.showArt) ArtLoader.load(ip, port, g.id, "hero", 1) { bmp ->
             if ((selected as? Item.Game)?.game?.id == g.id) showHero(bmp, "hero/${g.id}")
         }
         ArtLoader.load(ip, port, g.id, "logo", 1) { bmp ->

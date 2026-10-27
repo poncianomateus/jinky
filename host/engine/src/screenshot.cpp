@@ -69,9 +69,9 @@ bool write_jpeg(const std::wstring& path, const std::vector<uint8_t>& bgra, UINT
     return ok;
 }
 
-}  // namespace
-
-bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image, uint32_t app_id) {
+// Copies [image] (8-bit BGRA) to memory, rows packed at width * 4 bytes.
+bool read_pixels(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image,
+                 std::vector<uint8_t>& pixels, UINT& width, UINT& height) {
     if (!device || !context || !image) return false;
     D3D11_TEXTURE2D_DESC d;
     image->GetDesc(&d);
@@ -91,10 +91,22 @@ bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11T
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
     const UINT stride = d.Width * 4;
-    std::vector<uint8_t> pixels(size_t(stride) * d.Height);
+    pixels.resize(size_t(stride) * d.Height);
     for (UINT y = 0; y < d.Height; ++y)
         memcpy(pixels.data() + size_t(y) * stride, static_cast<const uint8_t*>(m.pData) + size_t(y) * m.RowPitch, stride);
     context->Unmap(staging.Get(), 0);
+    width = d.Width;
+    height = d.Height;
+    return true;
+}
+
+}  // namespace
+
+bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image, uint32_t app_id) {
+    std::vector<uint8_t> pixels;
+    UINT w = 0, h = 0;
+    if (!read_pixels(device, context, image, pixels, w, h)) return false;
+    const UINT stride = w * 4;
 
     // Pictures\Jinky\2026-10-25 14-03-22_1817070.jpg (the app id tells Jinky which game it was).
     const auto folder = pictures_folder() / L"Jinky";
@@ -104,7 +116,6 @@ bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11T
     wchar_t stamp[64];
     wcsftime(stamp, 64, L"%Y-%m-%d %H-%M-%S", &local);
     const std::wstring file = std::wstring(stamp) + L"_" + std::to_wstring(app_id) + L".jpg";
-    const UINT w = d.Width, h = d.Height;
     std::thread([folder, file, pixels = std::move(pixels), w, h, stride]() {
         std::error_code ec;
         std::filesystem::create_directories(folder, ec);
@@ -119,6 +130,25 @@ bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11T
         } else {
             TCL_WARN("capture", "screenshot: could not write the JPEG");
         }
+    }).detach();
+    return true;
+}
+
+bool save_pause_snapshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image, uint32_t pid) {
+    std::vector<uint8_t> pixels;
+    UINT w = 0, h = 0;
+    if (!read_pixels(device, context, image, pixels, w, h)) return false;
+    PWSTR base = nullptr;
+    std::filesystem::path folder;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &base))) folder = std::filesystem::path(base) / L"Jinky" / L"paused";
+    CoTaskMemFree(base);
+    if (folder.empty()) return false;
+    std::thread([folder, pid, pixels = std::move(pixels), w, h]() {
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        const auto path = folder / (std::to_wstring(pid) + L".jpg");
+        if (write_jpeg(path.wstring(), pixels, w, h, w * 4)) TCL_INFO("game", "picture of the paused game saved");
+        else TCL_WARN("game", "could not save the paused game's picture");
     }).detach();
     return true;
 }

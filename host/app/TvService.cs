@@ -40,6 +40,9 @@ public sealed class TvService : IDisposable
     /// <summary>A TV started a game from its Biblioteca (game name).</summary>
     public event Action<string>? GameLaunched;
 
+    /// <summary>Something worth a line in the app's log (a paused game closed to free memory...).</summary>
+    public event Action<string>? Notice;
+
     /// <summary>The game the TV last started or continued (what "Início" pauses).</summary>
     public int CurrentGameId { get; private set; }
     public string CurrentGameName { get; private set; } = "";
@@ -61,7 +64,8 @@ public sealed class TvService : IDisposable
     {
         if (_pending is not { } p) return;
         _pending = null;
-        if (DateTime.UtcNow - p.At <= TimeSpan.FromSeconds(30)) p.Run();
+        // Off the caller's thread: continuing a paused game reads its memory back first (seconds).
+        if (DateTime.UtcNow - p.At <= TimeSpan.FromSeconds(30)) _ = Task.Run(p.Run);
     }
 
     /// <summary>Runs [action] now if a TV session is ready for it, else as soon as it is.</summary>
@@ -224,7 +228,7 @@ public sealed class TvService : IDisposable
                 {
                     var games = SteamLibrary.Games(SteamApiKey?.Invoke());
                     var running = SteamLibrary.RunningGame();
-                    var paused = GamePause.List().Select(p => p.GameId).ToHashSet();
+                    var paused = GamePause.List().GroupBy(p => p.GameId).ToDictionary(p => p.Key, p => p.First());
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
                     {
@@ -246,7 +250,10 @@ public sealed class TvService : IDisposable
                             family = g.Family,
                             minutes = g.Minutes,
                             running = running != 0 && g.Id == running,
-                            paused = paused.Contains(g.Id),
+                            paused = paused.ContainsKey(g.Id),
+                            // When it was paused (Unix ms), and whether its last picture is there.
+                            pausedAt = paused.TryGetValue(g.Id, out var pg) ? new DateTimeOffset(pg.Since).ToUnixTimeMilliseconds() : 0,
+                            snapshot = paused.ContainsKey(g.Id) && GamePause.SnapshotOf(g.Id) is not null,
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
@@ -275,11 +282,19 @@ public sealed class TvService : IDisposable
                             GameLaunched?.Invoke(game.Name + " (continuando de onde parou)");
                             return;
                         }
-                        var paused = GamePause.List();
-                        if (paused.Count >= GamePause.MaxPaused) GamePause.Close(paused[0].GameId);
+                        // Two paused, or the PC's memory short: the oldest paused game closes first.
+                        foreach (var closed in GamePause.MakeRoom()) Notice?.Invoke($"{closed} (pausado) fechado para liberar memória");
                         SteamLibrary.Launch(game.Id);
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
+                }
+                else if (request.Is("GET", "/library/snapshot") && int.TryParse(request.Query("id"), out var snapId) &&
+                         GamePause.SnapshotOf(snapId) is { } snapPath)
+                {
+                    // A paused game's last picture (the TV shows it on the game's card).
+                    var bytes = await File.ReadAllBytesAsync(snapPath);
+                    await Respond(stream, "200 OK", "image/jpeg", bytes.Length);
+                    await stream.WriteAsync(bytes);
                 }
                 else if (request.Is("POST", "/library/close") && int.TryParse(request.Query("id"), out var closeId))
                 {

@@ -226,7 +226,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 pcAddress = { homeHost?.takeIf { it.updatePort > 0 }?.let { it.ip to it.updatePort } },
                 currentPc = { homeHost },
                 onPower = ::requestPower,
-                onAddRemotePc = ::askRemotePc).apply { visibility = View.GONE }
+                onAddRemotePc = ::askRemotePc).apply {
+                    visibility = View.GONE
+                    pausedNames = { pcGames.filter { it.paused }.map { it.name } }
+                }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
             helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
@@ -441,7 +444,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         // HDR10: only with HEVC, and only if this TV shows HDR10 (the PC decides if its screen can).
         val hdr = if (settings.hdr && codecs and 2 != 0 && HardwareInfo.hdr10(this)) HELLO_HDR else 0
-        return codecs or (mbps shl HELLO_BITRATE_SHIFT) or (size shl HELLO_SIZE_SHIFT) or hdr
+        // Quick Resume: continuing a paused game (no Big Picture to wait for), and letting the PC
+        // pause the game itself if this TV vanishes (Wi-Fi gone, switched off).
+        val resume = if (game?.paused == true) HELLO_RESUME else 0
+        val autoPause = if (game != null && settings.pauseGames) HELLO_AUTO_PAUSE else 0
+        return codecs or (mbps shl HELLO_BITRATE_SHIFT) or (size shl HELLO_SIZE_SHIFT) or hdr or resume or autoPause
     }
 
     private fun startReceiver() {
@@ -468,6 +475,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         runCatching { wifiLock?.release() }
+        // Leaving the app in the middle of a game (Home on the remote, the TV switched off): the
+        // PC pauses the game, like a console, instead of leaving it running (and heard) there.
+        if (sessionGame != null && launching == null && settings.pauseGames && receiver?.inSession() == true) {
+            receiver?.pauseGame()
+            sessionGame = null
+            gamesFrom = null  // list the games again on return: it shows under PAUSADOS
+        }
         // TV going to standby / user leaving: release decoder and network, start clean on resume.
         stopReceiver()
         super.onPause()
@@ -1162,7 +1176,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // A launcher or Steam prompt is in front of the game: say why it's showing.
                 if (ready == GAME_NEEDS_ATTENTION) showHint("Uma janela pede sua resposta: o analógico move o mouse, A clica, B cancela, Start confirma.")
             } else {
-                launchScreen.setStatus(if (host == null) "Conectando ao PC…" else "Abrindo o jogo…")
+                launchScreen.setStatus(when {
+                    host == null -> "Conectando ao PC…"
+                    launching?.paused == true -> "Continuando de onde parou…"
+                    else -> "Abrindo o jogo…"
+                })
             }
             return
         }
@@ -1362,6 +1380,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val HELLO_BITRATE_SHIFT = 16  // tclproto::kHelloBitrateShift
         private const val HELLO_SIZE_SHIFT = 24     // tclproto::kHelloSizeShift
         private const val HELLO_HDR = 1 shl 14       // tclproto::kHelloHdr
+        private const val HELLO_RESUME = 1 shl 15    // tclproto::kHelloResume
+        private const val HELLO_AUTO_PAUSE = 1 shl 26  // tclproto::kHelloAutoPause
         private const val TAILSCALE = "com.tailscale.ipn"
         private const val STATE_DISPLACED = 1
         private const val STATE_ENDED = 2

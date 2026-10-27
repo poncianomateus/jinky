@@ -245,7 +245,7 @@ class SettingsScreen(
                     }
                 }
                 toggle("Pausar jogos ao sair (como no Xbox)",
-                    "Início, no menu do jogo, congela o jogo no PC; Continuar volta exatamente de onde parou. Até 2 jogos. Jogos com anti-cheat não são pausados.",
+                    "Sair do jogo (Início no menu, o botão Home do controle remoto ou desligar a TV) congela o jogo no PC; Continuar volta exatamente de onde parou. Até 2 jogos. Jogos online ou com anti-cheat não são pausados.",
                     { settings.pauseGames }) { settings.pauseGames = !settings.pauseGames }
                 toggle("Controle PlayStation no PC (beta)",
                     "DualSense/DualShock vira um DualShock 4 no PC: botões PlayStation nos jogos, touchpad e movimento (TVs com Android 12+). Precisa do Steam Input ligado para jogos sem suporte a PlayStation.",
@@ -349,6 +349,9 @@ class SettingsScreen(
         }
     }
 
+    /** Names of the games paused on the current PC (for the power confirmations). */
+    var pausedNames: () -> List<String> = { emptyList() }
+
     /** "Suspender o PC" / "Desligar o PC": press twice (the second press within 5 s) to confirm. */
     private fun powerRow(off: Boolean) {
         val name = currentPc()?.name?.takeIf { it.isNotBlank() }?.let { "o PC $it" } ?: "o PC"
@@ -369,7 +372,13 @@ class SettingsScreen(
                 powerArmed = off
                 powerArmedUntil = now + 5000
                 val busy = if (pc.status == HomeHost.Status.BUSY) " ${pc.busyWith.ifBlank { "Outra TV" }} está jogando nele agora: o jogo vai fechar." else ""
-                setNote("Aperte de novo para ${if (off) "desligar" else "suspender"} o PC ${pc.name}.$busy")
+                val paused = pausedNames()
+                val pausedNote = when {
+                    paused.isEmpty() -> ""
+                    off -> " ${paused.joinToString(" e ")} ${if (paused.size > 1) "estão pausados e vão" else "está pausado e vai"} fechar (Suspender mantém a pausa)."
+                    else -> " ${paused.joinToString(" e ")} ${if (paused.size > 1) "continuam pausados" else "continua pausado"}."
+                }
+                setNote("Aperte de novo para ${if (off) "desligar" else "suspender"} o PC ${pc.name}.$busy$pausedNote")
             }
         }
     }

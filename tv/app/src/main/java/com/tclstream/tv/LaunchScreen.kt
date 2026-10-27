@@ -33,12 +33,13 @@ class LaunchScreen(context: Context) : TvPage(context) {
         background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
         alpha = 0.25f
     } }
+    private val scrim = View(context).apply { setBackgroundColor(0xB8070A0F.toInt()) }
     private val pulses = mutableListOf<ValueAnimator>()
     private var gameId = -1
 
     init {
         addView(hero, LayoutParams(-1, -1))
-        addView(View(context).apply { setBackgroundColor(0xB8070A0F.toInt()) }, LayoutParams(-1, -1))
+        addView(scrim, LayoutParams(-1, -1))
         val center = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -62,16 +63,24 @@ class LaunchScreen(context: Context) : TvPage(context) {
         title.visibility = View.VISIBLE
         logo.visibility = View.GONE
         hero.setImageDrawable(null)
-        status.text = "Iniciando no PC…"
-        ArtLoader.load(pcIp, port, game.id, "hero", 1) { bmp ->
-            if (gameId != game.id || bmp == null) return@load
+        status.text = if (game.paused) "Continuando de onde parou…" else "Iniciando no PC…"
+        // A paused game: its last picture, lightly dimmed (it comes back exactly there).
+        val resuming = game.paused && game.snapshot
+        scrim.alpha = if (resuming) 0.55f else 1f
+        val showHero = { bmp: android.graphics.Bitmap? ->
+            if (gameId == game.id && bmp != null) {
             hero.setImageBitmap(bmp)
             hero.alpha = 0f
             hero.scaleX = 1.08f; hero.scaleY = 1.08f
             hero.animate().alpha(1f).setDuration(500).start()
             // A very slow drift keeps the screen alive while the game loads.
             hero.animate().scaleX(1f).scaleY(1f).setDuration(9000).setInterpolator(DecelerateInterpolator()).start()
+            }
         }
+        if (resuming) ArtLoader.loadUrl(LibraryScreen.snapshotUrl(pcIp, port, game), 1) { bmp ->
+            if (bmp != null) showHero(bmp) else ArtLoader.load(pcIp, port, game.id, "hero", 1) { showHero(it) }
+        }
+        else ArtLoader.load(pcIp, port, game.id, "hero", 1) { showHero(it) }
         ArtLoader.load(pcIp, port, game.id, "logo", 1) { bmp ->
             if (gameId != game.id || bmp == null) return@load
             logo.setImageBitmap(bmp)

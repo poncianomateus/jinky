@@ -123,6 +123,8 @@ public sealed class Updater
                 UseShellExecute = true,
                 Verb = forMeOnly ? "" : "runas",
             });
+            // The installer closes this Jinky for a moment: paused games stay paused for the new one.
+            GamePause.KeepFrozenOnExit = true;
             return null;
         }
         catch (System.ComponentModel.Win32Exception)

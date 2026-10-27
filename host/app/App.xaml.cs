@@ -93,6 +93,9 @@ public partial class App : Application
         };
         _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
         _tvService.GameLaunched += name => Dispatcher.Invoke(() => _vm.OnGameLaunched(name));
+        _tvService.Notice += text => Dispatcher.Invoke(() => _vm.OnNotice(text));
+        GamePause.ResumedOnPc += name => Dispatcher.Invoke(() => _vm.OnNotice($"{name} continuou aqui no PC"));
+        GamePause.Start();
         _tvService.Streaming = () => Dispatcher.Invoke(() => _vm.IsStreaming);
         _tvService.LaunchReady = () => Dispatcher.Invoke(() => _vm.LaunchReady);
         _tvService.SteamApiKey = () => _settings.SteamApiKey;

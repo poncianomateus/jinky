@@ -99,6 +99,12 @@ inline constexpr uint32_t kHelloPowerOff = 1u << 13;
 // Hello.value flag: "HDR" on the TV (its screen does HDR10 and it decodes HEVC Main10). The PC
 // streams HDR10 when its monitor can do Windows HDR (console mode turns it on for the session).
 inline constexpr uint32_t kHelloHdr = 1u << 14;
+// Hello.value flag, with kHelloGame: the game is one the PC paused ("Continuar"): it is already
+// running, so no Big Picture to wait for (it only came up on top of the game being continued).
+inline constexpr uint32_t kHelloResume = 1u << 15;
+// Hello.value flag, with kHelloGame: "Pausar jogos ao sair" is on. If the TV vanishes (Wi-Fi gone,
+// TV switched off) and doesn't come back, the PC pauses the game instead of leaving it running.
+inline constexpr uint32_t kHelloAutoPause = 1u << 26;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {

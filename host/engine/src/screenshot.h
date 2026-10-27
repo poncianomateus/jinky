@@ -14,4 +14,8 @@ namespace tcl {
 // a capture is from. Returns false if the picture couldn't be read (nothing is saved then).
 bool save_screenshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image, uint32_t app_id);
 
+// A game paused from the TV: its last picture, %LOCALAPPDATA%\Jinky\paused\<pid>.jpg (replaced if
+// there). The TV shows it on the paused game's card, like a console's Quick Resume.
+bool save_pause_snapshot(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* image, uint32_t pid);
+
 }  // namespace tcl
