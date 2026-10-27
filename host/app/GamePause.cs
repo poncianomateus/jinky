@@ -20,11 +20,16 @@ public static class GamePause
 
     [DllImport("ntdll.dll")] static extern int NtSuspendProcess(IntPtr process);
     [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr process);
+    [DllImport("psapi.dll")] static extern bool EmptyWorkingSet(IntPtr process);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc f, IntPtr lParam);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -69,6 +74,9 @@ public static class GamePause
             Thread.Sleep(800);
             using var p = Process.GetProcessById(pid);
             if (NtSuspendProcess(p.Handle) != 0) return "o Windows não deixou pausar o jogo";
+            // "Hibernates" its memory: handed back to Windows. It stays cached (instant to come back)
+            // until the game in front needs the room; only then it goes to the page file.
+            EmptyWorkingSet(p.Handle);
             _list.Add(new Paused(gameId, name, pid, DateTime.Now));
             Save();
         }
@@ -98,15 +106,45 @@ public static class GamePause
             return false;
         }
         Thread.Sleep(200);
-        foreach (var w in Windows(entry.Pid))
+        BringToFront(entry.Pid);
+        // Big Picture (or Steam) can still take the screen a moment later, leaving the TV on Steam
+        // with the game behind it: keep the game in front until it stays there for 2 s.
+        var pid = entry.Pid;
+        _ = Task.Run(async () =>
+        {
+            var steady = 0;
+            for (var i = 0; i < 25 && steady < 5 && Alive(pid); i++)
+            {
+                await Task.Delay(400);
+                GetWindowThreadProcessId(GetForegroundWindow(), out var front);
+                if (front == pid) steady++;
+                else
+                {
+                    steady = 0;
+                    BringToFront(pid);
+                }
+            }
+        });
+        return true;
+    }
+
+    static void BringToFront(int pid)
+    {
+        foreach (var w in Windows(pid))
         {
             ShowWindow(w, SwRestore);
-            // Windows only lets the active program take the front: a tap on Alt counts as user input.
+            // Windows only lets the active program take the front: borrowing its input queue (and a
+            // tap on Alt, which counts as user input) lets the game come forward.
+            var fg = GetForegroundWindow();
+            var fgThread = GetWindowThreadProcessId(fg, out _);
+            var me = GetCurrentThreadId();
+            var attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
             keybd_event(0x12, 0, 0, UIntPtr.Zero);
             keybd_event(0x12, 0, 2, UIntPtr.Zero);
+            BringWindowToTop(w);
             SetForegroundWindow(w);
+            if (attached) AttachThreadInput(me, fgThread, false);
         }
-        return true;
     }
 
     /// <summary>Closes a paused game (to make room for another).</summary>

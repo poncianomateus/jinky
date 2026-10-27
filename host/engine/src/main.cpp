@@ -1003,7 +1003,16 @@ int main(int argc, char** argv) {
                     TCL_INFO("session", "receiver left");
                     tcl::emit_event("disconnected", "\"reason\":\"left\"");
                     peer.reset();
-                    publish_peer();
+                    // A game was just paused: the TV is going to its home screen to pick (or
+                    // continue) another. Console mode stays on meanwhile, or every switch would
+                    // flip the display 60 -> 240 -> 60 Hz (games stutter) and reopen Big Picture
+                    // on top of the game being continued.
+                    const bool paused_one = last_paused_pid != 0 && console.active();
+                    if (paused_one) {
+                        TCL_INFO("console", "game paused: keeping console mode for 2 min for the next game");
+                        console_linger_until = steady_clock::now() + 120s;
+                    }
+                    publish_peer(paused_one);
                     gamepads.unplug_all();
                 }
             }
