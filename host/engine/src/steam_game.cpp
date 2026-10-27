@@ -163,6 +163,11 @@ void* SteamGameWatch::prompt_in_front() {
     return hwnd;
 }
 
+uint32_t SteamGameWatch::current_pid() const {
+    if (game_pid_ && alive(game_pid_)) return game_pid_;
+    return game_candidate();
+}
+
 void SteamGameWatch::launched() {
     if (launched_ == std::chrono::steady_clock::time_point{}) launched_ = std::chrono::steady_clock::now();
 }

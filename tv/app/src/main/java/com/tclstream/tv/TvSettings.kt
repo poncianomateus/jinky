@@ -34,6 +34,11 @@ class TvSettings(context: Context) {
         get() = prefs.getStringSet("remote_pcs", emptySet())!!.toSet()
         set(v) = prefs.edit().putStringSet("remote_pcs", v).apply()
 
+    /** "Pausar ao sair": "Início" in the game menu freezes the game on the PC, to continue it later. */
+    var pauseGames: Boolean
+        get() = prefs.getBoolean("pause_games", true)
+        set(v) = prefs.edit().putBoolean("pause_games", v).apply()
+
     /** "Controle PlayStation no PC (beta)": a DualSense/DualShock becomes a DualShock 4 on the PC. */
     var psPad: Boolean
         get() = prefs.getBoolean("ps_pad", false)

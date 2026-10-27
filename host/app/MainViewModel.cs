@@ -510,6 +510,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     if (!Power.Run(action)) System.Windows.Application.Current?.Dispatcher.Invoke(() => Add("Não deu para " + (off ? "desligar" : "suspender") + " o PC", warning: true));
                 });
                 break;
+            case "pause":
+                // "Início" on the TV: freeze the game to continue later (off the UI thread: it waits
+                // a moment for the game to minimise).
+                if (e.Num("pid") is { } pid && GamePausing is { } pausing)
+                {
+                    var (id, name) = pausing();
+                    _ = Task.Run(() =>
+                    {
+                        var why = GamePause.Pause((int)pid, id, name);
+                        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                            Add(why is null ? $"{name} pausado · continua de onde parou pela TV" : $"{name} não foi pausado: {why}", why is not null));
+                    });
+                }
+                break;
             case "log":
                 if (e.Str("level") == "ERROR") Add(e.Str("msg") ?? "erro", warning: true);
                 break;
@@ -517,6 +531,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public void OnGameLaunched(string name) => Add($"Abrindo {name} pela TV");
+
+    /// <summary>The game being paused: its Steam id and name (from the TV service).</summary>
+    public Func<(int Id, string Name)>? GamePausing { get; set; }
 
     /// <summary>Another Windows user took the screen: this Jinky stepped aside.</summary>
     public void OnAway()

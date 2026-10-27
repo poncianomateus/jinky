@@ -72,6 +72,13 @@ void Receiver::set_mouse_mode(bool on) {
     for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);  // UDP: say it thrice
 }
 
+void Receiver::pause_game() {
+    if (!host_known_ || !session_wanted_) return;
+    uint8_t buf[tclproto::ControlMessage::kSize];
+    tclproto::ControlMessage{PacketType::PauseGame, session_id_, 0}.write(buf);
+    for (int i = 0; i < 3; ++i) sock_.send_to(tclproto::Endpoint{host_ip_, host_port_}, buf);
+}
+
 void Receiver::screenshot() {
     if (!host_known_ || !session_wanted_) return;
     uint8_t buf[tclproto::ControlMessage::kSize];

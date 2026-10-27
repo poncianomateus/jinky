@@ -244,6 +244,9 @@ class SettingsScreen(
                         setNote("Aperte de novo para confirmar. A TV vai pedir um novo pareamento na próxima conexão.")
                     }
                 }
+                toggle("Pausar jogos ao sair (como no Xbox)",
+                    "Início, no menu do jogo, congela o jogo no PC; Continuar volta exatamente de onde parou. Até 2 jogos. Jogos com anti-cheat não são pausados.",
+                    { settings.pauseGames }) { settings.pauseGames = !settings.pauseGames }
                 toggle("Controle PlayStation no PC (beta)",
                     "DualSense/DualShock vira um DualShock 4 no PC: botões PlayStation nos jogos, touchpad e movimento (TVs com Android 12+). Precisa do Steam Input ligado para jogos sem suporte a PlayStation.",
                     { settings.psPad }) {

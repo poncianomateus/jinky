@@ -52,6 +52,8 @@ public:
     void set_mouse_mode(bool on);
     // Menu "Capturar tela": the PC saves the picture being streamed.
     void screenshot();
+    // Menu "Início": the PC freezes the game, to continue it later (like an Xbox's Quick Resume).
+    void pause_game();
     // Menu "Teclado": types [text] on the PC (flags: tclproto::TextMessage::Flags).
     void type_text(const std::string& text, uint8_t flags);
     // A PlayStation pad's touchpad and motion ("Controle PlayStation no PC").

@@ -53,6 +53,7 @@ enum class PacketType : uint8_t {
     Nack = 24,       // TV -> host: video fragments that never arrived, to send again (NackMessage)
     NetReport = 25,  // TV -> host: once a second, how the network did (value = NetReport::pack())
     Screenshot = 27,  // TV -> host: save the picture being streamed (menu "Capturar tela")
+    PauseGame = 29,   // TV -> host: freeze the game in front, to continue later (menu "Início")
     TypeText = 28,    // TV -> host: type this on the PC (menu "Teclado"), see TextMessage  // TV -> host: save the picture being streamed (menu "Capturar tela")
     MouseMode = 26,  // TV -> host: value 1 = the first controller works as mouse/keyboard (menu "Mouse"), 0 = back to the game
     // Controllers

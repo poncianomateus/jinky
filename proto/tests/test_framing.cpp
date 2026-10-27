@@ -166,7 +166,8 @@ static void test_name_and_session_messages() {
     // Every host<->TV control message must survive a round trip (a type left out of the
     // parser is silently dropped by the other side).
     for (auto t : {PacketType::Displaced, PacketType::SessionEnd, PacketType::GameReady, PacketType::CloseGame,
-                   PacketType::NetReport, PacketType::MouseMode, PacketType::Screenshot}) {
+                   PacketType::NetReport, PacketType::MouseMode, PacketType::Screenshot,
+                   PacketType::PauseGame}) {
         uint8_t c[ControlMessage::kSize];
         ControlMessage{t, 3, 1}.write(c);
         auto m = ControlMessage::read(c);

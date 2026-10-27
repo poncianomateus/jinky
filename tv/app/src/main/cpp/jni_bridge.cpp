@@ -176,6 +176,10 @@ JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeSetMouseMode(J
     self(h)->set_mouse_mode(on);
 }
 
+JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativePauseGame(JNIEnv*, jclass, jlong h) {
+    self(h)->pause_game();
+}
+
 JNIEXPORT void JNICALL Java_com_tclstream_tv_NativeReceiver_nativeScreenshot(JNIEnv*, jclass, jlong h) {
     self(h)->screenshot();
 }

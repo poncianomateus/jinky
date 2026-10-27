@@ -84,6 +84,13 @@ public partial class App : Application
 
         TvService.AllowTailscale = _settings.RemotePlay;
         _tvService = new TvService();
+        _vm.GamePausing = () =>
+        {
+            if (_tvService.CurrentGameId != 0) return (_tvService.CurrentGameId, _tvService.CurrentGameName);
+            // Started from Big Picture, not from the TV's library: ask Steam which game it is.
+            var id = SteamLibrary.RunningGame();
+            return (id, SteamLibrary.Games().FirstOrDefault(g => g.Id == id)?.Name ?? "O jogo");
+        };
         _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
         _tvService.GameLaunched += name => Dispatcher.Invoke(() => _vm.OnGameLaunched(name));
         _tvService.Streaming = () => Dispatcher.Invoke(() => _vm.IsStreaming);
@@ -268,6 +275,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // A frozen game must never outlive Jinky frozen: it continues on the PC.
+        GamePause.ResumeAllSilently();
         _tvService?.Dispose();
         _engine?.Dispose();
         _tray?.Dispose();

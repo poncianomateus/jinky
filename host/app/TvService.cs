@@ -40,6 +40,10 @@ public sealed class TvService : IDisposable
     /// <summary>A TV started a game from its Biblioteca (game name).</summary>
     public event Action<string>? GameLaunched;
 
+    /// <summary>The game the TV last started or continued (what "Início" pauses).</summary>
+    public int CurrentGameId { get; private set; }
+    public string CurrentGameName { get; private set; } = "";
+
     /// <summary>Whether a TV is streaming right now; games can only be started from a TV then.</summary>
     public Func<bool>? Streaming { get; set; }
 
@@ -220,6 +224,7 @@ public sealed class TvService : IDisposable
                 {
                     var games = SteamLibrary.Games(SteamApiKey?.Invoke());
                     var running = SteamLibrary.RunningGame();
+                    var paused = GamePause.List().Select(p => p.GameId).ToHashSet();
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
                     {
@@ -241,6 +246,7 @@ public sealed class TvService : IDisposable
                             family = g.Family,
                             minutes = g.Minutes,
                             running = running != 0 && g.Id == running,
+                            paused = paused.Contains(g.Id),
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
@@ -260,9 +266,25 @@ public sealed class TvService : IDisposable
                     if (game is null) await Respond(stream, "404 Not Found", "text/plain", 0);
                     else await RespondText(stream, RunInSession(() =>
                     {
+                        CurrentGameId = game.Id;
+                        CurrentGameName = game.Name;
+                        // A paused game continues where it stopped; any other starts through Steam
+                        // (and, with two already paused, the oldest makes room).
+                        if (GamePause.Resume(game.Id))
+                        {
+                            GameLaunched?.Invoke(game.Name + " (continuando de onde parou)");
+                            return;
+                        }
+                        var paused = GamePause.List();
+                        if (paused.Count >= GamePause.MaxPaused) GamePause.Close(paused[0].GameId);
                         SteamLibrary.Launch(game.Id);
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
+                }
+                else if (request.Is("POST", "/library/close") && int.TryParse(request.Query("id"), out var closeId))
+                {
+                    // A paused game closed from the TV (to make room for another).
+                    await RespondText(stream, GamePause.Close(closeId) ? "ok" : "not found");
                 }
                 else if (request.Is("GET", "/library/details") && int.TryParse(request.Query("id"), out var detailsId))
                 {

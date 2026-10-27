@@ -36,6 +36,8 @@ public:
     // the desktop or Jinky). Returns true if it did. Repeated requests (the TV says it thrice)
     // are ignored while the game is closing.
     bool close_game();
+    // The game's process (the one followed, else the full-screen program in front), 0 if none.
+    uint32_t current_pid() const;
 
 private:
     // The full-screen program in front, if it looks like a game (not Steam, the desktop, Jinky).

@@ -505,6 +505,7 @@ int main(int argc, char** argv) {
     // Controllers: the TV's gamepads become virtual Xbox 360 pads; vibration goes back to the TV.
     tcl::GamepadHub gamepads;
     auto last_power_request = steady_clock::now() - 1h;  // "Suspender/Desligar o PC" from a TV
+    uint32_t last_paused_pid = 0;                         // "Início": the game last paused
     uint32_t last_text_seq = 0;                           // "Teclado": the last text typed
     auto last_screenshot = steady_clock::now() - 1h;     // "Capturar tela" from a TV
     std::atomic<bool> manual_mouse{false};  // menu "Mouse" on the TV
@@ -922,6 +923,7 @@ int main(int argc, char** argv) {
                     if (peer_desktop) TCL_INFO("session", "desktop mode: showing the PC as it is (no console mode)");
                     peer_game = !peer_desktop && (msg->value & tclproto::kHelloGame);
                     // HDR: asked by the TV, and only with HEVC (Main10).
+                    last_paused_pid = 0;  // a game continued in this session can be paused again
                     peer_hdr = (msg->value & tclproto::kHelloHdr) && opt.enc.codec == tcl::VideoCodec::HEVC;
                     if (peer_hdr) TCL_INFO("session", "the TV asks for HDR");
                     capture.want_hdr(peer_hdr);
@@ -967,6 +969,15 @@ int main(int argc, char** argv) {
                         } else {
                             TCL_WARN("encoder", "{}", encoder.error());
                         }
+                    }
+                } else if (msg->type == PacketType::PauseGame) {
+                    // "Início" on the TV: the Jinky app freezes the game, to continue later. The TV
+                    // says it thrice; one is enough.
+                    const uint32_t pid = game_watch.current_pid();
+                    if (pid && pid != last_paused_pid) {
+                        last_paused_pid = pid;
+                        TCL_INFO("game", "the TV pauses the game (process {})", pid);
+                        tcl::emit_event("pause", "\"pid\":" + std::to_string(pid));
                     }
                 } else if (msg->type == PacketType::Screenshot) {
                     // The TV says it thrice (UDP): one picture per request burst.

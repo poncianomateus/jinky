@@ -437,10 +437,11 @@ class HomeScreen(
         sizeAnims.values.forEach { it.cancel() }
         sizeAnims.clear()
         val installed = games.orEmpty()
-        val running = installed.firstOrNull { it.running }
+        val paused = installed.filter { it.paused }
+        val running = installed.firstOrNull { it.running && !it.paused }
         val pinnedIds = pins.pinned
-        val pinned = pinnedIds.mapNotNull { id -> installed.firstOrNull { it.id == id } }.filter { it != running }
-        val recent = installed.filter { it != running && it !in pinned }.take(RECENT)
+        val pinned = pinnedIds.mapNotNull { id -> installed.firstOrNull { it.id == id } }.filter { it != running && !it.paused }
+        val recent = installed.filter { it != running && it !in pinned && !it.paused }.take(RECENT)
         val list = mutableListOf<Pair<Item, View>>()
 
         fun section(label: String?, part: List<Item>, divider: Boolean) {
@@ -473,9 +474,10 @@ class HomeScreen(
             rowItems.addView(column, LinearLayout.LayoutParams(-2, -2).apply { if (!divider && rowItems.childCount > 0) marginStart = dp(GAP) })
         }
 
-        if (running != null) section(null, listOf(Item.Game(running)), divider = false)
-        section("FIXADOS", pinned.map { Item.Game(it) }, divider = false)
-        section("RECENTES", recent.map { Item.Game(it) }, divider = pinned.isNotEmpty() || running != null)
+        section("PAUSADOS", paused.map { Item.Game(it) }, divider = false)
+        if (running != null) section(null, listOf(Item.Game(running)), divider = paused.isNotEmpty())
+        section("FIXADOS", pinned.map { Item.Game(it) }, divider = paused.isNotEmpty() && running == null)
+        section("RECENTES", recent.map { Item.Game(it) }, divider = pinned.isNotEmpty() || running != null || paused.isNotEmpty())
         section(null, buildList {
             if (installed.isNotEmpty()) add(Item.Library)
             add(Item.BigPicture)
@@ -513,7 +515,10 @@ class HomeScreen(
                         }
                     }
                 }
-                if (item.game.running) addView(runningBadge(), LayoutParams(-2, dp(17), Gravity.BOTTOM or Gravity.START).apply {
+                if (item.game.paused) addView(pausedBadge(), LayoutParams(-2, dp(17), Gravity.BOTTOM or Gravity.START).apply {
+                    setMargins(dp(6), 0, 0, dp(6))
+                })
+                else if (item.game.running) addView(runningBadge(), LayoutParams(-2, dp(17), Gravity.BOTTOM or Gravity.START).apply {
                     setMargins(dp(6), 0, 0, dp(6))
                 })
             }
@@ -621,6 +626,19 @@ class HomeScreen(
             LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
     }
 
+    private fun pausedBadge() = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(6), 0, dp(7), 0)
+        background = Jinky.rounded(Jinky.ink(0xDB), dp(9).toFloat())
+        // Two small bars: the pause sign.
+        repeat(2) { i ->
+            addView(View(context).apply { setBackgroundColor(Jinky.AMBER) },
+                LinearLayout.LayoutParams(dp(2), dp(7)).apply { marginEnd = if (i == 0) dp(2) else dp(4) })
+        }
+        addView(text(6.5f, Jinky.TEXT, bold = true).apply { text = "PAUSADO" })
+    }
+
     private fun runningBadge() = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -648,12 +666,13 @@ class HomeScreen(
         when (item) {
             is Item.Game -> {
                 val g = item.game
-                primary.text = if (g.running) "Continuar" else "Jogar"
+                primary.text = if (g.running || g.paused) "Continuar" else "Jogar"
                 details.gone(false)
                 pinButton.gone(false)
                 showPinState(g)
                 val hours = Jinky.hours(g.minutes).let { if (it.isEmpty()) "" else "$it no total" }
-                if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
+                if (g.paused) setMeta(Jinky.AMBER, "Pausado · continua de onde parou", hours)
+                else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
                 else setMeta(if (g.state == LibraryGame.State.DOWNLOADING) Jinky.BLUE else null,
                     if (g.state == LibraryGame.State.DOWNLOADING) "Baixando no PC · ${(g.progress * 100).toInt()}%" else lastPlayedText(g.lastPlayed), hours)
                 if (changed) {

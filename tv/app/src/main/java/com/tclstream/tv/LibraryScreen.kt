@@ -44,6 +44,7 @@ data class LibraryGame(
     val family: Boolean = false,  // shared by another member of the Steam family
     val minutes: Int = 0,  // time played
     val running: Boolean = false,  // running on the PC right now
+    val paused: Boolean = false,  // frozen on the PC, continues where it stopped ("Continuar")
 ) {
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 
@@ -763,7 +764,8 @@ class LibraryScreen(
                     g.optDouble("progress", 1.0),
                     g.optBoolean("family"),
                     g.optInt("minutes"),
-                    g.optBoolean("running"))
+                    g.optBoolean("running"),
+                    g.optBoolean("paused"))
             }
         }
 
@@ -781,6 +783,9 @@ class LibraryScreen(
 
         /** Asks the PC to start [game] (now, or when the session that is opening begins). */
         fun launch(pcIp: String, port: Int, game: LibraryGame): String? = post(pcIp, port, "/library/launch?id=${game.id}")
+
+        /** Closes a game that is paused on the PC (to make room for another). */
+        fun closePaused(pcIp: String, port: Int, gameId: Int): String? = post(pcIp, port, "/library/close?id=$gameId")
 
         /** Asks the PC to install [game] (Steam shows its confirmation in the session). */
         fun install(pcIp: String, port: Int, game: LibraryGame): String? = post(pcIp, port, "/library/install?id=${game.id}")

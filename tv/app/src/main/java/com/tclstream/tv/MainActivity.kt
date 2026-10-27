@@ -344,10 +344,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     hideMenu()
                 },
                 onHome = {
-                    // Ends the session (the PC goes back to normal) and shows the home screen.
+                    // Ends the session (the PC goes back to normal) and shows the home screen. A game
+                    // from the library is frozen on the PC first, to continue it later ("Continuar").
+                    val game = sessionGame
+                    if (game != null && settings.pauseGames) {
+                        receiver?.pauseGame()
+                        showHint("${game.name} pausado. Continue de onde parou pelo Início.")
+                        ui.postDelayed(hideHint, 5000)
+                        // The PC freezes it a moment after: list the games again to show it paused.
+                        ui.postDelayed({ gamesFrom = null }, 2500)
+                    }
                     stopLaunching()
                     sessionGame = null
-                    receiver?.disconnect()
+                    // A short wait so the pause request reaches the PC before the session ends.
+                    if (game != null && settings.pauseGames) ui.postDelayed({ receiver?.disconnect() }, 300)
+                    else receiver?.disconnect()
                     hideMenu()
                 },
                 onExit = { finish() },
@@ -712,6 +723,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settingsScreen.setNote("Não achei a loja nesta TV. Instale o Tailscale pela loja de apps da TV.")
     }
 
+    /** "Para abrir X, feche um jogo pausado": the choice, then the game. */
+    private fun askWhichPausedToClose(host: HomeHost, game: LibraryGame, paused: List<LibraryGame>) {
+        val names = paused.map { "Fechar ${it.name}" }.toTypedArray()
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Dois jogos já estão pausados")
+            .setItems(names) { _, which ->
+                val close = paused[which]
+                Thread {
+                    LibraryScreen.closePaused(host.ip, host.updatePort, close.id)
+                    ui.post {
+                        pcGames = pcGames.map { if (it.id == close.id) it.copy(paused = false) else it }
+                        playGame(host, game)
+                    }
+                }.start()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
     /** Amigos: the Steam friends list, from Home or the Perfil (Back returns there). */
     private fun openFriends() {
         val host = homeHost ?: return
@@ -764,6 +794,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      */
     private fun playGame(host: HomeHost, game: LibraryGame) {
         if (host.status != HomeHost.Status.READY) return
+        // Two games are already paused: one has to close to make room (the PC's video memory).
+        val paused = pcGames.filter { it.paused && it.id != game.id }
+        if (!game.paused && paused.size >= 2) {
+            askWhichPausedToClose(host, game, paused)
+            return
+        }
         launching = game
         launchedAt = android.os.SystemClock.elapsedRealtime()
         sessionTitle = game.name

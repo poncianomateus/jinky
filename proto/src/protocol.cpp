@@ -36,7 +36,7 @@ bool is_control(PacketType t) {
            t == PacketType::Bye || t == PacketType::LatencyReport || t == PacketType::Displaced ||
            t == PacketType::SessionEnd || t == PacketType::Discover || t == PacketType::GameReady ||
            t == PacketType::CloseGame || t == PacketType::NetReport || t == PacketType::MouseMode ||
-           t == PacketType::Screenshot;
+           t == PacketType::Screenshot || t == PacketType::PauseGame;
 }
 
 // Upper bound on a single encoded frame; anything larger is treated as corrupt.
