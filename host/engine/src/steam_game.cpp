@@ -163,6 +163,42 @@ void* SteamGameWatch::prompt_in_front() {
     return hwnd;
 }
 
+bool SteamGameWatch::bring_game_forward() const {
+    struct Find {
+        const SteamGameWatch* self;
+        HWND found = nullptr;
+    } find{this};
+    EnumWindows(
+        [](HWND hwnd, LPARAM p) -> BOOL {
+            auto& f = *reinterpret_cast<Find*>(p);
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || GetWindow(hwnd, GW_OWNER) || big_picture(hwnd)) return TRUE;
+            DWORD pid = 0;
+            if (shell_program(window_program(hwnd, &pid)) || !f.self->could_be_the_game(pid)) return TRUE;
+            RECT r{};
+            MONITORINFO mi{sizeof(mi)};
+            if (!GetWindowRect(hwnd, &r) || !GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) return TRUE;
+            const double win = double(r.right - r.left) * (r.bottom - r.top);
+            const double mon = double(mi.rcMonitor.right - mi.rcMonitor.left) * (mi.rcMonitor.bottom - mi.rcMonitor.top);
+            if (mon <= 0 || win < 0.8 * mon) return TRUE;
+            f.found = hwnd;
+            return FALSE;
+        },
+        reinterpret_cast<LPARAM>(&find));
+    const HWND game = find.found;
+    const HWND front = GetForegroundWindow();
+    if (!game || game == front) return false;
+    // Windows only lets the program in front hand the focus over: borrow its input queue.
+    const DWORD front_thread = front ? GetWindowThreadProcessId(front, nullptr) : 0;
+    const DWORD self = GetCurrentThreadId();
+    const bool attached = front_thread && front_thread != self && AttachThreadInput(self, front_thread, TRUE);
+    ShowWindow(game, SW_RESTORE);
+    BringWindowToTop(game);
+    const bool ok = SetForegroundWindow(game);
+    if (attached) AttachThreadInput(self, front_thread, FALSE);
+    if (ok) TCL_INFO("game", "the game was behind another window: brought it to the front");
+    return ok;
+}
+
 void SteamGameWatch::steam_busy() { busy_until_ = std::chrono::steady_clock::now() + std::chrono::seconds(5); }
 
 void SteamGameWatch::steam_waiting() { steam_waiting_ = true; }
@@ -252,11 +288,13 @@ SteamGameWatch::Event SteamGameWatch::poll() {
         return Event::NeedsAttention;
     }
     if (!ready_ && !attention_ && !in_front && launched_ != steady_clock::time_point{} && now - launched_ > 5s) {
+        // The game may just be behind it: bring it forward first.
+        if (bring_game_forward()) return Event::None;
         void* prompt = prompt_in_front();
-        if (prompt != prompt_) {
+        if (prompt != prompt_ || now < busy_until_) {
             prompt_ = prompt;
-            prompt_since_ = now;
-        } else if (prompt && now - prompt_since_ >= 3s) {
+            prompt_since_ = now;  // Steam still working: whatever is in front can wait
+        } else if (prompt && now - prompt_since_ >= 12s) {
             attention_ = true;
             const HWND hwnd = HWND(prompt);
             TCL_INFO("game", "a window is waiting for the player in front of the game: showing it on the TV ({})",
@@ -279,9 +317,10 @@ SteamGameWatch::Event SteamGameWatch::poll() {
             else TCL_INFO("game", "a full-screen program is running (non-Steam game)");
         }
         gone_since_ = {};
-        // Reveal the picture once the game is in front; after 40 s show whatever is there (a
-        // launcher waiting for a click, an update dialog...).
-        if (!ready_ && (in_front || now - running_since_ > 40s)) {
+        // Reveal the picture once the game is in front; only after 75 s without it show whatever
+        // is there (a launcher waiting for a click...): a console keeps its loading screen.
+        if (!ready_ && !in_front && now - running_since_ > 3s) bring_game_forward();
+        if (!ready_ && (in_front || (now - running_since_ > 75s && now >= busy_until_))) {
             ready_ = true;
             if (in_front) game_pid_ = in_front;
             return Event::Ready;
@@ -291,8 +330,8 @@ SteamGameWatch::Event SteamGameWatch::poll() {
     if (!started_) {
         // Never started (failed launch, Steam asking something): don't keep the TV waiting forever.
         // While Steam reports work on the launch (an update can take minutes), keep waiting.
-        if (now < busy_until_) began_ = std::max(began_, now - 50s);
-        if (!ready_ && now - began_ > 60s) {
+        if (now < busy_until_) began_ = std::max(began_, now - 110s);
+        if (!ready_ && now - began_ > 120s) {
             ready_ = true;
             return Event::Ready;
         }

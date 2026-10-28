@@ -59,6 +59,9 @@ private:
     bool could_be_the_game(uint32_t pid) const;
     // game_in_front(), if it could be the game.
     uint32_t game_candidate() const;
+    // The game's big window is up but something else is in front of it: bring the game forward,
+    // like a console (the TV keeps its launch screen instead of showing the PC). True if it did.
+    bool bring_game_forward() const;
 
     bool started_ = false;
     bool ready_ = false;
