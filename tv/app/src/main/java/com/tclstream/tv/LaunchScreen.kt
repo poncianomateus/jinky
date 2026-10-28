@@ -34,6 +34,9 @@ class LaunchScreen(context: Context) : TvPage(context) {
         alpha = 0.25f
     } }
     private val scrim = View(context).apply { setBackgroundColor(0xB8070A0F.toInt()) }
+    // What Steam is doing to start the game (Jinky Shell): an update's live bar and its numbers.
+    private val bar = DownloadBar(context, 4f).apply { visibility = View.GONE }
+    private val detail = mono(11f, 0xFF9AA6B8.toInt()).apply { gravity = Gravity.CENTER; visibility = View.GONE }
     private val pulses = mutableListOf<ValueAnimator>()
     private var gameId = -1
 
@@ -52,6 +55,8 @@ class LaunchScreen(context: Context) : TvPage(context) {
                 }
             }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(40) })
             addView(status, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
+            addView(bar, LinearLayout.LayoutParams(dp(420), dp(8)).apply { topMargin = dp(18) })
+            addView(detail, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
         }
         addView(center, LayoutParams(-2, -2, Gravity.CENTER))
     }
@@ -97,6 +102,25 @@ class LaunchScreen(context: Context) : TvPage(context) {
 
     fun setStatus(text: String) {
         status.text = text
+        bar.visibility = View.GONE
+        detail.visibility = View.GONE
+    }
+
+    /**
+     * Steam's launch step from the PC: "Sincronizando os saves com a nuvem", or an update with
+     * its percent (a live bar) and time left.
+     */
+    fun setSteamState(text: String, percent: Int, eta: Int) {
+        status.text = "$text…"
+        val hasBar = percent in 0..100
+        if (hasBar && bar.visibility != View.VISIBLE) {
+            bar.visibility = View.VISIBLE
+            bar.setProgress(percent / 100f, animate = false)
+        } else if (hasBar) bar.setProgress(percent / 100f)
+        else bar.visibility = View.GONE
+        val info = listOfNotNull(if (hasBar) "$percent%" else null, Jinky.eta(eta).ifEmpty { null }).joinToString(" · ")
+        detail.text = info
+        detail.visibility = if (info.isEmpty()) View.GONE else View.VISIBLE
     }
 
     /** Fades out to reveal the game. */

@@ -43,6 +43,9 @@ public sealed class TvService : IDisposable
     /// <summary>Something worth a line in the app's log (a paused game closed to free memory...).</summary>
     public event Action<string>? Notice;
 
+    /// <summary>A line for the engine (e.g. "launch-busy"), set by the app.</summary>
+    public Action<string>? EngineCommand { get; set; }
+
     /// <summary>The game the TV last started or continued (what "Início" pauses).</summary>
     public int CurrentGameId { get; private set; }
     public string CurrentGameName { get; private set; } = "";
@@ -309,6 +312,8 @@ public sealed class TvService : IDisposable
                             Notices.Post("paused", closed, "Estava pausado e foi fechado para liberar memória");
                         }
                         SteamLibrary.Launch(game.Id);
+                        // Jinky Shell: follow Steam's launch steps for the TV's launch screen.
+                        LaunchWatch.Start(game.Id, EngineCommand);
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
                 }
@@ -424,6 +429,23 @@ public sealed class TvService : IDisposable
                 else if (request.Is("POST", "/captures/delete"))
                 {
                     await RespondText(stream, Captures.Delete(request.Query("name")) ? "ok" : "not found");
+                }
+                else if (request.Is("GET", "/launch") && int.TryParse(request.Query("id"), out var launchId))
+                {
+                    // What Steam is doing to start the game the TV is waiting for (asked every
+                    // second on the launch screen): "Sincronizando os saves com a nuvem", an
+                    // update's percent, or that it waits for the player.
+                    var st = LaunchWatch.Of(launchId);
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        known = st is not null,
+                        text = st?.Text ?? "",
+                        percent = st?.Percent ?? -1,
+                        eta = st?.Eta ?? -1,
+                        waiting = st?.Waiting ?? false,
+                        running = st?.Running ?? false,
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if (request.Is("GET", "/downloads"))
                 {

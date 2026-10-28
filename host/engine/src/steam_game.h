@@ -30,6 +30,16 @@ public:
     // was sent): the controller then works as mouse/keyboard for it (PadMouse).
     bool waiting_for_player() const { return attention_ && !ready_; }
 
+    // The Jinky app sees Steam still working on the launch (updating the game, syncing the
+    // cloud, processing shaders): keep waiting for the game instead of giving up at 60 s.
+    void steam_busy();
+    // Steam waits for the player (a launch option, an agreement, a conflict): show it now.
+    void steam_waiting();
+
+    // Steam's main window ("Steam", the library) in front during a launch without Big Picture:
+    // minimised, so it never sits over the game or passes for a prompt. True if it did.
+    static bool minimize_steam_window();
+
     // The Steam app running now (0 = none), as Steam itself reports it.
     static uint32_t running_app_id();
     // Quits the game (the one being followed, else the full-screen program in front; never Steam,
@@ -54,6 +64,8 @@ private:
     bool ready_ = false;
     bool attention_ = false;
     bool closing_ = false;    // close_game() ended it: don't wait for Steam to notice
+    bool steam_waiting_ = false;  // Steam asked for the player (steam_waiting())
+    std::chrono::steady_clock::time_point busy_until_{};  // Steam working on the launch until then
     uint32_t game_pid_ = 0;   // the game's process once it was seen full screen
     uint64_t began_wall_ = 0;  // session start as FILETIME (processes older than this aren't the game)
     void* prompt_ = nullptr;  // the waiting window and since when it has been in front

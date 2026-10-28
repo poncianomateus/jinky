@@ -189,6 +189,13 @@
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding GamesInBigPicture}" IsEnabled="{Binding ConsoleMode}" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="Abrir jogos pelo Big Picture" FontWeight="Bold"/>
+                                    <TextBlock Text="Desligado (padrão): o jogo escolhido na TV abre direto, mais rápido, e a TV mostra o que a Steam está fazendo (atualização, nuvem, shaders). Ligado: como antes, dentro do Big Picture."
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                             <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding KeepBigPicture}" IsEnabled="{Binding ConsoleMode}" Margin="0,0,0,18">
                                 <StackPanel>
                                     <TextBlock Text="Deixar o Big Picture aberto" FontWeight="Bold"/>

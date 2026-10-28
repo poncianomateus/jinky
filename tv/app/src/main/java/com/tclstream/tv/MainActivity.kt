@@ -876,6 +876,35 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }.start()
     }
 
+    // "Jinky Shell": what Steam is doing to start the game on the launch screen (GET /launch).
+    data class SteamLaunch(val text: String, val percent: Int, val eta: Int, val waiting: Boolean)
+    private var launchState: Pair<Int, SteamLaunch>? = null
+    private var launchPolling = false
+    private var lastLaunchPoll = 0L
+
+    private fun pollLaunch() {
+        val host = homeHost ?: return
+        val game = launching ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (launchPolling || game.paused || host.updatePort == 0 || now - lastLaunchPoll < 1000) return
+        lastLaunchPoll = now
+        launchPolling = true
+        Thread {
+            val state = try {
+                val c = java.net.URL("http://${host.ip}:${host.updatePort}/launch?id=${game.id}").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 3000
+                c.readTimeout = 4000
+                val o = org.json.JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+                c.disconnect()
+                if (o.optBoolean("known")) SteamLaunch(o.optString("text"), o.optInt("percent", -1), o.optInt("eta", -1), o.optBoolean("waiting")) else null
+            } catch (e: Exception) { null }  // an older PC: just "Abrindo o jogo…"
+            ui.post {
+                launchPolling = false
+                launchState = if (state != null) game.id to state else null
+            }
+        }.start()
+    }
+
     private var noticesAfter = -1L
     private var noticesFrom: String? = null  // the PC whose notice ids [noticesAfter] counts
     private var noticePolling = false
@@ -1317,11 +1346,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // A launcher or Steam prompt is in front of the game: say why it's showing.
                 if (ready == GAME_NEEDS_ATTENTION) showHint("Uma janela pede sua resposta: o analógico move o mouse, A clica, B cancela, Start confirma.")
             } else {
-                launchScreen.setStatus(when {
+                val steam = launchState?.takeIf { it.first == launching?.id }?.second
+                if (host != null && launching?.paused != true && steam != null && steam.text.isNotEmpty())
+                    launchScreen.setSteamState(steam.text, steam.percent, steam.eta)
+                else launchScreen.setStatus(when {
                     host == null -> "Conectando ao PC…"
                     launching?.paused == true -> "Continuando de onde parou…"
                     else -> "Abrindo o jogo…"
                 })
+                pollLaunch()
             }
             return
         }

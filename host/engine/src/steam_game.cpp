@@ -163,6 +163,24 @@ void* SteamGameWatch::prompt_in_front() {
     return hwnd;
 }
 
+void SteamGameWatch::steam_busy() { busy_until_ = std::chrono::steady_clock::now() + std::chrono::seconds(5); }
+
+void SteamGameWatch::steam_waiting() { steam_waiting_ = true; }
+
+bool SteamGameWatch::minimize_steam_window() {
+    HWND hwnd = GetForegroundWindow();
+    if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd) || big_picture(hwnd)) return false;
+    const auto program = window_program(hwnd);
+    const bool steam = program.size() >= 20 && (program.ends_with(L"\\steamwebhelper.exe") || program.ends_with(L"\\steam.exe"));
+    if (!steam || window_title(hwnd) != L"Steam") return false;
+    // The library window is big; Steam's dialogs (also titled "Steam" at times) are small.
+    RECT r{};
+    if (!GetWindowRect(hwnd, &r) || r.right - r.left < 900 || r.bottom - r.top < 500) return false;
+    ShowWindow(hwnd, SW_MINIMIZE);
+    TCL_INFO("game", "Steam's main window was in front of the game: minimised");
+    return true;
+}
+
 uint32_t SteamGameWatch::current_pid() const {
     if (game_pid_ && alive(game_pid_)) return game_pid_;
     return game_candidate();
@@ -196,7 +214,8 @@ bool SteamGameWatch::close_game() {
 }
 
 void SteamGameWatch::reset() {
-    started_ = ready_ = attention_ = closing_ = false;
+    started_ = ready_ = attention_ = closing_ = steam_waiting_ = false;
+    busy_until_ = {};
     game_pid_ = 0;
     prompt_ = nullptr;
     prompt_since_ = {};
@@ -226,6 +245,12 @@ SteamGameWatch::Event SteamGameWatch::poll() {
     // Something other than the game waiting in front (launcher, EULA, Steam prompt, another
     // store's app): after 3 s in front, show it on the TV so the player can deal with it.
     // Only once the game was asked to start, with a moment for it to come up.
+    // Steam itself says it waits for the player: no need to wait 3 s to be sure.
+    if (!ready_ && !attention_ && !in_front && steam_waiting_) {
+        attention_ = true;
+        TCL_INFO("game", "Steam waits for the player before starting the game: showing it on the TV");
+        return Event::NeedsAttention;
+    }
     if (!ready_ && !attention_ && !in_front && launched_ != steady_clock::time_point{} && now - launched_ > 5s) {
         void* prompt = prompt_in_front();
         if (prompt != prompt_) {
@@ -265,6 +290,8 @@ SteamGameWatch::Event SteamGameWatch::poll() {
     }
     if (!started_) {
         // Never started (failed launch, Steam asking something): don't keep the TV waiting forever.
+        // While Steam reports work on the launch (an update can take minutes), keep waiting.
+        if (now < busy_until_) began_ = std::max(began_, now - 50s);
         if (!ready_ && now - began_ > 60s) {
             ready_ = true;
             return Event::Ready;

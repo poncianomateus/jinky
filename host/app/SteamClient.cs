@@ -128,7 +128,7 @@ public static class SteamClient
     /// Runs one expression in Steam's page (read-only queries) and returns its string result; null
     /// when the reading is off or Steam isn't there. Quiet: callers poll it.
     /// </summary>
-    public static string? Run(string expression)
+    public static string? Run(string expression, bool awaitPromise = false)
     {
         try
         {
@@ -137,7 +137,7 @@ public static class SteamClient
                 .Where(p => p.TryGetProperty("title", out var t) && t.GetString() == "SharedJSContext")
                 .Select(p => p.GetProperty("webSocketDebuggerUrl").GetString())
                 .FirstOrDefault();
-            return ws is null ? null : Evaluate(new Uri(ws), expression);
+            return ws is null ? null : Evaluate(new Uri(ws), expression, awaitPromise);
         }
         catch (Exception)
         {
@@ -146,7 +146,7 @@ public static class SteamClient
     }
 
     /// <summary>Runs one expression in the page and returns its string result.</summary>
-    static string? Evaluate(Uri ws, string expression)
+    static string? Evaluate(Uri ws, string expression, bool awaitPromise = false)
     {
         using var socket = new ClientWebSocket();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -155,7 +155,7 @@ public static class SteamClient
         {
             id = 1,
             method = "Runtime.evaluate",
-            @params = new { expression, returnByValue = true },
+            @params = new { expression, returnByValue = true, awaitPromise },
         });
         socket.SendAsync(request, WebSocketMessageType.Text, true, timeout.Token).GetAwaiter().GetResult();
         var buffer = new byte[64 * 1024];

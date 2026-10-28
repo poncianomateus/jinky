@@ -105,6 +105,7 @@ struct Options {
     bool stdin_control = false;
     bool insecure = false;  // accept any TV without pairing (test tools only)
     bool virtual_display = false;  // console sessions play on the virtual screen ("Monitor virtual")
+    bool games_in_bp = false;      // games from the TV start inside Big Picture (the way before 1.0)
     std::string vdisplay_admin;    // install/uninstall/status of the virtual screen driver, then exit
     std::string vdisplay_folder;   // where the driver to install is
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
@@ -133,6 +134,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--insecure") o.insecure = true;
         else if (a == "--virtual-display") o.virtual_display = true;
+        else if (a == "--games-in-big-picture") o.games_in_bp = true;
         else if (a == "--install-virtual-display" && (v = next())) {
             o.vdisplay_admin = "install";
             o.vdisplay_folder = v;
@@ -465,6 +467,7 @@ int main(int argc, char** argv) {
     // game that starts fast (Resident Evil 7: the game played behind it).
     steady_clock::time_point launch_wait_until{}, bp_seen_at{};
     bool launch_ready_pending = false;
+    steady_clock::time_point launch_started{};  // when the app was told to start the game
     // Quick Resume: the TV continues a paused game (no Big Picture needed), and may let the PC
     // pause the game itself if the TV vanishes (Wi-Fi gone, TV switched off).
     bool peer_resume = false, peer_auto_pause = false;
@@ -593,9 +596,11 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Games from the TV's library also start inside Big Picture (it handles Steam's
-                // prompts and controller input in launchers); the TV hides it until the game shows.
-                console.enter(capture.display_name(), !peer_resume);
+                // A game from the TV's library starts straight away: Steam's prompts and the
+                // launchers' windows show on the TV with the controller as a mouse when they need
+                // the player. Big Picture only for the "Steam Big Picture" session (or by choice).
+                const bool bp = !peer_game || (opt.games_in_bp && !peer_resume);
+                console.enter(capture.display_name(), bp);
                 console.set_hdr(peer_hdr);
                 if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
@@ -872,6 +877,12 @@ int main(int argc, char** argv) {
                 }
             } else if (cmd == "list-paired") {
                 emit_paired_list();
+            } else if (cmd == "launch-busy") {
+                // The app sees Steam still working on the game's launch (update, cloud, shaders).
+                if (peer_game) game_watch.steam_busy();
+            } else if (cmd == "launch-waiting") {
+                // Steam waits for the player before starting the game: show it on the TV now.
+                if (peer_game) game_watch.steam_waiting();
             }
         }
         if (pending && steady_clock::now() - pending->created > 120s) {
@@ -1243,7 +1254,8 @@ int main(int argc, char** argv) {
         // closing the game ends the session (the TV goes back to its home screen).
         if (peer && launch_ready_pending) {
             const auto now = steady_clock::now();
-            bool ready = !console.active() || peer_resume;  // no Big Picture to wait for
+            // No Big Picture to wait for: a game continued, or games started without it.
+            bool ready = !console.active() || peer_resume || (peer_game && !opt.games_in_bp);
             if (!ready && bp_seen_at == steady_clock::time_point{} && tcl::ConsoleMode::big_picture_window_open(true))
                 bp_seen_at = now;
             // Big Picture takes the screen as it appears; give it a moment more before the game.
@@ -1255,8 +1267,9 @@ int main(int argc, char** argv) {
             if (ready) {
                 launch_ready_pending = false;
                 if (peer_game) {
-                    TCL_INFO("session", "ready to start the game");
+                    TCL_INFO("session", "ready to start the game{}", opt.games_in_bp ? "" : " (without Big Picture)");
                     game_watch.launched();
+                    launch_started = steady_clock::now();
                 }
                 tcl::emit_event("launch_ready");
             }
@@ -1271,6 +1284,10 @@ int main(int argc, char** argv) {
                     send_control(*peer, PacketType::GameReady, attention ? tclproto::kGameNeedsAttention : tclproto::kGameOnScreen);
             }
             pad_mouse.set_active(manual_mouse || (peer_game && game_watch.waiting_for_player()));
+            // Without Big Picture, Steam's library window may open in front during the launch.
+            if (peer_game && !opt.games_in_bp && !game_watch.waiting_for_player() && launch_started != steady_clock::time_point{} &&
+                steady_clock::now() - launch_started < 60s)
+                tcl::SteamGameWatch::minimize_steam_window();
             const bool bp_closed = !peer_game && console.big_picture_closed();
             if (bp_closed || game == tcl::SteamGameWatch::Event::Closed) {
                 TCL_INFO("session", "{}: ending the session", bp_closed ? "Big Picture closed" : "game closed");

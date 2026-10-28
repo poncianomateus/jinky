@@ -430,6 +430,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ? "Entre na sua conta do Tailscale (a página abriu no navegador; ou o ícone do Tailscale perto do relógio). Use a mesma conta na TV."
                 : "O Tailscale não está instalado. Desligue e ligue de novo para instalar.");
 
+    /// <summary>"Abrir jogos pelo Big Picture": the way before 1.0 (off = straight away, Jinky Shell).</summary>
+    public bool GamesInBigPicture
+    {
+        get => _settings.GamesInBigPicture;
+        set { if (_settings.GamesInBigPicture == value) return; _settings.GamesInBigPicture = value; Notify(); _settingsChanged(); }
+    }
+
     public bool KeepBigPicture
     {
         get => _settings.KeepBigPicture;
