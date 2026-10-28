@@ -626,6 +626,36 @@ static void test_fec_lossy_network_simulation() {
                 got.size(), (unsigned long long)a.stats().packets_fec_rebuilt, (unsigned long long)a.stats().packets_missing);
 }
 
+static void test_audio_shards() {
+    // Sound groups: 4 chunks of 960 bytes, 1 or 2 parity; any lost chunks up to the parity count
+    // come back exactly.
+    std::mt19937 rng(11);
+    for (size_t parity : {size_t(1), size_t(2)}) {
+        for (int trial = 0; trial < 20; ++trial) {
+            std::vector<std::vector<uint8_t>> chunks(kAudioGroup, std::vector<uint8_t>(960));
+            for (auto& c : chunks)
+                for (auto& b : c) b = uint8_t(rng());
+            std::vector<std::vector<uint8_t>> par;
+            fec::encode_shards(chunks, parity, 960, par);
+            CHECK(par.size() == parity && par[0].size() == 960);
+            auto got = chunks;
+            auto p = par;
+            // Lose `parity` chunks (or fewer, with a parity lost too).
+            std::vector<size_t> idx{0, 1, 2, 3};
+            std::shuffle(idx.begin(), idx.end(), rng);
+            const size_t lose = trial % 3 == 0 && parity == 2 ? 1 : parity;
+            for (size_t j = 0; j < lose; ++j) got[idx[j]].clear();
+            if (lose < parity) p[rng() % parity].clear();
+            CHECK(fec::recover_shards(got, p, 960) == lose);
+            CHECK(got == chunks);
+            // One too many: nothing is made up.
+            auto bad = chunks;
+            for (size_t j = 0; j <= parity; ++j) bad[idx[j]].clear();
+            CHECK(fec::recover_shards(bad, par, 960) == 0);
+        }
+    }
+}
+
 static void test_nack_and_report_messages() {
     NackMessage m{7, 1234, {{1, 2}, {9, NackMessage::kWholeFrame}}};
     uint8_t buf[NackMessage::kMaxSize];
@@ -689,6 +719,7 @@ int main() {
     test_fec_codec();
     test_fec_rebuilds_without_asking();
     test_fec_lossy_network_simulation();
+    test_audio_shards();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;

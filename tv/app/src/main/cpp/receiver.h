@@ -2,6 +2,7 @@
 // asks for keyframes when the stream breaks. Decoding happens in Kotlin (MediaCodec).
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <map>
 
 #include "tclproto/auth.h"
+#include "tclproto/fec.h"
 #include "tclproto/framing.h"
 #include "tclproto/udp.h"
 
@@ -261,7 +263,21 @@ private:
     uint32_t last_audio_seq_ = 0;
     double audio_level_avg_ = kAudioStartTarget;  // smoothed fill level, for drift compensation
     std::atomic<uint64_t> audio_packets_{0}, audio_lost_{0}, audio_underruns_{0}, audio_trimmed_ms_{0},
-        audio_adjustments_{0};
+        audio_adjustments_{0}, audio_rebuilt_{0};
+    // Sound protection: the last groups of chunks (and their parity), to rebuild a lost chunk and
+    // put it where silence stood in for it, if that part hasn't played yet.
+    struct AudioGroup {
+        bool used = false;
+        uint32_t first = 0;
+        std::vector<std::vector<uint8_t>> chunks = std::vector<std::vector<uint8_t>>(tclproto::kAudioGroup);
+        std::vector<std::vector<uint8_t>> parity;
+        int64_t silence_at[tclproto::kAudioGroup] = {-1, -1, -1, -1};  // frame where silence replaced it
+    };
+    std::array<AudioGroup, 8> audio_groups_;
+    uint64_t audio_read_abs_ = 0;  // frames played (or dropped) so far: positions in the ring
+    AudioGroup& audio_group(uint32_t first);
+    void audio_overwrite(int64_t at, const std::vector<uint8_t>& chunk);
+    void audio_recover(AudioGroup& g);
 };
 
 }  // namespace tcltv

@@ -108,6 +108,12 @@ inline constexpr uint32_t kHelloAutoPause = 1u << 26;
 // Hello.value flag: the TV rebuilds lost video fragments from parity fragments (fec.h), so the PC
 // sends them along with each frame.
 inline constexpr uint32_t kHelloFec = 1u << 27;
+// Hello.value flag: the TV rebuilds lost sound chunks from parity. The PC then sends, after each
+// group of kAudioGroup chunks (frame_id = first..first+3), fec_count parity datagrams: type Audio,
+// frame_id = first, frag_count 1, frag_index 1..fec_count, frame_size = the chunk size. Older TVs
+// reject them (frag_index past frag_count).
+inline constexpr uint32_t kHelloAudioFec = 1u << 28;
+inline constexpr uint32_t kAudioGroup = 4;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {

@@ -186,4 +186,42 @@ size_t recover_block(std::span<uint8_t> frame, std::vector<bool>& have,
     return e;
 }
 
+void encode_shards(const std::vector<std::vector<uint8_t>>& data, size_t count, size_t size,
+                   std::vector<std::vector<uint8_t>>& parity) {
+    parity.resize(count);
+    for (auto& p : parity) p.assign(size, 0);
+    if (data.size() > kMaxBlockData || count > kMaxBlockData) return;
+    for (size_t d = 0; d < data.size(); ++d)
+        if (data[d].size() == size)
+            for (size_t p = 0; p < count; ++p) mul_add(parity[p].data(), data[d].data(), size, coef(p, d));
+}
+
+size_t recover_shards(std::vector<std::vector<uint8_t>>& data, const std::vector<std::vector<uint8_t>>& parity, size_t size) {
+    if (data.size() > kMaxBlockData || parity.size() > kMaxBlockData || !size) return 0;
+    std::vector<size_t> missing, avail;
+    for (size_t d = 0; d < data.size(); ++d)
+        if (data[d].size() != size) missing.push_back(d);
+    for (size_t p = 0; p < parity.size(); ++p)
+        if (parity[p].size() == size) avail.push_back(p);
+    const size_t e = missing.size();
+    if (!e || avail.size() < e) return 0;
+    avail.resize(e);
+    std::vector<std::vector<uint8_t>> rest(e);
+    for (size_t r = 0; r < e; ++r) {
+        rest[r] = parity[avail[r]];
+        for (size_t d = 0; d < data.size(); ++d)
+            if (data[d].size() == size) mul_add(rest[r].data(), data[d].data(), size, coef(avail[r], d));
+    }
+    std::vector<uint8_t> a(e * e);
+    for (size_t r = 0; r < e; ++r)
+        for (size_t c = 0; c < e; ++c) a[r * e + c] = coef(avail[r], missing[c]);
+    if (!invert(a, e)) return 0;
+    for (size_t c = 0; c < e; ++c) {
+        std::vector<uint8_t> out(size, 0);
+        for (size_t r = 0; r < e; ++r) mul_add(out.data(), rest[r].data(), size, a[c * e + r]);
+        data[missing[c]] = std::move(out);
+    }
+    return e;
+}
+
 }  // namespace tclproto::fec

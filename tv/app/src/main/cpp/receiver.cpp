@@ -420,7 +420,7 @@ void Receiver::net_loop() {
             // address changed.
             uint8_t b[tclproto::ControlMessage::kSize];
             tclproto::ControlMessage{PacketType::Hello, session_id_,
-                                     codec_support_ | tclproto::kHelloFec | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+                                     codec_support_ | tclproto::kHelloFec | tclproto::kHelloAudioFec | (desktop_ ? tclproto::kHelloDesktop : 0u) |
                                          (game_ ? tclproto::kHelloGame : 0u)}
                 .write(b);
             sock_.send_to(tclproto::Endpoint::broadcast(host_port_), b);
@@ -428,7 +428,7 @@ void Receiver::net_loop() {
         }
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
-            send_hello(codec_support_ | tclproto::kHelloFec | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+            send_hello(codec_support_ | tclproto::kHelloFec | tclproto::kHelloAudioFec | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
                        (game_ ? tclproto::kHelloGame : 0u) | (pair_only_ ? tclproto::kHelloPairOnly | power_.load() : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
@@ -571,6 +571,7 @@ void Receiver::net_loop() {
             audio_fill_ = 0;
             audio_priming_ = true;
             have_audio_seq_ = false;
+            for (auto& g : audio_groups_) g.used = false;
             // Start every session with the normal audio cushion: one grown by an earlier session's
             // network hiccups would otherwise add delay after switching TVs.
             audio_target_ = kAudioStartTarget;
@@ -641,21 +642,104 @@ void Receiver::on_frame(tclproto::FrameAssembler::Frame&& f) {
     cv_.notify_one();
 }
 
+Receiver::AudioGroup& Receiver::audio_group(uint32_t first) {
+    AudioGroup& g = audio_groups_[(first / tclproto::kAudioGroup) % audio_groups_.size()];
+    if (!g.used || g.first != first) {
+        g.used = true;
+        g.first = first;
+        for (auto& c : g.chunks) c.clear();
+        g.parity.clear();
+        for (auto& s : g.silence_at) s = -1;
+    }
+    return g;
+}
+
+void Receiver::audio_overwrite(int64_t at, const std::vector<uint8_t>& chunk) {
+    // Only what hasn't played yet (and wasn't trimmed away).
+    const size_t frames = chunk.size() / 4;
+    for (size_t i = 0; i < frames; ++i) {
+        const int64_t pos = at + int64_t(i);
+        if (pos < int64_t(audio_read_abs_) || pos >= int64_t(audio_read_abs_ + audio_fill_)) continue;
+        const size_t w = (audio_read_ + size_t(pos - int64_t(audio_read_abs_))) % kAudioRingFrames;
+        audio_ring_[w * 2] = int16_t(chunk[i * 4] | (chunk[i * 4 + 1] << 8));
+        audio_ring_[w * 2 + 1] = int16_t(chunk[i * 4 + 2] | (chunk[i * 4 + 3] << 8));
+    }
+}
+
+void Receiver::audio_recover(AudioGroup& g) {
+    size_t size = 0;
+    for (const auto& p : g.parity)
+        if (!p.empty()) size = p.size();
+    if (!size) return;
+    if (!tclproto::fec::recover_shards(g.chunks, g.parity, size)) return;
+    // Rebuilt chunks whose place silence already took: the real sound goes there now.
+    for (size_t k = 0; k < tclproto::kAudioGroup; ++k) {
+        if (g.silence_at[k] < 0 || g.chunks[k].size() != size) continue;
+        audio_overwrite(g.silence_at[k], g.chunks[k]);
+        g.silence_at[k] = -1;
+        audio_rebuilt_++;
+    }
+}
+
 void Receiver::on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t> payload) {
     if (h.frag_count != 1 || payload.size() % 4 != 0) return;  // audio chunks are single datagrams
-    audio_packets_++;
+    constexpr uint32_t kGroup = tclproto::kAudioGroup;
     std::lock_guard lock(audio_mu_);
+    if (h.frag_index >= 1) {
+        // Parity for the chunks first .. first + kGroup - 1 (sound protection).
+        if (h.frag_index > h.fec_count || h.frame_id % kGroup != 0) return;
+        AudioGroup& g = audio_group(h.frame_id);
+        if (g.parity.size() != h.fec_count) g.parity.assign(h.fec_count, {});
+        g.parity[h.frag_index - 1].assign(payload.begin(), payload.end());
+        audio_recover(g);
+        return;
+    }
+    audio_packets_++;
+    AudioGroup& own = audio_group(h.frame_id - h.frame_id % kGroup);
+    auto& mine = own.chunks[h.frame_id % kGroup];
+    if (mine.empty()) mine.assign(payload.begin(), payload.end());
     if (have_audio_seq_) {
-        if (!tclproto::seq_newer(h.frame_id, last_audio_seq_)) return;  // late or duplicate: too late to play
+        if (!tclproto::seq_newer(h.frame_id, last_audio_seq_)) {
+            // Late: if silence stands in for it and hasn't played yet, it still fits there.
+            int64_t& at = own.silence_at[h.frame_id % kGroup];
+            if (at >= 0) {
+                audio_overwrite(at, mine);
+                at = -1;
+            }
+            return;
+        }
         const uint32_t missing = h.frame_id - last_audio_seq_ - 1;
         if (missing > 0) {
             audio_lost_ += missing;
-            // Keep the timeline for short gaps by inserting silence; long gaps just resume.
-            const size_t silence = std::min<size_t>(missing, 4) * (payload.size() / 4);
-            for (size_t i = 0; i < silence && audio_fill_ < kAudioRingFrames; ++i) {
-                const size_t w = (audio_read_ + audio_fill_) % kAudioRingFrames;
-                audio_ring_[w * 2] = audio_ring_[w * 2 + 1] = 0;
-                audio_fill_++;
+            const size_t frames = payload.size() / 4;
+            if (missing <= 4) {
+                // Keep the timeline: each lost chunk becomes its rebuilt sound when the parity
+                // already brought it back, else silence (replaced if it comes back in time).
+                for (uint32_t k = 1; k <= missing; ++k) {
+                    const uint32_t seq = last_audio_seq_ + k;
+                    AudioGroup& g = audio_group(seq - seq % kGroup);
+                    audio_recover(g);
+                    const auto& c = g.chunks[seq % kGroup];
+                    if (c.size() == payload.size()) {
+                        audio_rebuilt_++;
+                    } else {
+                        g.silence_at[seq % kGroup] = int64_t(audio_read_abs_ + audio_fill_);
+                    }
+                    for (size_t i = 0; i < frames && audio_fill_ < kAudioRingFrames; ++i) {
+                        const size_t w = (audio_read_ + audio_fill_) % kAudioRingFrames;
+                        const bool real = c.size() == payload.size();
+                        audio_ring_[w * 2] = real ? int16_t(c[i * 4] | (c[i * 4 + 1] << 8)) : int16_t(0);
+                        audio_ring_[w * 2 + 1] = real ? int16_t(c[i * 4 + 2] | (c[i * 4 + 3] << 8)) : int16_t(0);
+                        audio_fill_++;
+                    }
+                }
+            } else {
+                // A long gap: some silence keeps the cushion, then the sound just resumes.
+                for (size_t i = 0; i < 4 * frames && audio_fill_ < kAudioRingFrames; ++i) {
+                    const size_t w = (audio_read_ + audio_fill_) % kAudioRingFrames;
+                    audio_ring_[w * 2] = audio_ring_[w * 2 + 1] = 0;
+                    audio_fill_++;
+                }
             }
         }
     }
@@ -675,6 +759,7 @@ void Receiver::on_audio(const tclproto::MediaHeader& h, std::span<const uint8_t>
     if (audio_fill_ > audio_max_frames()) {
         const size_t trim = audio_fill_ - audio_target_;
         audio_read_ = (audio_read_ + trim) % kAudioRingFrames;
+        audio_read_abs_ += trim;
         audio_fill_ -= trim;
         audio_trimmed_ms_ += trim * 1000 / kAudioRate;
     }
@@ -726,6 +811,7 @@ void Receiver::read_audio(int16_t* dst, size_t frames) {
             dst[i * 2 + ch] = int16_t(audio_ring_[r0 * 2 + ch] * (1 - f) + audio_ring_[r1 * 2 + ch] * f);
     }
     audio_read_ = (audio_read_ + consume) % kAudioRingFrames;
+    audio_read_abs_ += consume;
     audio_fill_ -= consume;
 }
 
@@ -831,7 +917,7 @@ std::string Receiver::status() const {
     } else {
         s << "PC: procurando na rede...";
     }
-    s << "\náudio: pacotes " << audio_packets_ << "  perdidos " << audio_lost_ << "  buffer "
+    s << "\náudio: pacotes " << audio_packets_ << "  perdidos " << audio_lost_ << " (reconstruídos " << audio_rebuilt_ << ")  buffer "
       << int(audio_buffer_ms()) << " ms (alvo " << audio_target_ms() << ")  faltas " << audio_underruns_ << "  cortado " << audio_trimmed_ms_
       << " ms  ajustes de relógio " << audio_adjustments_;
     s << "\ncontrole: estados enviados " << inputs_sent_;

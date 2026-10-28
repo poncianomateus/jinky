@@ -33,4 +33,12 @@ void encode(std::span<const uint8_t> frame, size_t count, std::vector<std::vecto
 size_t recover_block(std::span<uint8_t> frame, std::vector<bool>& have,
                      const std::vector<std::vector<uint8_t>>& parity, size_t block);
 
+// The same code over whole equal-sized pieces (audio: a group of sound chunks), one block of at
+// most kMaxBlockData. `data` holds the pieces (empty = missing), each `size` bytes.
+void encode_shards(const std::vector<std::vector<uint8_t>>& data, size_t count, size_t size,
+                   std::vector<std::vector<uint8_t>>& parity);
+// Rebuilds the missing pieces of `data` (empty entries) if enough of `parity` (empty = missing)
+// arrived. Returns how many were rebuilt.
+size_t recover_shards(std::vector<std::vector<uint8_t>>& data, const std::vector<std::vector<uint8_t>>& parity, size_t size);
+
 }  // namespace tclproto::fec

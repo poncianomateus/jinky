@@ -453,6 +453,7 @@ int main(int argc, char** argv) {
     bool peer_game = false;     // a game chosen in the TV's library: console mode without Big Picture
     bool peer_hdr = false;      // the TV asked for HDR (and decodes HEVC)
     tcl::FecControl fec;        // loss protection, for TVs that rebuild lost packets from parity
+    bool peer_audio_fec = false;  // ...and lost sound chunks
     std::vector<std::vector<uint8_t>> parity;
     bool capture_reopen = false;  // capture again now (HDR turned on/off for the session)
     tcl::SteamGameWatch game_watch;
@@ -544,6 +545,8 @@ int main(int argc, char** argv) {
     // The audio thread needs the current receiver: (ip << 16 | port), 0 = nobody connected.
     std::atomic<uint64_t> audio_peer{0};
     std::atomic<uint32_t> audio_session{0};
+    // Sound protection: parity datagrams per group of kAudioGroup chunks (0 = the TV can't use them).
+    std::atomic<uint32_t> audio_parity{0};
     tcl::ConsoleMode console;
     tcl::FrameCap frame_cap;
     tcl::VirtualDisplay virtual_display;
@@ -625,6 +628,10 @@ int main(int argc, char** argv) {
                 TCL_INFO("audio", "PC speakers {}", peer ? "muted (sound goes to the TV)" : "restored");
         }
     };
+    // The chunks of the current sound group (sound protection) and which of them belong to it;
+    // used only on the audio thread, declared before it so they outlive it.
+    std::vector<std::vector<uint8_t>> audio_group(tclproto::kAudioGroup), audio_par;
+    uint32_t audio_group_mask = 0, audio_group_session = 0;
     tcl::AudioCapture audio;
     uint32_t audio_seq = 0;
 
@@ -652,6 +659,7 @@ int main(int argc, char** argv) {
         auto send_audio = [&](const int16_t* samples, uint64_t time_us) {
             const uint64_t p = audio_peer;
             if (!p) return;
+            constexpr size_t kChunkBytes = tcl::AudioCapture::kChunkFrames * tcl::AudioCapture::kChannels * 2;
             tclproto::MediaHeader h;
             h.type = PacketType::Audio;
             h.session_id = audio_session;
@@ -659,8 +667,30 @@ int main(int argc, char** argv) {
             h.capture_time_us = time_us;
             const tclproto::Endpoint to{uint32_t(p >> 16), uint16_t(p & 0xFFFF)};
             const auto* bytes = reinterpret_cast<const uint8_t*>(samples);
-            tclproto::fragment_frame(h, {bytes, tcl::AudioCapture::kChunkFrames * tcl::AudioCapture::kChannels * 2},
-                                     [&](std::span<const uint8_t> d) { sock.send_to(to, d); });
+            tclproto::fragment_frame(h, {bytes, kChunkBytes}, [&](std::span<const uint8_t> d) { sock.send_to(to, d); });
+            // Sound protection: after each group of chunks, parity that rebuilds a lost one (a
+            // lost chunk is a click). Only groups whose every chunk went to this same session.
+            const uint32_t parity = audio_parity;
+            const uint32_t slot = h.frame_id % tclproto::kAudioGroup;
+            if (slot == 0 || audio_group_session != h.session_id) audio_group_mask = 0;
+            audio_group_session = h.session_id;
+            if (!parity) return;
+            audio_group[slot].assign(bytes, bytes + kChunkBytes);
+            audio_group_mask |= 1u << slot;
+            if (slot != tclproto::kAudioGroup - 1 || audio_group_mask != (1u << tclproto::kAudioGroup) - 1) return;
+            tclproto::fec::encode_shards(audio_group, parity, kChunkBytes, audio_par);
+            uint8_t buf[tclproto::MediaHeader::kSize + kChunkBytes];
+            tclproto::MediaHeader ph = h;
+            ph.frame_id = h.frame_id - (tclproto::kAudioGroup - 1);
+            ph.frame_size = uint32_t(kChunkBytes);
+            ph.frag_count = 1;
+            ph.fec_count = uint8_t(parity);
+            for (uint32_t j = 0; j < parity; ++j) {
+                ph.frag_index = uint16_t(1 + j);
+                ph.write(buf);
+                std::memcpy(buf + tclproto::MediaHeader::kSize, audio_par[j].data(), kChunkBytes);
+                sock.send_to(to, std::span<const uint8_t>(buf, sizeof buf));
+            }
         };
         const bool ok = opt.test_pattern
                             ? audio.start_test_tone(send_audio, pattern_epoch_us, 180'000'000 / opt.enc.fps)
@@ -1041,6 +1071,9 @@ int main(int argc, char** argv) {
                     rate.reset(opt.enc.bitrate_kbps);
                     fec.reset(msg->value & tclproto::kHelloFec);
                     if (fec.percent()) TCL_INFO("net", "loss protection on: {}% extra packets per frame", fec.percent());
+                    peer_audio_fec = msg->value & tclproto::kHelloAudioFec;
+                    audio_parity = peer_audio_fec ? 1u : 0u;
+                    if (peer_audio_fec) TCL_INFO("audio", "sound protection on: 1 extra packet per 4");
                     if (encoder.bitrate_kbps() != opt.enc.bitrate_kbps && !encoder.set_bitrate(opt.enc.bitrate_kbps))
                         TCL_WARN("encoder", "{}", encoder.error());
                     console_linger_until = {};
@@ -1096,7 +1129,12 @@ int main(int argc, char** argv) {
                     if (r.lost_permille || r.frames_unrecovered)
                         TCL_INFO("receiver", "network: {:.1f}% of video packets asked again, {} frame(s) lost",
                                  r.lost_permille / 10.0, r.frames_unrecovered);
-                    if (fec.on_report(r)) TCL_INFO("net", "loss protection: {}% extra packets per frame", fec.percent());
+                    if (fec.on_report(r)) {
+                        TCL_INFO("net", "loss protection: {}% extra packets per frame", fec.percent());
+                        // A lossier network: two sound parity packets per group (two lost chunks).
+                        const uint32_t ap = peer_audio_fec ? (fec.percent() >= 20 ? 2u : 1u) : 0u;
+                        if (ap != audio_parity.exchange(ap)) TCL_INFO("audio", "sound protection: {} extra packet(s) per 4", ap);
+                    }
                     if (const uint32_t kbps = rate.on_report(r)) {
                         if (encoder.set_bitrate(kbps)) {
                             TCL_INFO("encoder", "automatic quality: {} kbit/s (chosen {})", kbps, rate.ceiling());
