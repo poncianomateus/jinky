@@ -138,6 +138,7 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.vdisplay_folder = v;
         }
         else if (a == "--uninstall-virtual-display") o.vdisplay_admin = "uninstall";
+        else if (a == "--lift-display-policy") {}  // read again as Unicode with --install-virtual-display
         else if (a == "--virtual-display-status") o.vdisplay_admin = "status";
         else if (a == "--tv-update" && (v = next())) {
             // "<versionCode>:<port>" — the desktop app serves the TV app on that port.
@@ -238,12 +239,15 @@ int main(int argc, char** argv) {
     if (opt.vdisplay_admin == "install") {
         int wargc = 0;
         std::wstring folder;
+        bool lift = false;
         if (LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc)) {
-            for (int i = 1; i + 1 < wargc; ++i)
-                if (std::wstring_view(wargv[i]) == L"--install-virtual-display") folder = wargv[i + 1];
+            for (int i = 1; i < wargc; ++i) {
+                if (std::wstring_view(wargv[i]) == L"--install-virtual-display" && i + 1 < wargc) folder = wargv[i + 1];
+                if (std::wstring_view(wargv[i]) == L"--lift-display-policy") lift = true;
+            }
             LocalFree(wargv);
         }
-        return tcl::VirtualDisplay::install(folder);
+        return tcl::VirtualDisplay::install(folder, lift);
     }
     // A previous run that died on the virtual screen: the PC's monitors come back first (the
     // capture starts on them). Outside sessions the virtual screen is never part of the desktop.

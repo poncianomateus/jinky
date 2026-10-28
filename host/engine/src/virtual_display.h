@@ -34,8 +34,10 @@ public:
     // session left behind by a host that was killed. Returns true if it changed anything.
     static bool tidy();
 
-    // jinky-engine --install-virtual-display <folder with MttVDD.inf> (as administrator).
-    static int install(const std::wstring& folder);
+    // jinky-engine --install-virtual-display <folder with MttVDD.inf> [--lift-display-policy]
+    // (as administrator). With lift_policy, a Windows policy blocking display drivers is set
+    // aside for the install and put back right after.
+    static int install(const std::wstring& folder, bool lift_policy = false);
     // jinky-engine --uninstall-virtual-display (as administrator).
     static int uninstall();
 

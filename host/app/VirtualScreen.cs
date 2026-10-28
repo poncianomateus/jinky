@@ -41,6 +41,26 @@ public static class VirtualScreen
         }
     }
 
+    /// <summary>
+    /// A Windows policy blocks installing display drivers ("Impedir a instalação de dispositivos que
+    /// usam drivers que correspondem a estas classes", with the display class), often set so
+    /// Windows Update can't replace the NVIDIA driver. Reading it needs no administrator.
+    /// </summary>
+    public static bool DisplayDriversBlocked()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\DeviceInstall\Restrictions\DenyDeviceClasses");
+            if (key is null) return false;
+            return key.GetValueNames().Any(n => key.GetValue(n) is string v &&
+                v.Equals("{4d36e968-e325-11ce-bfc1-08002be10318}", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /// <summary>The driver is installed and its screen is there (asks the engine; no administrator).</summary>
     public static bool Installed()
     {
@@ -59,7 +79,7 @@ public static class VirtualScreen
     }
 
     /// <summary>Downloads and installs the driver (on) or removes it (off). Null when done, else what went wrong.</summary>
-    public static async Task<string?> SetAsync(bool on, Action<string> progress)
+    public static async Task<string?> SetAsync(bool on, Action<string> progress, bool liftPolicy = false)
     {
         var exe = Engine.FindExecutable();
         if (exe is null) return "jinky-engine.exe não foi encontrado";
@@ -91,7 +111,7 @@ public static class VirtualScreen
             {
                 return "não deu para baixar o driver (" + e.Message + ")";
             }
-            args = $"--install-virtual-display \"{folder}\"";
+            args = $"--install-virtual-display \"{folder}\"" + (liftPolicy ? " --lift-display-policy" : "");
             progress("Instalando o monitor virtual… (o Windows vai pedir permissão)");
         }
         else progress("Removendo o monitor virtual… (o Windows vai pedir permissão)");
@@ -121,6 +141,7 @@ public static class VirtualScreen
         {
             0 => null,
             14 => "o Windows não aceitou o driver",
+            17 => "uma política do Windows bloqueia a instalação de drivers de vídeo",
             15 => "o driver instalou, mas o monitor virtual não apareceu (reiniciar o PC pode resolver)",
             16 => "o monitor virtual não foi removido por completo",
             _ => $"algo deu errado (código {code})",

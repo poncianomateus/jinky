@@ -306,9 +306,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         void Show(string text) { _virtualBusy = text; Notify(nameof(VirtualDisplayText)); }
         string? error = null;
+        // A Windows policy blocks display drivers: lift it only for the install if the user agrees
+        // (it is put back right after, exactly as it was).
+        bool lift = false;
+        if (on && !_virtualInstalled && VirtualScreen.DisplayDriversBlocked())
+        {
+            var answer = System.Windows.MessageBox.Show(
+                "Uma política deste Windows proíbe instalar drivers de vídeo (\"Impedir a instalação de dispositivos " +
+                "que usam drivers que correspondem a estas classes\", com a classe Vídeo). Ela costuma ser criada para o " +
+                "Windows Update não trocar o driver da NVIDIA.\n\n" +
+                "O Jinky pode tirar essa trava só durante a instalação do monitor virtual (alguns segundos) e recolocá-la " +
+                "exatamente como estava logo em seguida. O driver da NVIDIA não é tocado.\n\nLiberar só para esta instalação?",
+                "Monitor virtual", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
+            if (answer != System.Windows.MessageBoxResult.Yes)
+            {
+                Add("Monitor virtual: não instalado (a política do Windows que bloqueia drivers de vídeo continua)", warning: true);
+                Notify(nameof(VirtualDisplayOn));
+                return;
+            }
+            lift = true;
+        }
         // Installed already (an earlier time): just start using it; off keeps nothing behind.
         if (!on || !_virtualInstalled)
-            error = await VirtualScreen.SetAsync(on, text => System.Windows.Application.Current?.Dispatcher.Invoke(() => Show(text)));
+            error = await VirtualScreen.SetAsync(on, text => System.Windows.Application.Current?.Dispatcher.Invoke(() => Show(text)), lift);
         _virtualBusy = null;
         if (error is not null) Add("Monitor virtual: " + error, warning: true);
         else

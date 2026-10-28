@@ -109,9 +109,11 @@ bool apply_saved_layout() {
     return SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_TOPOLOGY_EXTEND) == ERROR_SUCCESS;
 }
 
+// Every device made for the driver (Root\MttVDD), whatever its class: one that never got its
+// driver has none yet.
 template <class Pred>
 bool for_each_device(Pred pred) {
-    HDEVINFO set = SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT);
+    HDEVINFO set = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     if (set == INVALID_HANDLE_VALUE) return false;
     SP_DEVINFO_DATA d{};
     d.cbSize = sizeof d;
@@ -131,6 +133,45 @@ bool for_each_device(Pred pred) {
     }
     SetupDiDestroyDeviceInfoList(set);
     return any;
+}
+
+// "Prevent installation of devices using drivers that match these device setup classes" with the
+// display class (often set so Windows Update can't replace the NVIDIA driver) blocks this driver.
+constexpr wchar_t kDenyClassesKey[] = L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions\\DenyDeviceClasses";
+constexpr wchar_t kDisplayClass[] = L"{4d36e968-e325-11ce-bfc1-08002be10318}";
+
+// Takes the display class out of that list, returning the entries taken (name, value) so
+// restore_display_block() puts back exactly them.
+std::vector<std::pair<std::wstring, std::wstring>> lift_display_block() {
+    std::vector<std::pair<std::wstring, std::wstring>> taken;
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kDenyClassesKey, 0, KEY_READ | KEY_SET_VALUE, &key) != ERROR_SUCCESS) return taken;
+    for (DWORD i = 0;; ++i) {
+        wchar_t name[256], value[256];
+        DWORD name_len = 256, value_size = sizeof value - sizeof(wchar_t), type = 0;
+        const LONG r = RegEnumValueW(key, i, name, &name_len, nullptr, &type, reinterpret_cast<BYTE*>(value), &value_size);
+        if (r == ERROR_NO_MORE_ITEMS) break;
+        if (r != ERROR_SUCCESS || type != REG_SZ) continue;
+        value[value_size / sizeof(wchar_t)] = 0;
+        if (_wcsicmp(value, kDisplayClass) == 0) taken.emplace_back(name, value);
+    }
+    for (const auto& [name, value] : taken) RegDeleteValueW(key, name.c_str());
+    RegCloseKey(key);
+    if (!taken.empty()) TCL_INFO("vdisplay", "display driver block lifted for the install ({} entr{})", taken.size(), taken.size() == 1 ? "y" : "ies");
+    return taken;
+}
+
+void restore_display_block(const std::vector<std::pair<std::wstring, std::wstring>>& taken) {
+    if (taken.empty()) return;
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kDenyClassesKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        TCL_ERROR("vdisplay", "could not put the display driver block back");
+        return;
+    }
+    for (const auto& [name, value] : taken)
+        RegSetValueExW(key, name.c_str(), 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), DWORD((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    TCL_INFO("vdisplay", "display driver block put back as it was");
 }
 
 std::wstring settings_folder() {
@@ -300,7 +341,7 @@ bool VirtualDisplay::tidy() {
     return changed || r == ERROR_SUCCESS;
 }
 
-int VirtualDisplay::install(const std::wstring& folder) {
+int VirtualDisplay::install(const std::wstring& folder, bool lift_policy) {
     const std::wstring inf = folder + L"\\MttVDD.inf";
     if (GetFileAttributesW(inf.c_str()) == INVALID_FILE_ATTRIBUTES) {
         TCL_ERROR("vdisplay", "driver not found in {}", narrow(folder));
@@ -322,8 +363,14 @@ int VirtualDisplay::install(const std::wstring& folder) {
     RegSetValueExW(key, L"VDDPATH", 0, REG_SZ, reinterpret_cast<const BYTE*>(conf.c_str()), DWORD((conf.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
 
-    // The device itself (root-enumerated, like "devcon install" makes it), once.
-    if (!for_each_device([](HDEVINFO, SP_DEVINFO_DATA&) {})) {
+    // The device itself (root-enumerated, like "devcon install" makes it): exactly one (earlier
+    // attempts may have left some without a driver).
+    bool first = true;
+    for_each_device([&](HDEVINFO set, SP_DEVINFO_DATA& d) {
+        if (!first) SetupDiCallClassInstaller(DIF_REMOVE, set, &d);
+        first = false;
+    });
+    if (first) {
         HDEVINFO set = SetupDiCreateDeviceInfoList(&GUID_DEVCLASS_DISPLAY, nullptr);
         if (set == INVALID_HANDLE_VALUE) return 13;
         SP_DEVINFO_DATA d{};
@@ -340,9 +387,17 @@ int VirtualDisplay::install(const std::wstring& folder) {
         }
     }
     BOOL reboot = FALSE;
-    if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, kHardwareId, inf.c_str(), INSTALLFLAG_FORCE, &reboot)) {
-        TCL_ERROR("vdisplay", "the driver did not install (error 0x{:08X})", unsigned(GetLastError()));
-        return 14;
+    // The user agreed (in the Jinky app) to lift a policy blocking display drivers just for this:
+    // it is back right after, exactly as it was.
+    const auto lifted = lift_policy ? lift_display_block() : std::vector<std::pair<std::wstring, std::wstring>>{};
+    const BOOL installed = UpdateDriverForPlugAndPlayDevicesW(nullptr, kHardwareId, inf.c_str(), INSTALLFLAG_FORCE, &reboot);
+    const DWORD err = installed ? 0 : GetLastError();
+    restore_display_block(lifted);
+    if (!installed) {
+        TCL_ERROR("vdisplay", "the driver did not install (error 0x{:08X})", unsigned(err));
+        // Leave no device without a driver behind.
+        for_each_device([](HDEVINFO set, SP_DEVINFO_DATA& d) { SetupDiCallClassInstaller(DIF_REMOVE, set, &d); });
+        return err == 0xE0000248 ? 17 : 14;  // ERROR_DEVICE_INSTALL_BLOCKED: a Windows policy
     }
     // Windows adds a new monitor to the desktop: take it out again (only used while a TV plays).
     for (int i = 0; i < 50 && !available(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(200));
