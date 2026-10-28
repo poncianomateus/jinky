@@ -28,7 +28,10 @@ public sealed class Updater
         return c;
     }
 
-    public static Version Current => typeof(Updater).Assembly.GetName().Version is { } v ? new Version(v.Major, v.Minor, Math.Max(v.Build, 0)) : new Version(0, 0, 0);
+    /// <summary>"0.9.8", or "0.9.8.1" for a small update of the same version.</summary>
+    public static Version Current => typeof(Updater).Assembly.GetName().Version is { } v
+        ? v.Revision > 0 ? new Version(v.Major, v.Minor, Math.Max(v.Build, 0), v.Revision) : new Version(v.Major, v.Minor, Math.Max(v.Build, 0))
+        : new Version(0, 0, 0);
 
     public static bool Configured => !Repository.StartsWith("OWNER/");
 

@@ -4,9 +4,9 @@ plugins {
     id("com.android.application")
 }
 
-// One version for the whole product (repo-root VERSION, e.g. "0.3.0" -> versionCode 300).
+// One version for the whole product (repo-root VERSION): "0.9.8" -> versionCode 9080, "0.9.8.1" -> 9081.
 val jinkyVersion = rootProject.file("../VERSION").readText().trim()
-val jinkyVersionCode = jinkyVersion.split('.').map { it.toInt() }.let { (a, b, c) -> a * 10000 + b * 100 + c }
+val jinkyVersionCode = (jinkyVersion.split('.').map { it.toInt() } + listOf(0, 0, 0, 0)).let { (a, b, c, d) -> (a * 10000 + b * 100 + c) * 10 + d }
 
 // Release signing key lives outside the repo (see docs/RELEASING.md). Updates only install over an
 // app signed with the same key, so this file must be kept and backed up.

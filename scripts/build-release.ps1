@@ -11,7 +11,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content "$root\VERSION" -Raw).Trim()
 $parts = $version.Split('.') | ForEach-Object { [int]$_ }
-$versionCode = $parts[0] * 10000 + $parts[1] * 100 + $parts[2]
+# "0.9.8" -> 9080, "0.9.8.1" -> 9081 (a fourth number is a small update of the same version)
+$fourth = 0
+if ($parts.Count -gt 3) { $fourth = $parts[3] }
+$versionCode = ($parts[0] * 10000 + $parts[1] * 100 + $parts[2]) * 10 + $fourth
 Write-Host "== Jinky $version (TV versionCode $versionCode)"
 
 function Step($name, [scriptblock]$body) {

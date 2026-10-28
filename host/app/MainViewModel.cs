@@ -38,6 +38,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ObservableCollection<PairedTvItem> PairedTvs { get; } = new();
     public bool NoPairedTvs => PairedTvs.Count == 0;
+    public string PairedTvsText => PairedTvs.Count switch { 0 => "Nenhuma TV pareada", 1 => "1 TV pareada", var n => $"{n} TVs pareadas" };
 
     public void AcceptPairing() { if (_pairing is { } p) _sendCommand("pair-accept " + p.Id); }
     public void RejectPairing() { if (_pairing is { } p) _sendCommand("pair-reject " + p.Id); }
@@ -53,6 +54,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanInstallUpdate => _update is not null && !_installing;
     public string UpdateNotes => _update?.Notes ?? "";
     public string VersionText => $"v{Updater.Current}";
+    public string VersionTitle => $"Jinky {Updater.Current}";
     public string UpdateButtonText => _updateStatus ?? (_update is null ? "" : $"Atualizar para {_update.Version}" + (_update.Test ? " (teste)" : ""));
     public Version? OfferedVersion => _update?.Version;
 
@@ -131,7 +133,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     bool _checkingNow;
-    string _updateCheckText = "";
+    string _updateCheckText = "O Jinky procura sozinho a cada 6 horas.";
     public string UpdateCheckText { get => _updateCheckText; private set { _updateCheckText = value; Notify(); } }
 
     /// <summary>"Procurar atualização": checks GitHub now instead of waiting for the next 6-hour round.</summary>
@@ -295,8 +297,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             Notify(nameof(VirtualDisplayOn));
             Notify(nameof(VirtualDisplayText));
+            Notify(nameof(VirtualDisplayAvailable));
         });
     });
+
+    /// <summary>ASTER PCs can't use the virtual screen: the window hides the option there.</summary>
+    public bool VirtualDisplayAvailable => !_multiseat || _virtualBusy is not null;
 
     public bool VirtualDisplayOn
     {
@@ -371,8 +377,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public string VirtualDisplayText =>
-        _virtualBusy ?? (_multiseat ? "Indisponível: este PC usa o ASTER (várias pessoas no mesmo PC)." :
-                         VirtualDisplayOn ? "Ligado: jogando na TV, o PC usa a tela virtual; o monitor do PC fica apagado e volta como estava." : "");
+        _virtualBusy ?? (_multiseat ? "Indisponível: este PC usa o ASTER (várias pessoas no mesmo PC)." : "");
 
     // --- "Ligar o PC pela TV" (Wake-on-LAN) ----------------------------------------------------
 
@@ -414,13 +419,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Notify(nameof(WakeFromTvText));
     }
 
-    public string WakeFromTvText =>
-        _wakeBusy ?? _wakeReady switch
-        {
-            true => "Pronto: abrir o Jinky na TV acorda este PC suspenso.",
-            false => "Desligado: a placa de rede ainda não tem permissão para acordar o PC.",
-            _ => "",
-        };
+    public string WakeFromTvText => _wakeBusy ?? "";
 
     public string RemotePlayText =>
         _remoteBusy ?? (!_settings.RemotePlay ? "" :
@@ -609,6 +608,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     foreach (var tv in tvs.EnumerateArray())
                         PairedTvs.Add(new PairedTvItem(tv.GetProperty("id").GetString() ?? "", CleanName(tv.GetProperty("name").GetString())));
                 Notify(nameof(NoPairedTvs));
+                Notify(nameof(PairedTvsText));
                 break;
             case "tv_name":
                 _tvName = CleanName(e.Str("name"));

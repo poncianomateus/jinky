@@ -102,13 +102,13 @@ public sealed class TvService : IDisposable
     public static string ApkPath => Path.Combine(AppContext.BaseDirectory, "tv", "jinky-tv.apk");
     public static bool Available => File.Exists(ApkPath);
 
-    /// <summary>Same formula as the TV build: "0.3.0" -> 300.</summary>
+    /// <summary>Same formula as the TV build: "0.9.8" -> 9080, "0.9.8.1" -> 9081.</summary>
     public static int VersionCode
     {
         get
         {
             var v = typeof(TvService).Assembly.GetName().Version ?? new Version(0, 0, 0);
-            return v.Major * 10000 + v.Minor * 100 + Math.Max(v.Build, 0);
+            return (v.Major * 10000 + v.Minor * 100 + Math.Max(v.Build, 0)) * 10 + Math.Max(v.Revision, 0);
         }
     }
 
@@ -207,7 +207,7 @@ public sealed class TvService : IDisposable
 
                 if (request.Is("GET", "/tv/version"))
                 {
-                    await RespondText(stream, $"{VersionCode} {typeof(TvService).Assembly.GetName().Version?.ToString(3)}");
+                    await RespondText(stream, $"{VersionCode} {Updater.Current}");
                 }
                 else if (request.Is("GET", "/tv/jinky.apk") && Available)
                 {

@@ -2,6 +2,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
 
 namespace Jinky;
@@ -26,6 +27,26 @@ public partial class MainWindow : Window
     }
 
     MainViewModel Vm => (MainViewModel)DataContext;
+
+    /// <summary>Opens a page of the left menu: its cards come in one after the other.</summary>
+    void Nav_Checked(object sender, RoutedEventArgs e)
+    {
+        if (Pages is null || sender is not RadioButton { Content: string title } nav) return;
+        var page = nav == NavGames ? PageGames : nav == NavTvs ? PageTvs : nav == NavSystem ? PageSystem : PageHome;
+        foreach (UIElement p in Pages.Children) p.Visibility = p == page ? Visibility.Visible : Visibility.Collapsed;
+        PageTitle.Text = title;
+        Scroller.ScrollToTop();
+        Motion.SlideIn(PageTitle, 0, 8, 260);
+        var delay = 30;
+        foreach (UIElement child in page.Children)
+        {
+            if (child.Visibility != Visibility.Visible) continue;
+            Motion.SlideIn(child, delay, 16, 320);
+            delay = Math.Min(delay + 28, 260);
+        }
+    }
+
+    void GoTvs_Click(object sender, RoutedEventArgs e) => NavTvs.IsChecked = true;
 
     void AcceptPairing_Click(object sender, RoutedEventArgs e) => Vm.AcceptPairing();
 
