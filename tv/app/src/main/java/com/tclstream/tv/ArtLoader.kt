@@ -16,9 +16,11 @@ import java.util.concurrent.Executors
 object ArtLoader {
     private val main = Handler(Looper.getMainLooper())
     private val pool = Executors.newFixedThreadPool(3)
-    private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+    // A sixth of the app's memory (Fire TV: ~32 MB, TVs with more: up to 64 MB).
+    private val cache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 6).toInt().coerceIn(16 shl 20, 64 shl 20)) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
+    private val loading = HashSet<String>()
     private val failed = HashSet<String>()
 
     /** [done] runs on the main thread with the image, or null if the PC has none. */
@@ -37,13 +39,32 @@ object ArtLoader {
                 c.readTimeout = 8000
                 val bytes = if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null
                 c.disconnect()
-                bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size, BitmapFactory.Options().apply { inSampleSize = sample }) }
+                bytes?.let {
+                    // Covers, backgrounds and photos have no transparency: 16-bit colour takes
+                    // half the memory (twice as many fit in the cache) and draws faster. Logos
+                    // keep their transparency.
+                    val opaque = !url.contains("kind=logo") && !url.endsWith(".png")
+                    BitmapFactory.decodeByteArray(it, 0, it.size, BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = if (opaque) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+                        inDither = opaque
+                    })
+                }
             } catch (e: Exception) {
                 null
             }
             if (bmp != null) cache.put(key, bmp) else synchronized(failed) { failed += key }
             main.post { done(bmp) }
         }
+    }
+
+    /** Fetches an image into the cache ahead of time (the next game's background), if not there yet. */
+    fun prefetch(pcIp: String, port: Int, id: Int, kind: String, sample: Int) {
+        val url = "http://$pcIp:$port/library/art?id=$id&kind=$kind"
+        val key = "$url#$sample"
+        if (cache.get(key) != null || synchronized(failed) { key in failed }) return
+        synchronized(loading) { if (!loading.add(key)) return }
+        loadUrl(url, sample) { synchronized(loading) { loading.remove(key) } }
     }
 
     /** Forget missing-art answers (e.g. after the PC was updated). */

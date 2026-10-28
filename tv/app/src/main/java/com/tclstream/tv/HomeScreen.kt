@@ -73,8 +73,14 @@ class HomeScreen(
     }
 
     // Background: two layers for cross-fading artwork, under scrims that keep text readable.
-    private val heroBack = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
-    private val heroFront = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
+    // (Hardware layers: crossfades and the slow drift move a ready texture instead of redrawing.)
+    private val heroBack = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f; setLayerType(View.LAYER_TYPE_HARDWARE, null) }
+    private val heroFront = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f; setLayerType(View.LAYER_TYPE_HARDWARE, null) }
+    // The focused game's own colour, glowing softly from the lower left, like the PS5's home.
+    private val ambient = View(context)
+    private var ambientColor = 0
+    private var ambientAnim: ValueAnimator? = null
+    private var drift: android.animation.AnimatorSet? = null
 
     private val chipBars = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
     private val statusText = text(9.5f, Jinky.TEXT, bold = true)
@@ -215,6 +221,8 @@ class HomeScreen(
                 intArrayOf(Jinky.ink(0xE0), Jinky.ink(0x00), Jinky.ink(0x00), Jinky.ink(0xF2)))
         }, LayoutParams(-1, -1))
         addView(View(context).apply { background = Jinky.scanlines(context) }, LayoutParams(-1, -1))
+        addView(ambient, LayoutParams(-1, -1))
+        setAmbient(Jinky.BLUE_DEEP)
         showHero(null)
 
         // --- top bar ---
@@ -293,8 +301,14 @@ class HomeScreen(
         refreshHints()
     }
 
+    // While the player moves around, the drift waits: navigation gets the whole GPU.
+    private val resumeDrift = Runnable { if (isShown) drift?.resume() }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
+            drift?.pause()
+            removeCallbacks(resumeDrift)
+            postDelayed(resumeDrift, 2500)
             touched = true
             val h = host
             // Amigos works while another TV plays on the PC too.
@@ -727,11 +741,23 @@ class HomeScreen(
 
     // --- the focused item ---
 
+    /** The backgrounds of the games next to the focused one, so moving there shows them at once. */
+    private fun prefetchNeighbours(item: Item.Game) {
+        val (ip, port) = art ?: return
+        if (!Jinky.showArt) return
+        val i = items.indexOfFirst { it.first == item }
+        for (j in listOf(i + 1, i - 1)) {
+            val g = (items.getOrNull(j)?.first as? Item.Game)?.game ?: continue
+            ArtLoader.prefetch(ip, port, g.id, "hero", 1)
+        }
+    }
+
     private fun showItem(item: Item?) {
         if (host?.status != HomeHost.Status.READY || item == null) return
         val changed = item != selected
         selected = item
         primary.visibility = View.VISIBLE
+        if (changed && item is Item.Game) prefetchNeighbours(item)
         if (changed) {
             info.animate().cancel()
             info.alpha = 0f
@@ -866,8 +892,85 @@ class HomeScreen(
         incoming.alpha = 0f
         incoming.scaleX = 1.06f
         incoming.scaleY = 1.06f
-        incoming.animate().scaleX(1f).scaleY(1f).setDuration(1400).setInterpolator(DecelerateInterpolator(2f)).start()
+        incoming.translationX = 0f
+        drift?.cancel()
+        incoming.animate().scaleX(1f).scaleY(1f).setDuration(1400).setInterpolator(DecelerateInterpolator(2f))
+            .withEndAction { if (heroTop === incoming && bmp != null) startDrift(incoming) }.start()
         android.animation.ObjectAnimator.ofFloat(incoming, View.ALPHA, 0f, 1f).apply { duration = 420 }.start()
+        setAmbient(if (bmp != null) accentOf(bmp) else Jinky.BLUE_DEEP)
+    }
+
+    // The slow drift only while the home screen is on show (not under a game or another page).
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (!isShown) drift?.pause()
+        else {
+            removeCallbacks(resumeDrift)
+            postDelayed(resumeDrift, 1500)
+        }
+    }
+
+    /** The artwork keeps moving, very slowly, as if a camera drifted over it (a living screen). */
+    private fun startDrift(v: ImageView) {
+        drift?.cancel()
+        drift = android.animation.AnimatorSet().apply {
+            val dx = -dp(22).toFloat()
+            playTogether(
+                android.animation.ObjectAnimator.ofFloat(v, View.SCALE_X, 1f, 1.07f).apply { repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE },
+                android.animation.ObjectAnimator.ofFloat(v, View.SCALE_Y, 1f, 1.07f).apply { repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE },
+                android.animation.ObjectAnimator.ofFloat(v, View.TRANSLATION_X, 0f, dx).apply { repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE })
+            duration = 22_000
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            start()
+        }
+    }
+
+    /** The most colourful bright tone of the artwork (its "colour"), for the glow. */
+    private fun accentOf(bmp: Bitmap): Int {
+        val small = Bitmap.createScaledBitmap(bmp, 24, 8, true)
+        var best = Jinky.BLUE_DEEP
+        var bestScore = -1f
+        val hsv = FloatArray(3)
+        for (y in 0 until small.height) for (x in 0 until small.width) {
+            val c = small.getPixel(x, y)
+            Color.colorToHSV(c, hsv)
+            // Saturated and reasonably bright; neither near-black nor washed-out.
+            val score = hsv[1] * (if (hsv[2] in 0.25f..0.95f) hsv[2] else hsv[2] * 0.2f)
+            if (score > bestScore) { bestScore = score; best = c }
+        }
+        if (small !== bmp) small.recycle()
+        Color.colorToHSV(best, hsv)
+        hsv[1] = (hsv[1] * 1.1f).coerceAtMost(1f)
+        hsv[2] = 0.55f
+        return Color.HSVToColor(hsv)
+    }
+
+    private fun setAmbient(color: Int) {
+        if (!Jinky.showArt) {
+            ambient.background = null
+            return
+        }
+        val from = if (ambientColor == 0) color else ambientColor
+        ambientColor = color
+        ambientAnim?.cancel()
+        val glow = (ambient.background as? GradientDrawable) ?: GradientDrawable().apply {
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            setGradientCenter(0.12f, 0.95f)
+            gradientRadius = dp(760).toFloat()
+            ambient.background = this
+        }
+        val stops = IntArray(3)
+        fun paint(c: Int) {
+            stops[0] = (c and 0xFFFFFF) or 0x55000000
+            stops[1] = (c and 0xFFFFFF) or 0x18000000
+            stops[2] = 0
+            glow.colors = stops
+        }
+        ambientAnim = ValueAnimator.ofArgb(from, color).apply {
+            duration = 700
+            addUpdateListener { paint(it.animatedValue as Int) }
+            start()
+        }
     }
 
     private fun activate(item: Item?, play: Boolean) {

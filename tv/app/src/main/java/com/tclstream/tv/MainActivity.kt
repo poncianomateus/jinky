@@ -599,8 +599,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.CAPTURES -> capturesScreen
                 Page.DOWNLOADS -> downloadsScreen
             }
+            // Screens rise into place as they fade in, like a console's pages.
             view.alpha = 0f
-            view.animate().alpha(1f).setDuration(220).start()
+            view.translationY = 18 * resources.displayMetrics.density
+            view.scaleX = 0.985f
+            view.scaleY = 0.985f
+            view.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(320)
+                .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)).withLayer().start()
             if (p == Page.HOME) {
                 homeScreen.refreshRow()  // pins may have changed in the Biblioteca
                 homeScreen.animateIn()

@@ -1,6 +1,7 @@
 package com.tclstream.tv
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
@@ -12,14 +13,12 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
- * The opening when Jinky starts, like a console's boot (about 3 s): the brand's blue pixel lights
- * up, grows into the Jinky tile (the signature sound as it lands, a glow pulsing behind), the tile
- * glides aside as the wordmark comes in, a light sweeps across the tile while small pixels drift
- * out, and everything dissolves into the home screen. The retro theme types "JINKY" on a CRT
+ * The opening when Jinky starts, like a console's boot (about 5 s): specks of light circle in the
+ * dark and spiral into the centre, meeting in a flash with a shock ring (the signature sound); the
+ * Jinky tile is born from it, glides aside as the wordmark comes in, a light sweeps across the
+ * tile while sparks fade away, and everything pushes towards you into the home screen. The retro theme types "JINKY" on a CRT
  * instead. [fast] (a theme change) keeps it under a second; any button skips it.
  */
 class BootSplash(context: Context) : FrameLayout(context) {
@@ -57,8 +56,9 @@ class BootSplash(context: Context) : FrameLayout(context) {
     private fun finish() {
         if (finishing) return
         finishing = true
-        content.animate().scaleX(1.06f).scaleY(1.06f).setDuration(520).setInterpolator(exit).withLayer().start()
-        animate().alpha(0f).setDuration(520).setInterpolator(standard).withEndAction {
+        // Like a console handing over to its home: the logo pushes towards you as it dissolves.
+        content.animate().scaleX(1.12f).scaleY(1.12f).setDuration(700).setInterpolator(exit).withLayer().start()
+        animate().alpha(0f).setDuration(700).setInterpolator(standard).withEndAction {
             visibility = View.GONE
             onDone?.invoke()
             onDone = null
@@ -70,31 +70,35 @@ class BootSplash(context: Context) : FrameLayout(context) {
         val k = if (fast) 0.45f else 1f
         fun t(ms: Int) = (ms * k).toLong()
 
-        // A soft blue glow behind everything, pulsing once as the tile lands.
+        // Specks of light spiral into the centre and meet in a flash (IntroField); the tile is
+        // born from that flash, the wordmark joins it, a light sweeps across, sparks fade away.
+        content.addView(IntroField(context, k), LayoutParams(-1, -1))
+
+        // A soft blue glow behind the tile, swelling as it is born, then breathing.
         val glow = View(context).apply {
             background = GradientDrawable().apply {
                 gradientType = GradientDrawable.RADIAL_GRADIENT
-                colors = intArrayOf((0x66 shl 24) or (Jinky.BLUE and 0xFFFFFF), (0x14 shl 24) or (Jinky.BLUE and 0xFFFFFF), 0)
-                gradientRadius = 260 * d
+                colors = intArrayOf((0x70 shl 24) or (Jinky.BLUE and 0xFFFFFF), (0x18 shl 24) or (Jinky.BLUE and 0xFFFFFF), 0)
+                gradientRadius = 280 * d
             }
             alpha = 0f
-            scaleX = 0.6f
-            scaleY = 0.6f
+            scaleX = 0.5f
+            scaleY = 0.5f
         }
-        content.addView(glow, LayoutParams(dp(560), dp(560), Gravity.CENTER))
+        content.addView(glow, LayoutParams(dp(600), dp(600), Gravity.CENTER))
 
         // The tile (with the light sweep clipped inside it) and the wordmark, side by side.
-        val tileSize = dp(92)
+        val tileSize = dp(96)
         val tileBox = FrameLayout(context).apply {
             clipToOutline = true
             outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(22).toFloat())
+                override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, dp(23).toFloat())
             }
         }
         val tile = ImageView(context).apply { setImageResource(R.drawable.jinky_tile) }
         val shine = View(context).apply {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0x00FFFFFF, 0x66FFFFFF, 0x00FFFFFF))
+                intArrayOf(0x00FFFFFF, 0x77FFFFFF, 0x00FFFFFF))
             rotation = 20f
             alpha = 0f
         }
@@ -106,14 +110,14 @@ class BootSplash(context: Context) : FrameLayout(context) {
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
             addView(tileBox, LinearLayout.LayoutParams(tileSize, tileSize))
-            addView(word, LinearLayout.LayoutParams(dp(165), dp(55)).apply { marginStart = dp(20) })
+            addView(word, LinearLayout.LayoutParams(dp(172), dp(57)).apply { marginStart = dp(22) })
         }
         content.addView(row, LayoutParams(-2, -2, Gravity.CENTER))
         content.clipChildren = false
 
-        // The brand's pixel: lights up alone in the middle, then grows into the tile.
+        // The brand's pixel: it lights up in the flash and the tile grows out of it.
         val pixel = View(context).apply {
-            setBackgroundColor(Jinky.BLUE)
+            setBackgroundColor(Color.WHITE)
             alpha = 0f
             scaleX = 0.3f
             scaleY = 0.3f
@@ -124,61 +128,34 @@ class BootSplash(context: Context) : FrameLayout(context) {
         word.alpha = 0f
         row.post {
             // Centre the tile alone first (the wordmark is still hidden), then glide it aside.
-            val shift = (word.width + dp(20)) / 2f
+            val shift = (word.width + dp(22)) / 2f
             tileBox.translationX = shift
-            tileBox.scaleX = 0.16f
-            tileBox.scaleY = 0.16f
-            word.translationX = -dp(26).toFloat()
+            tileBox.scaleX = 0.2f
+            tileBox.scaleY = 0.2f
+            word.translationX = -dp(30).toFloat()
 
-            // Pixel -> tile: the pixel lights up, then swells and fades as the tile grows out of it.
-            // (Chained: a second animate() on the same properties would cancel the first.)
-            pixel.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(t(150)).setDuration(t(420))
+            val flash = IntroField.FLASH_MS
+            pixel.animate().alpha(1f).scaleX(1.4f).scaleY(1.4f).setStartDelay(t(flash - 180)).setDuration(t(220))
                 .setInterpolator(emphasized).withEndAction {
-                    pixel.animate().scaleX(5.5f).scaleY(5.5f).alpha(0f).setStartDelay(t(80)).setDuration(t(420))
-                        .setInterpolator(standard).start()
+                    pixel.animate().scaleX(6f).scaleY(6f).alpha(0f).setStartDelay(0).setDuration(t(420)).setInterpolator(standard).start()
                 }.start()
-            tileBox.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(t(680)).setDuration(t(620))
-                .setInterpolator(emphasized).withLayer().start()
-            postDelayed({ UiSounds.play(UiSounds.Sound.BOOT) }, t(900))
-            glow.animate().alpha(1f).scaleX(1.08f).scaleY(1.08f).setStartDelay(t(760)).setDuration(t(700))
+            postDelayed({ UiSounds.play(UiSounds.Sound.BOOT) }, t(flash))
+            tileBox.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(t(flash + 60)).setDuration(t(780))
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.15f)).withLayer().start()
+            glow.animate().alpha(1f).scaleX(1.12f).scaleY(1.12f).setStartDelay(t(flash)).setDuration(t(800))
                 .setInterpolator(emphasized).withEndAction {
-                    glow.animate().alpha(0.7f).scaleX(1f).scaleY(1f).setDuration(t(900)).setInterpolator(standard).start()
+                    glow.animate().alpha(0.65f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(t(1200)).setInterpolator(standard).start()
                 }.start()
             // The tile glides aside, the wordmark comes in next to it.
-            tileBox.animate().translationX(0f).setStartDelay(t(1350)).setDuration(t(650)).setInterpolator(emphasized).start()
-            word.animate().alpha(1f).translationX(0f).setStartDelay(t(1480)).setDuration(t(620))
+            tileBox.animate().translationX(0f).setStartDelay(t(flash + 1000)).setDuration(t(720)).setInterpolator(emphasized).start()
+            word.animate().alpha(1f).translationX(0f).setStartDelay(t(flash + 1150)).setDuration(t(720))
                 .setInterpolator(emphasized).withLayer().start()
             // A light sweeps across the tile.
             shine.translationX = -tileSize.toFloat()
-            shine.animate().alpha(1f).translationX(tileSize.toFloat()).setStartDelay(t(2050)).setDuration(t(700))
+            shine.animate().alpha(1f).translationX(tileSize.toFloat()).setStartDelay(t(flash + 1750)).setDuration(t(760))
                 .setInterpolator(standard).withEndAction { shine.alpha = 0f }.start()
-            if (!fast) sparkles(tileBox, row, t(1900))
         }
-        return t(3050)
-    }
-
-    /** A few small pixels drifting out of the tile and fading, the brand's motif. */
-    private fun sparkles(tileBox: View, row: View, delay: Long) {
-        val cx = row.left + tileBox.left + tileBox.width / 2f
-        val cy = row.top + tileBox.top + tileBox.height / 2f
-        val count = 9
-        repeat(count) { i ->
-            val size = dp(listOf(4, 5, 6, 8)[i % 4])
-            val p = View(context).apply {
-                setBackgroundColor(if (i % 3 == 0) Jinky.BLUE_SOFT else Jinky.BLUE)
-                alpha = 0f
-                x = cx - size / 2f
-                y = cy - size / 2f
-            }
-            content.addView(p, LayoutParams(size, size))
-            val angle = Math.toRadians(i * 360.0 / count + 15 * (i % 2))
-            val distance = dp(70 + (i * 13) % 50)
-            p.animate().alpha(0.9f).translationXBy((cos(angle) * distance).toFloat())
-                .translationYBy((sin(angle) * distance).toFloat()).setStartDelay(delay + i * 35L).setDuration(560)
-                .setInterpolator(emphasized).withEndAction {
-                    p.animate().alpha(0f).setDuration(420).setInterpolator(standard).start()
-                }.start()
-        }
+        return t(IntroField.FLASH_MS + 3000)
     }
 
     private fun retro(fast: Boolean): Long {
