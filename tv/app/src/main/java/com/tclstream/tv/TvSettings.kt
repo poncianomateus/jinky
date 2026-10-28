@@ -44,6 +44,11 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("wake_pc", true)
         set(v) = prefs.edit().putBoolean("wake_pc", v).apply()
 
+    /** "Avisos do PC": downloads finished, friends online... in the corner of the screen. */
+    var pcNotices: Boolean
+        get() = prefs.getBoolean("pc_notices", true)
+        set(v) = prefs.edit().putBoolean("pc_notices", v).apply()
+
     /** "Controle PlayStation no PC (beta)": a DualSense/DualShock becomes a DualShock 4 on the PC. */
     var psPad: Boolean
         get() = prefs.getBoolean("ps_pad", false)

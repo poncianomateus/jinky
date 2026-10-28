@@ -224,6 +224,9 @@ class SettingsScreen(
                 }
             }
             Section.ACHIEVEMENTS -> {
+                toggle("Avisos do PC", "Download ou atualização de jogo terminou, amigo ficou online ou começou a jogar, jogo pausado fechado. No canto da tela, também durante o jogo", { settings.pcNotices }) {
+                    settings.pcNotices = !settings.pcNotices
+                }
                 toggle("Avisos de conquista", "Aparecem no canto por 5 segundos, com som", { settings.toasts }) {
                     settings.toasts = !settings.toasts
                 }

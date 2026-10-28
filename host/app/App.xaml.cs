@@ -101,6 +101,7 @@ public partial class App : Application
         _tvService.Streaming = () => Dispatcher.Invoke(() => _vm.IsStreaming);
         _tvService.LaunchReady = () => Dispatcher.Invoke(() => _vm.LaunchReady);
         _tvService.SteamApiKey = () => _settings.SteamApiKey;
+        PcWatch.Start(() => _settings.SteamApiKey);  // downloads and friends, for the TV's notices
         _vm.CheckSteamKey();
 
         _engine = new Engine();

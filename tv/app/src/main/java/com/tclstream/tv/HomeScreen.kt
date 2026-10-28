@@ -166,6 +166,18 @@ class HomeScreen(
     private val pinButton = actionButton(R.drawable.ic_pin)
     private val info = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val hints = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    // "Esta semana": play time over the last days on this PC, and the game played most.
+    private val weekLabel = mono(8.5f, Jinky.BLUE_SOFT, 700).apply { letterSpacing = 0.18f }
+    private val weekTime = mono(13f, Jinky.TEXT, 700)
+    private val weekTop = text(9.5f, Jinky.SOFT, bold = false).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+    private val weekLine = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        visibility = View.GONE
+        addView(weekLabel)
+        addView(weekTime, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(9) })
+        addView(weekTop, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(9) })
+    }
     private var hintsForPs: Boolean? = null
 
     private var rowGlide: ValueAnimator? = null
@@ -251,6 +263,7 @@ class HomeScreen(
         addView(info, LayoutParams(dp(600), -2).apply { setMargins(dp(48), dp(268), 0, 0) })
 
         addView(hints, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(48), dp(20)) })
+        addView(weekLine, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(48), 0, 0, dp(20)) })
 
         for (b in listOf(primary, details, pinButton)) b.id = View.generateViewId()
         libraryTab.id = View.generateViewId()
@@ -362,7 +375,18 @@ class HomeScreen(
     }
 
     /** The PC's games (null = not loaded / not available). */
+    /** The week's play time on this PC (hidden until the PC has a record, or nothing was played). */
+    fun setWeek(w: LibraryWeek?) {
+        val time = Jinky.hours(w?.minutes ?: 0)
+        weekLine.gone(w == null || w.days <= 0 || time.isEmpty())
+        if (w == null || time.isEmpty()) return
+        weekLabel.text = Jinky.weekLabel(w.days).uppercase()
+        weekTime.text = time
+        weekTop.text = if (w.topName.isNotEmpty()) "· mais jogado: ${w.topName}" else ""
+    }
+
     fun setGames(list: List<LibraryGame>?, pcIp: String, port: Int) {
+        setWeek(if (list == null) null else LibraryScreen.lastWeek)
         games = list?.filter { it.state != LibraryGame.State.NOT_INSTALLED }
         art = pcIp to port
         val keep = selected
@@ -670,11 +694,16 @@ class HomeScreen(
                 details.gone(false)
                 pinButton.gone(false)
                 showPinState(g)
-                val hours = Jinky.hours(g.minutes).let { if (it.isEmpty()) "" else "$it no total" }
+                val week = (LibraryScreen.lastWeek?.days ?: 0).let { d ->
+                    Jinky.hours(g.weekMinutes).let { if (d <= 0 || it.isEmpty()) "" else "$it ${Jinky.weekLabel(d)}" }
+                }
+                val hours = listOf(week, Jinky.hours(g.minutes).let { if (it.isEmpty()) "" else "$it no total" })
+                    .filter { it.isNotEmpty() }.joinToString(" · ")
+                val downloading = g.state == LibraryGame.State.DOWNLOADING || g.updating
                 if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
                 else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
-                else setMeta(if (g.state == LibraryGame.State.DOWNLOADING) Jinky.BLUE else null,
-                    if (g.state == LibraryGame.State.DOWNLOADING) "Baixando no PC · ${(g.progress * 100).toInt()}%" else lastPlayedText(g.lastPlayed), hours)
+                else setMeta(if (downloading) Jinky.BLUE else null,
+                    if (downloading) Jinky.downloadText(g) else lastPlayedText(g.lastPlayed), hours)
                 if (changed) {
                     title.text = g.name
                     title.visibility = View.VISIBLE

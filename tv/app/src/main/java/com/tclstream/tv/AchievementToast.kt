@@ -30,7 +30,9 @@ class AchievementToast(context: Context) : FrameLayout(context) {
     private val count = text(10f, Jinky.AMBER, 700, mono = true)
     private val progress = View(context).apply { pivotX = 0f }
     private val card = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-    private val queue = ArrayDeque<AchievementUnlock>()
+    // Achievements and the PC's notices (with the PC to fetch a game's cover from).
+    private val queue = ArrayDeque<Any>()
+    private data class QueuedNotice(val n: PcNotice, val pcIp: String, val port: Int)
     private var showing = false
 
     init {
@@ -75,9 +77,52 @@ class AchievementToast(context: Context) : FrameLayout(context) {
         if (!showing) next()
     }
 
+    /** "Avisos do PC na TV": same card, the game's cover (or the friend's picture) and the notice. */
+    fun show(n: PcNotice, pcIp: String, port: Int) {
+        queue.addLast(QueuedNotice(n, pcIp, port))
+        if (!showing) next()
+    }
+
+    private fun showNotice(q: QueuedNotice) {
+        val n = q.n
+        val color = when (n.kind) {
+            "download", "update" -> Jinky.GREEN
+            "paused" -> Jinky.AMBER
+            else -> Jinky.BLUE
+        }
+        iconBox.background = Jinky.rounded(Jinky.BLUE_DEEP, dp(10).toFloat())
+        icon.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        icon.setImageResource(R.drawable.ic_gamepad)
+        icon.setColorFilter(color)
+        val showBitmap = { bmp: android.graphics.Bitmap? ->
+            if (bmp != null) {
+                icon.clearColorFilter()
+                icon.scaleType = ImageView.ScaleType.CENTER_CROP
+                icon.setImageBitmap(bmp)
+            }
+        }
+        if (n.icon.isNotBlank()) ArtLoader.loadUrl(n.icon, 1) { showBitmap(it) }
+        else if (n.gameId != 0 && Jinky.showArt) ArtLoader.load(q.pcIp, q.port, n.gameId, "cover", 2) { showBitmap(it) }
+        label.text = n.label
+        label.setTextColor(color)
+        name.text = n.title
+        detail.text = n.text
+        count.text = ""
+        progress.setBackgroundColor(color)
+        progress.scaleX = 1f
+        card.visibility = View.VISIBLE
+        UiSounds.play(UiSounds.Sound.SELECT)
+        animateCard()
+    }
+
     private fun next() {
-        val u = queue.removeFirstOrNull() ?: run { showing = false; return }
+        val item = queue.removeFirstOrNull() ?: run { showing = false; return }
         showing = true
+        if (item is QueuedNotice) {
+            showNotice(item)
+            return
+        }
+        val u = item as AchievementUnlock
         val r = u.rarity
         iconBox.background = Jinky.rounded(r.ground, dp(10).toFloat())
         // Until (or without) the game's own icon: a trophy in the rarity's colour.
@@ -99,6 +144,10 @@ class AchievementToast(context: Context) : FrameLayout(context) {
         progress.scaleX = if (u.total > 0) u.unlocked.toFloat() / u.total else 1f
         card.visibility = View.VISIBLE
         UiSounds.play(UiSounds.Sound.ACHIEVEMENT)
+        animateCard()
+    }
+
+    private fun animateCard() {
         card.alpha = 0f
         card.translationY = -dp(40).toFloat()
         card.animate().alpha(1f).translationY(0f).setDuration(420).setInterpolator(OvershootInterpolator(1.2f)).withEndAction {

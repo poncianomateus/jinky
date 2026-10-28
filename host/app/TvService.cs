@@ -227,6 +227,9 @@ public sealed class TvService : IDisposable
                 else if (request.Is("GET", "/library"))
                 {
                     var games = SteamLibrary.Games(SteamApiKey?.Invoke());
+                    PlaytimeHistory.Record(games);
+                    var week = PlaytimeHistory.ThisWeek();
+                    var top = week.Minutes.OrderByDescending(m => m.Value).FirstOrDefault();
                     var running = SteamLibrary.RunningGame();
                     var paused = GamePause.List().GroupBy(p => p.GameId).ToDictionary(p => p.Key, p => p.First());
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
@@ -238,6 +241,14 @@ public sealed class TvService : IDisposable
                     }
                     var json = System.Text.Json.JsonSerializer.Serialize(new
                     {
+                        // "Esta semana": minutes played over the last `days` days (0 = no record yet).
+                        week = new
+                        {
+                            days = week.Days,
+                            minutes = week.Total,
+                            topId = top.Value > 0 ? top.Key : 0,
+                            topName = top.Value > 0 ? games.FirstOrDefault(g => g.Id == top.Key)?.Name ?? "" : "",
+                        },
                         games = games.Select(g => new
                         {
                             id = g.Id, name = g.Name, lastPlayed = g.LastPlayed,
@@ -246,9 +257,14 @@ public sealed class TvService : IDisposable
                             hero = g.HeroPath is not null || g.State != GameState.Installed,
                             logo = g.LogoPath is not null || g.State != GameState.Installed,
                             state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
-                            progress = g.Progress,
+                            progress = PcWatch.UpdateProgress(g.Id) ?? g.Progress,
+                            // Seconds left for a download or update (-1 unknown), and whether an
+                            // installed game is updating.
+                            eta = g.State == GameState.Installed && PcWatch.UpdateProgress(g.Id) is null ? -1 : PcWatch.EtaSeconds(g.Id),
+                            updating = PcWatch.UpdateProgress(g.Id) is not null,
                             family = g.Family,
                             minutes = g.Minutes,
+                            weekMinutes = week.Minutes.GetValueOrDefault(g.Id),
                             running = running != 0 && g.Id == running,
                             paused = paused.ContainsKey(g.Id),
                             // When it was paused (Unix ms), and whether its last picture is there.
@@ -283,7 +299,11 @@ public sealed class TvService : IDisposable
                             return;
                         }
                         // Two paused, or the PC's memory short: the oldest paused game closes first.
-                        foreach (var closed in GamePause.MakeRoom()) Notice?.Invoke($"{closed} (pausado) fechado para liberar memória");
+                        foreach (var closed in GamePause.MakeRoom())
+                        {
+                            Notice?.Invoke($"{closed} (pausado) fechado para liberar memória");
+                            Notices.Post("paused", closed, "Estava pausado e foi fechado para liberar memória");
+                        }
                         SteamLibrary.Launch(game.Id);
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
@@ -400,6 +420,17 @@ public sealed class TvService : IDisposable
                 else if (request.Is("POST", "/captures/delete"))
                 {
                     await RespondText(stream, Captures.Delete(request.Query("name")) ? "ok" : "not found");
+                }
+                else if (request.Is("GET", "/notices"))
+                {
+                    // after=-1: just learn where the list stands (nothing from before this TV asked).
+                    var (last, list) = Notices.After(long.TryParse(request.Query("after"), out var na) ? na : -1);
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        last,
+                        notices = list.Select(n => new { id = n.Id, kind = n.Kind, title = n.Title, text = n.Text, gameId = n.GameId, icon = n.Icon }),
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if (request.Is("GET", "/achievements/unlocks"))
                 {

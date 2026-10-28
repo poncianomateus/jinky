@@ -190,4 +190,30 @@ object Jinky {
         minutes < 60 -> "$minutes min"
         else -> "${minutes / 60} h"
     }
+
+    /** "esta semana" once the PC has a week of record, else how far back it goes. */
+    fun weekLabel(days: Int): String = when {
+        days >= 7 -> "esta semana"
+        days == 1 -> "desde ontem"
+        else -> "nos últimos $days dias"
+    }
+
+    /** Time left for a download: "faltam 12 min", "faltam 1 h 20 min" ("" when unknown). */
+    fun eta(seconds: Int): String = when {
+        seconds < 0 -> ""
+        seconds < 60 -> "falta menos de 1 min"
+        seconds < 3600 -> "faltam ${(seconds + 59) / 60} min"
+        else -> {
+            val m = (seconds + 59) / 60
+            if (m % 60 == 0) "faltam ${m / 60} h" else "faltam ${m / 60} h ${m % 60} min"
+        }
+    }
+
+    /** "Baixando no PC · 45% · faltam 12 min" / "Atualizando no PC · …" for a game being downloaded. */
+    fun downloadText(g: LibraryGame, prefix: Boolean = true): String {
+        val what = if (g.updating) "Atualizando" else "Baixando"
+        val pct = "${(g.progress * 100).toInt()}%"
+        val eta = eta(g.eta)
+        return listOf(if (prefix) "$what no PC" else what, pct, eta).filter { it.isNotEmpty() }.joinToString(" · ")
+    }
 }

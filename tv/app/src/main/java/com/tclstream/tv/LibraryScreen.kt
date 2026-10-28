@@ -33,6 +33,9 @@ import java.net.URL
 import java.text.Normalizer
 import java.util.concurrent.Executors
 
+/** "Esta semana": minutes played over the last [days] days on the PC (0 days = no record yet). */
+data class LibraryWeek(val days: Int, val minutes: Int, val topId: Int, val topName: String)
+
 /** A game in the PC's Steam library. */
 data class LibraryGame(
     val id: Int,
@@ -47,6 +50,9 @@ data class LibraryGame(
     val paused: Boolean = false,  // frozen on the PC, continues where it stopped ("Continuar")
     val pausedAt: Long = 0,  // when it was paused (Unix ms)
     val snapshot: Boolean = false,  // the PC has its last picture (/library/snapshot)
+    val eta: Int = -1,  // seconds left of a download or update (-1 unknown)
+    val updating: Boolean = false,  // installed, with an update downloading on the PC
+    val weekMinutes: Int = 0,  // played over the last days ("esta semana", see LibraryWeek)
 ) {
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 
@@ -544,7 +550,7 @@ class LibraryScreen(
             LibraryGame.State.DOWNLOADING -> {
                 statState.text = "${(g.progress * 100).toInt()}%"
                 statState.setTextColor(Jinky.BLUE_SOFT)
-                statStateLabel.text = "baixando no PC"
+                statStateLabel.text = Jinky.eta(g.eta).ifEmpty { "baixando no PC" }
                 panelPrimary.text = "Baixando…"
                 panelPrimary.isEnabled = false
             }
@@ -748,13 +754,20 @@ class LibraryScreen(
         private const val GAP = 12
         private const val GAP_V = 14
 
+        /** The week's play time from the last [fetchGames] (null before one, or from an older PC). */
+        @Volatile var lastWeek: LibraryWeek? = null
+
         fun fetchGames(pcIp: String, port: Int): List<LibraryGame> {
             val c = URL("http://$pcIp:$port/library").openConnection() as HttpURLConnection
             c.connectTimeout = 4000
             c.readTimeout = 20000
             val json = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
             c.disconnect()
-            val list = org.json.JSONObject(json).getJSONArray("games")
+            val root = org.json.JSONObject(json)
+            root.optJSONObject("week")?.let { w ->
+                lastWeek = LibraryWeek(w.optInt("days"), w.optInt("minutes"), w.optInt("topId"), w.optString("topName"))
+            }
+            val list = root.getJSONArray("games")
             return (0 until list.length()).map {
                 val g = list.getJSONObject(it)
                 LibraryGame(g.getInt("id"), g.getString("name"), g.optLong("lastPlayed"), g.optBoolean("cover"),
@@ -769,7 +782,10 @@ class LibraryScreen(
                     g.optBoolean("running"),
                     g.optBoolean("paused"),
                     g.optLong("pausedAt"),
-                    g.optBoolean("snapshot"))
+                    g.optBoolean("snapshot"),
+                    g.optInt("eta", -1),
+                    g.optBoolean("updating"),
+                    g.optInt("weekMinutes"))
             }
         }
 

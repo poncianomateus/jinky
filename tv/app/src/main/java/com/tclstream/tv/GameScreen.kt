@@ -276,7 +276,7 @@ class GameScreen(
         primary.text = when (g.state) {
             LibraryGame.State.INSTALLED -> if (g.running) "Continuar" else "Jogar"
             LibraryGame.State.NOT_INSTALLED -> "Instalar"
-            LibraryGame.State.DOWNLOADING -> "Baixando ${(g.progress * 100).toInt()}%"
+            LibraryGame.State.DOWNLOADING -> Jinky.downloadText(g, prefix = false)
         }
         pin.gone(g.state == LibraryGame.State.NOT_INSTALLED)
         pin.text = if (g.id in pins.pinned) "Fixado" else "Fixar"
@@ -284,7 +284,7 @@ class GameScreen(
         presetNote.gone(g.state == LibraryGame.State.NOT_INSTALLED)
         showPreset(g)
         timeValue.text = Jinky.hours(g.minutes).ifEmpty { "—" }
-        timeLast.text = lastPlayed(g.lastPlayed)
+        timeLast.text = listOf(lastPlayed(g.lastPlayed), weekText(g)).filter { it.isNotEmpty() }.joinToString(" · ")
         timeSize.text = ""
         showAchievementsLoading(g)
         if (Jinky.showArt) ArtLoader.load(pcIp, port, g.id, "hero", 1) { bmp ->
@@ -395,8 +395,9 @@ class GameScreen(
 
     private fun addStateChip(g: LibraryGame, d: Details?) {
         when (g.state) {
-            LibraryGame.State.INSTALLED -> addChip(if (g.running) "Rodando no PC" else "Instalado", dot = Jinky.GREEN)
-            LibraryGame.State.DOWNLOADING -> addChip("Baixando ${(g.progress * 100).toInt()}%", dot = Jinky.BLUE)
+            LibraryGame.State.INSTALLED -> if (g.updating) addChip(Jinky.downloadText(g, prefix = false), dot = Jinky.BLUE)
+                else addChip(if (g.running) "Rodando no PC" else "Instalado", dot = Jinky.GREEN)
+            LibraryGame.State.DOWNLOADING -> addChip(Jinky.downloadText(g, prefix = false), dot = Jinky.BLUE)
             LibraryGame.State.NOT_INSTALLED -> addChip(if (g.family) "Da família" else "Na sua conta", dot = Jinky.DIM)
         }
     }
@@ -498,6 +499,13 @@ class GameScreen(
 
     override fun focusFirst() {
         primary.requestFocusFromTouch()
+    }
+
+    /** "2 h esta semana" ("" without a record or without play). */
+    private fun weekText(g: LibraryGame): String {
+        val days = LibraryScreen.lastWeek?.days ?: 0
+        val time = Jinky.hours(g.weekMinutes)
+        return if (days <= 0 || time.isEmpty()) "" else "$time ${Jinky.weekLabel(days)}"
     }
 
     private fun lastPlayed(unix: Long): String {

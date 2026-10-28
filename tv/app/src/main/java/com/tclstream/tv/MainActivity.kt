@@ -124,6 +124,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             if (inSession) {
                 checkPadBattery()
+                pollNotices()
                 // (the achievements page may be open over the game, from the menu)
                 if (!achievementsOverGame) showPage(null)
                 updateStartScreen()
@@ -133,6 +134,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (launching != null && android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) stopLaunching()
                 if (android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) installing = false
                 updateHome()
+                pollNotices()
             }
             updateUiInput()
             if (menu.isOpen) menu.updateStream(streamLine())
@@ -815,6 +817,46 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** While playing: asks the PC every few seconds for achievements just unlocked, and shows them. */
+    private var noticesAfter = -1L
+    private var noticesFrom: String? = null  // the PC whose notice ids [noticesAfter] counts
+    private var noticePolling = false
+    private var lastNoticePoll = 0L
+
+    /** "Avisos do PC": asks the PC for new notices every few seconds, at home and while playing. */
+    private fun pollNotices() {
+        val host = homeHost ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (noticePolling || now - lastNoticePoll < 4000 || host.updatePort == 0 || host.status == HomeHost.Status.OFFLINE) return
+        lastNoticePoll = now
+        val from = "${host.ip}:${host.updatePort}"
+        if (from != noticesFrom) {
+            noticesFrom = from
+            noticesAfter = -1L  // another PC: its own numbering, start from its present
+        }
+        noticePolling = true
+        val after = noticesAfter
+        Thread {
+            val result = try { NoticesApi.after(host.ip, host.updatePort, after) } catch (e: Exception) { null }
+            ui.post {
+                noticePolling = false
+                if (result == null || noticesFrom != from) return@post
+                noticesAfter = result.first
+                if (result.second.any { it.changesLibrary }) gamesFrom = null  // show the new state on the home row
+                // Installing from the TV: Steam's prompt was confirmed and the download started on
+                // the PC, so nothing else to do in Big Picture: back to the home screen.
+                val started = result.second.firstOrNull { it.kind == "downloadStart" && it.gameId == installingId }
+                if (installing && started != null && receiver?.inSession() == true) {
+                    installingId = 0
+                    receiver?.disconnect()
+                    showHint("${started.title} está baixando no PC. Acompanhe pela Biblioteca.")
+                    ui.removeCallbacks(hideHint)
+                    ui.postDelayed(hideHint, 5000)
+                }
+                if (settings.pcNotices) result.second.forEach { toast.show(it, host.ip, host.updatePort) }
+            }
+        }.start()
+    }
+
     private fun pollUnlocks() {
         val host = homeHost ?: return
         val now = android.os.SystemClock.elapsedRealtime()
@@ -871,6 +913,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun installGame(host: HomeHost, game: LibraryGame) {
         if (host.status != HomeHost.Status.READY) return
         installing = true
+        installingId = game.id
         launchedAt = android.os.SystemClock.elapsedRealtime()
         sessionTitle = "Instalando ${game.name}"
         sessionDesktop = false
@@ -881,10 +924,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Thread {
             LibraryScreen.install(host.ip, host.updatePort, game)?.let { Log.w(TAG, "install ${game.name}: $it") }
         }.start()
-        showHint("Confirme a instalação com A.  Depois: Voltar  →  Voltar ao início.", delayMs = 2500)
+        showHint("Confirme a instalação com A. Quando o download começar, a TV volta sozinha ao início.", delayMs = 2500)
     }
 
     private var installing = false
+    private var installingId = 0  // the game being installed (its download starting ends the session)
 
     /** A short note at the bottom of the screen (over the game), gone after a few seconds. */
     private fun showHint(text: String, delayMs: Long = 0) {

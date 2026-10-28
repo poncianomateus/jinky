@@ -101,6 +101,43 @@ public static partial class SteamLibrary
         return list;
     }
 
+    /// <summary>What a Steam library manifest says about a game being installed or updated.</summary>
+    public sealed record AppState(int Id, string Name, int Flags, long Done, long Total)
+    {
+        public bool Installed => (Flags & 4) != 0;
+        // Update required / running / started / downloading / staging / committing.
+        public bool Updating => Installed && (Flags & (2 | 256 | 1024 | 1048576 | 2097152 | 4194304)) != 0;
+    }
+
+    /// <summary>
+    /// Every game in the Steam library folders with its install state and download bytes, read
+    /// straight from the manifests (cheap: for watching downloads every few seconds).
+    /// </summary>
+    public static List<AppState> AppStates()
+    {
+        var list = new List<AppState>();
+        var steam = SteamPath();
+        if (steam is null) return list;
+        foreach (var library in LibraryFolders(steam))
+        {
+            var apps = Path.Combine(library, "steamapps");
+            if (!Directory.Exists(apps)) continue;
+            foreach (var manifest in Directory.EnumerateFiles(apps, "appmanifest_*.acf"))
+            {
+                string text;
+                try { text = File.ReadAllText(manifest, Encoding.UTF8); }
+                catch (IOException) { continue; }
+                if (!int.TryParse(Value(text, "appid"), out var id) || !int.TryParse(Value(text, "StateFlags"), out var flags)) continue;
+                var name = Value(text, "name") ?? $"App {id}";
+                if (NotGames.Contains(id) || !IsGame(id, name)) continue;
+                long.TryParse(Value(text, "BytesDownloaded"), out var done);
+                long.TryParse(Value(text, "BytesToDownload"), out var total);
+                list.Add(new AppState(id, name, flags, done, total));
+            }
+        }
+        return list;
+    }
+
     static bool IsGame(int id, string name) =>
         !NotGames.Contains(id) && !name.Contains("Redistributable") && !name.StartsWith("Proton") &&
         !name.StartsWith("Steam Linux Runtime") && !name.StartsWith("Steamworks");

@@ -52,6 +52,39 @@ enum class Rarity(val label: String, val color: Int, val soft: Int, val ground: 
     }
 }
 
+/** "Avisos do PC na TV": a download finished, a friend came online... (GET /notices). */
+data class PcNotice(val id: Long, val kind: String, val title: String, val text: String, val gameId: Int, val icon: String) {
+    /** The card's small caps line. */
+    val label get() = when (kind) {
+        "download" -> "DOWNLOAD CONCLUÍDO"
+        "downloadStart" -> "BAIXANDO NO PC"
+        "update" -> "JOGO ATUALIZADO"
+        "friend" -> "AMIGOS"
+        "paused" -> "JOGO PAUSADO FECHADO"
+        else -> "NO PC"
+    }
+    /** A download or update finished: the PC's game list changed. */
+    val changesLibrary get() = kind == "download" || kind == "update" || kind == "downloadStart"
+}
+
+object NoticesApi {
+    /** The notices after [after] (-1: none, just where the list stands) and the last id. */
+    fun after(pcIp: String, port: Int, after: Long): Pair<Long, List<PcNotice>> {
+        val c = URL("http://$pcIp:$port/notices?after=$after").openConnection() as HttpURLConnection
+        c.connectTimeout = 4000
+        c.readTimeout = 8000
+        val json = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+        c.disconnect()
+        val o = org.json.JSONObject(json)
+        val a = o.optJSONArray("notices")
+        val list = (0 until (a?.length() ?: 0)).map {
+            val x = a!!.getJSONObject(it)
+            PcNotice(x.optLong("id"), x.optString("kind"), x.optString("title"), x.optString("text"), x.optInt("gameId"), x.optString("icon"))
+        }
+        return o.optLong("last") to list
+    }
+}
+
 object AchievementsApi {
     private fun get(url: String): org.json.JSONObject {
         val c = URL(url).openConnection() as HttpURLConnection
