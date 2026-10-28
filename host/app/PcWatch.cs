@@ -55,7 +55,7 @@ public static class PcWatch
             if (DateTime.UtcNow - _playtimeAt > TimeSpan.FromMinutes(30))
             {
                 _playtimeAt = DateTime.UtcNow;
-                PlaytimeHistory.Record(SteamLibrary.Games(_apiKey?.Invoke()));
+                PlaytimeHistory.Record(Library.Games(_apiKey?.Invoke()));
                 EnsurePs2QuickResume();
             }
         }
@@ -76,10 +76,12 @@ public static class PcWatch
     {
         try
         {
+            // The PCSX2 the shortcuts start, or the one Jinky found by itself (works without Steam).
             var steam = SteamLibrary.SteamPath();
             var me = steam is null ? null : SteamLibrary.SteamId(steam);
-            if (steam is null || me is null) return;
-            foreach (var exe in SteamShortcuts.Read(steam, me).Select(s => s.Exe).Where(Pcsx2.IsPcsx2).Distinct(StringComparer.OrdinalIgnoreCase))
+            var exes = steam is null || me is null ? [] : SteamShortcuts.Read(steam, me).Select(s => s.Exe).Where(Pcsx2.IsPcsx2).ToList();
+            if (Ps2Library.FindPcsx2(exes) is { } found) exes.Add(found);
+            foreach (var exe in exes.Distinct(StringComparer.OrdinalIgnoreCase))
                 if (Pcsx2.EnsurePine(exe)) Ps2QuickResumeTurnedOn?.Invoke();
         }
         catch (Exception)

@@ -171,10 +171,8 @@ public static class GamePause
     /// <summary>The PS2 game in front: saved into Jinky's slot and PCSX2 closed. False if it couldn't.</summary>
     static bool PauseIntoState(int pid, int gameId, string name, string exe)
     {
-        // How to start it again: the Steam shortcut it was started from (the disc image is in its arguments).
-        var steam = SteamLibrary.SteamPath();
-        var me = steam is null ? null : SteamLibrary.SteamId(steam);
-        var shortcut = steam is null || me is null ? null : SteamShortcuts.Read(steam, me).FirstOrDefault(s => s.Id == gameId);
+        // How to start it again: the library's entry for it (its disc image is in the arguments).
+        var shortcut = Library.Find(gameId);
         if (shortcut is null || !Pcsx2.IsPcsx2(shortcut.Exe)) return false;
         var file = Pcsx2.SaveAndClose(pid, exe);
         if (file is null) return false;
@@ -182,7 +180,7 @@ public static class GamePause
         {
             Load();
             _list!.RemoveAll(p => p.GameId == gameId || !Alive(p));
-            _list.Add(new Paused(gameId, name, pid, DateTime.Now, 0, file, shortcut.Exe, shortcut.Args, shortcut.StartDir));
+            _list.Add(new Paused(gameId, name, pid, DateTime.Now, 0, file, shortcut.Exe, shortcut.Args ?? "", shortcut.StartDir ?? ""));
             Save();
         }
         return true;
@@ -202,7 +200,12 @@ public static class GamePause
         }
         if (!Alive(entry)) return false;
         // A PS2 game: started again straight from its save state.
-        if (entry.Saved) return Pcsx2.StartFromState(entry.Exe!, entry.Args ?? "", entry.StartDir ?? "") is not null;
+        if (entry.Saved)
+        {
+            if (Pcsx2.StartFromState(entry.Exe!, entry.Args ?? "", entry.StartDir ?? "") is not { } started) return false;
+            try { JinkyPlaytime.Track(gameId, Process.GetProcessById(started)); } catch (Exception) { }
+            return true;
+        }
         try
         {
             using var p = Process.GetProcessById(entry.Pid);

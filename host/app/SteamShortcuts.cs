@@ -34,10 +34,13 @@ public static class SteamShortcuts
                 var last = Get(entry, "LastPlayTime") is int t ? (uint)t : 0u;
                 var grid = Path.Combine(config, "grid");
                 var u = (uint)id;
+                // The "Exe" field may hold a whole command line ("pcsx2-qt.exe" "game.iso" -batch...):
+                // the program is the first part, the rest goes before the launch options.
+                var (exe, rest) = SplitCommand(Get(entry, "Exe") as string ?? Get(entry, "exe") as string ?? "");
+                var options = Get(entry, "LaunchOptions") as string ?? "";
                 result.Add(new Shortcut(id, name, last,
                     Image(grid, $"{u}p") ?? Image(grid, $"{u}"), Image(grid, $"{u}_hero"), Image(grid, $"{u}_logo"),
-                    (Get(entry, "Exe") as string ?? Get(entry, "exe") as string ?? "").Trim().Trim('"'),
-                    Get(entry, "LaunchOptions") as string ?? "",
+                    exe, $"{rest} {options}".Trim(),
                     (Get(entry, "StartDir") as string ?? "").Trim().Trim('"')));
             }
         }
@@ -46,6 +49,19 @@ public static class SteamShortcuts
             // A file being rewritten by Steam: no shortcuts this time.
         }
         return result;
+    }
+
+    /// <summary>A shortcut's "Exe": the program (unquoted) and whatever follows it on the line.</summary>
+    public static (string Exe, string Tail) SplitCommand(string raw)
+    {
+        raw = raw.Trim();
+        if (raw.StartsWith('"'))
+        {
+            var end = raw.IndexOf('"', 1);
+            return end > 0 ? (raw[1..end], raw[(end + 1)..].Trim()) : (raw.Trim('"'), "");
+        }
+        var exe = raw.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        return exe > 0 && exe + 4 < raw.Length ? (raw[..(exe + 4)], raw[(exe + 4)..].Trim()) : (raw, "");
     }
 
     /// <summary>The steam://rungameid/ id of a shortcut: its 32-bit id in the high half, 0x02000000 in the low.</summary>

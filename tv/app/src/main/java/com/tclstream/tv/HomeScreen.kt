@@ -782,7 +782,7 @@ class HomeScreen(
                 else if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
                 else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
                 else setMeta(if (downloading) Jinky.BLUE else null,
-                    if (downloading) Jinky.downloadText(g) else lastPlayedText(g.lastPlayed), hours)
+                    if (downloading) Jinky.downloadText(g) else (if (g.ps2) "PlayStation 2 · " else "") + lastPlayedText(g.lastPlayed), hours)
                 if (changed) {
                     title.text = g.name
                     title.visibility = View.VISIBLE

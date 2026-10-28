@@ -90,7 +90,7 @@ public sealed class TvService : IDisposable
     string? ArtFor(int id, string kind)
     {
         if (_art.TryGetValue((id, kind), out var path) && File.Exists(path)) return path;
-        if (!_known.ContainsKey(id) || kind is not ("cover" or "hero" or "logo")) return null;
+        if (!_known.ContainsKey(id) || kind is not ("cover" or "hero" or "logo") || Library.IsOwn(id)) return null;
         var downloaded = SteamLibrary.DownloadArt(id, kind);
         if (downloaded is not null) _art[(id, kind)] = downloaded;
         return downloaded;
@@ -229,14 +229,14 @@ public sealed class TvService : IDisposable
                 }
                 else if (request.Is("GET", "/library"))
                 {
-                    var games = SteamLibrary.Games(SteamApiKey?.Invoke());
+                    var games = Library.Games(SteamApiKey?.Invoke());
                     PlaytimeHistory.Record(games);
                     var week = PlaytimeHistory.ThisWeek();
                     var top = week.Minutes.OrderByDescending(m => m.Value).FirstOrDefault();
                     // The game downloading right now, live from Steam (its manifest lags behind).
                     var live = SteamDownloads.Now();
                     bool IsLive(SteamGame g) => live is { Id: > 0 } l && l.Id == g.Id;
-                    var running = SteamLibrary.RunningGame();
+                    var running = Library.Running();
                     var paused = GamePause.List().GroupBy(p => p.GameId).ToDictionary(p => p.Key, p => p.First());
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
@@ -295,7 +295,7 @@ public sealed class TvService : IDisposable
                 {
                     // The TV asks for the game together with its connection: it starts as soon as
                     // that session begins (never without a TV session).
-                    var game = SteamLibrary.Games().FirstOrDefault(g => g.Id == gameId);
+                    var game = Library.Find(gameId);
                     if (game is null) await Respond(stream, "404 Not Found", "text/plain", 0);
                     else await RespondText(stream, RunInSession(() =>
                     {
@@ -314,9 +314,10 @@ public sealed class TvService : IDisposable
                             Notice?.Invoke($"{closed} (pausado) fechado para liberar memória");
                             Notices.Post("paused", closed, "Estava pausado e foi fechado para liberar memória");
                         }
-                        SteamLibrary.Launch(game.Id);
-                        // Jinky Shell: follow Steam's launch steps for the TV's launch screen.
-                        LaunchWatch.Start(game.Id, EngineCommand);
+                        // Games with their own program start straight from Jinky (no Steam);
+                        // Steam's go through Steam, whose launch steps the TV then shows.
+                        Library.Launch(game);
+                        if (game.Exe is null && game.Id > 0 && !Library.IsOwn(game.Id)) LaunchWatch.Start(game.Id, EngineCommand);
                         GameLaunched?.Invoke(game.Name);
                     }) ? "ok" : "pending");
                 }

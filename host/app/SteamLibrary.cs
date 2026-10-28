@@ -12,7 +12,9 @@ public enum GameState { Installed, Downloading, NotInstalled }
 
 public sealed record SteamGame(int Id, string Name, long LastPlayed, string? CoverPath, string? HeroPath, string? LogoPath,
                                GameState State = GameState.Installed, double Progress = 1, bool Family = false,
-                               int Minutes = 0, string Platform = "");
+                               int Minutes = 0, string Platform = "",
+                               // Its own program (shortcuts, Jinky's games): started straight, no Steam.
+                               string? Exe = null, string? Args = null, string? StartDir = null);
 
 /// <summary>
 /// The games in Steam on this PC, for the TV's Biblioteca: names and install state from the
@@ -80,7 +82,8 @@ public static partial class SteamLibrary
             foreach (var s in SteamShortcuts.Read(steam, me))
                 // A PS2 game through PCSX2 (real Quick Resume with save states).
                 games[s.Id] = new SteamGame(s.Id, s.Name, s.LastPlayed, s.Cover, s.Hero, s.Logo,
-                                            Platform: Pcsx2.IsPcsx2(s.Exe) ? "ps2" : "");
+                                            Platform: Pcsx2.IsPcsx2(s.Exe) ? "ps2" : "",
+                                            Exe: s.Exe.Length > 0 ? s.Exe : null, Args: s.Args, StartDir: s.StartDir);
         var list = games.Values.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         // Games to install: straight from the Steam client when its reading is on (exactly its
         // Library), else from the Web API with a key.

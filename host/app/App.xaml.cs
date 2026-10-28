@@ -88,8 +88,8 @@ public partial class App : Application
         {
             if (_tvService.CurrentGameId != 0) return (_tvService.CurrentGameId, _tvService.CurrentGameName);
             // Started from Big Picture, not from the TV's library: ask Steam which game it is.
-            var id = SteamLibrary.RunningGame();
-            return (id, SteamLibrary.Games().FirstOrDefault(g => g.Id == id)?.Name ?? "O jogo");
+            var id = Library.Running();
+            return (id, Library.Find(id)?.Name ?? "O jogo");
         };
         _tvService.DiagnosticsReceived += (tv, path) => Dispatcher.Invoke(() => _vm.OnTvDiagnostics(tv, path));
         _tvService.GameLaunched += name => Dispatcher.Invoke(() => _vm.OnGameLaunched(name));
