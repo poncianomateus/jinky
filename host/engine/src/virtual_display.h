@@ -21,6 +21,12 @@ class VirtualDisplay {
 public:
     // The driver is installed and its screen is connected (in the desktop or not).
     static bool available();
+    // The driver's device is installed (its screen may still be missing).
+    static bool installed();
+    // ASTER (several people on one PC, each with their own monitors) runs here: its display
+    // filter takes new screens over, and switching monitors would darken the other workplaces.
+    // No virtual screen then.
+    static bool multiseat();
 
     // Makes the virtual screen, at width x height @ hz, the whole desktop (the PC's monitors go
     // dark). On success `gdi_name` is its GDI name (\\.\DISPLAYn), for the capture.

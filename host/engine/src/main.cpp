@@ -234,7 +234,12 @@ int main(int argc, char** argv) {
         LocalFree(wargv);
     }
     // The Jinky app asks (as administrator, for install/uninstall) about the virtual screen driver.
-    if (opt.vdisplay_admin == "status") return tcl::VirtualDisplay::available() ? 0 : 1;
+    // 0 = ready, 1 = not installed, 2 = installed but its screen isn't there, 3 = ASTER here,
+    // 4 = ASTER here and the driver installed anyway (nothing can use it).
+    if (opt.vdisplay_admin == "status") {
+        if (tcl::VirtualDisplay::multiseat()) return tcl::VirtualDisplay::installed() ? 4 : 3;
+        return tcl::VirtualDisplay::available() ? 0 : tcl::VirtualDisplay::installed() ? 2 : 1;
+    }
     if (opt.vdisplay_admin == "uninstall") return tcl::VirtualDisplay::uninstall();
     if (opt.vdisplay_admin == "install") {
         int wargc = 0;

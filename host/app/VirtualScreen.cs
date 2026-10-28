@@ -61,20 +61,26 @@ public static class VirtualScreen
         }
     }
 
-    /// <summary>The driver is installed and its screen is there (asks the engine; no administrator).</summary>
-    public static bool Installed()
+    public enum State { Missing, Ready, NoScreen, Multiseat, MultiseatWithDriver }
+
+    /// <summary>
+    /// Where the virtual screen stands (asks the engine; no administrator). Multiseat: ASTER runs
+    /// here (several people on one PC); its display filter hides new screens and switching monitors
+    /// would darken the other workplaces, so there is no virtual screen.
+    /// </summary>
+    public static State Check()
     {
         var exe = Engine.FindExecutable();
-        if (exe is null) return false;
+        if (exe is null) return State.Missing;
         try
         {
             using var p = Process.Start(new ProcessStartInfo(exe, "--virtual-display-status") { UseShellExecute = false, CreateNoWindow = true });
-            if (p is null || !p.WaitForExit(10_000)) return false;
-            return p.ExitCode == 0;
+            if (p is null || !p.WaitForExit(10_000)) return State.Missing;
+            return p.ExitCode switch { 0 => State.Ready, 2 => State.NoScreen, 3 => State.Multiseat, 4 => State.MultiseatWithDriver, _ => State.Missing };
         }
         catch (Exception)
         {
-            return false;
+            return State.Missing;
         }
     }
 

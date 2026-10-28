@@ -230,6 +230,19 @@ bool write_settings(const std::wstring& folder) {
 
 }  // namespace
 
+bool VirtualDisplay::installed() {
+    return for_each_device([](HDEVINFO, SP_DEVINFO_DATA&) {});
+}
+
+bool VirtualDisplay::multiseat() {
+    // ASTER's kernel driver (mutenx.sys, IBIK LLC).
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\MUTENX_SERVICE", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return false;
+    RegCloseKey(key);
+    return true;
+}
+
 bool VirtualDisplay::available() {
     std::vector<DISPLAYCONFIG_PATH_INFO> paths;
     std::vector<DISPLAYCONFIG_MODE_INFO> modes;
@@ -240,6 +253,10 @@ bool VirtualDisplay::available() {
 
 bool VirtualDisplay::enter(uint32_t width, uint32_t height, uint32_t hz, std::wstring& gdi_name) {
     if (active_) return false;
+    if (multiseat()) {
+        TCL_WARN("vdisplay", "ASTER runs on this PC: no virtual screen (it would darken the other workplaces)");
+        return false;
+    }
     std::vector<DISPLAYCONFIG_PATH_INFO> paths;
     std::vector<DISPLAYCONFIG_MODE_INFO> modes;
     if (!query(QDC_ONLY_ACTIVE_PATHS, saved_paths_, saved_modes_) || !query(QDC_ALL_PATHS, paths, modes)) {
