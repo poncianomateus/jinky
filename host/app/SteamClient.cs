@@ -124,6 +124,27 @@ public static class SteamClient
         }
     }
 
+    /// <summary>
+    /// Runs one expression in Steam's page (read-only queries) and returns its string result; null
+    /// when the reading is off or Steam isn't there. Quiet: callers poll it.
+    /// </summary>
+    public static string? Run(string expression)
+    {
+        try
+        {
+            using var pages = JsonDocument.Parse(Http.GetStringAsync(DebugUrl).GetAwaiter().GetResult());
+            var ws = pages.RootElement.EnumerateArray()
+                .Where(p => p.TryGetProperty("title", out var t) && t.GetString() == "SharedJSContext")
+                .Select(p => p.GetProperty("webSocketDebuggerUrl").GetString())
+                .FirstOrDefault();
+            return ws is null ? null : Evaluate(new Uri(ws), expression);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Runs one expression in the page and returns its string result.</summary>
     static string? Evaluate(Uri ws, string expression)
     {

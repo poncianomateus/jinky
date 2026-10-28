@@ -157,7 +157,7 @@ class LibraryScreen(
                 val fresh = try { fetchGames(ip, port) } catch (e: Exception) { null }
                 main.post { if (gen == generation && fresh != null) updateProgress(fresh) }
             }
-            main.postDelayed(this, 4000)
+            main.postDelayed(this, 2000)
         }
     }
     private val tick = object : Runnable {

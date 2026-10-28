@@ -230,6 +230,9 @@ public sealed class TvService : IDisposable
                     PlaytimeHistory.Record(games);
                     var week = PlaytimeHistory.ThisWeek();
                     var top = week.Minutes.OrderByDescending(m => m.Value).FirstOrDefault();
+                    // The game downloading right now, live from Steam (its manifest lags behind).
+                    var live = SteamDownloads.Now();
+                    bool IsLive(SteamGame g) => live is { Id: > 0 } l && l.Id == g.Id;
                     var running = SteamLibrary.RunningGame();
                     var paused = GamePause.List().GroupBy(p => p.GameId).ToDictionary(p => p.Key, p => p.First());
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
@@ -257,11 +260,12 @@ public sealed class TvService : IDisposable
                             hero = g.HeroPath is not null || g.State != GameState.Installed,
                             logo = g.LogoPath is not null || g.State != GameState.Installed,
                             state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
-                            progress = PcWatch.UpdateProgress(g.Id) ?? g.Progress,
+                            progress = IsLive(g) ? live!.Percent / 100.0 : PcWatch.UpdateProgress(g.Id) ?? g.Progress,
                             // Seconds left for a download or update (-1 unknown), and whether an
                             // installed game is updating.
-                            eta = g.State == GameState.Installed && PcWatch.UpdateProgress(g.Id) is null ? -1 : PcWatch.EtaSeconds(g.Id),
-                            updating = PcWatch.UpdateProgress(g.Id) is not null,
+                            eta = IsLive(g) ? (live!.Paused ? -1 : live.EtaSeconds)
+                                : g.State == GameState.Installed && PcWatch.UpdateProgress(g.Id) is null ? -1 : PcWatch.EtaSeconds(g.Id),
+                            updating = (IsLive(g) && g.State == GameState.Installed) || PcWatch.UpdateProgress(g.Id) is not null,
                             family = g.Family,
                             minutes = g.Minutes,
                             weekMinutes = week.Minutes.GetValueOrDefault(g.Id),
@@ -420,6 +424,26 @@ public sealed class TvService : IDisposable
                 else if (request.Is("POST", "/captures/delete"))
                 {
                     await RespondText(stream, Captures.Delete(request.Query("name")) ? "ok" : "not found");
+                }
+                else if (request.Is("GET", "/downloads"))
+                {
+                    // Live downloads for the TV's progress bar, speed graph and queue (asked every
+                    // second while something downloads). available=false: Steam can't be read live
+                    // ("Ler direto da Steam" off); the TV then uses /library's progress.
+                    var d = await Task.Run(SteamDownloads.Now);
+                    var active = d is { Id: > 0 } && d.State is not ("" or "None");
+                    var json = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        available = d is not null,
+                        active = active ? new
+                        {
+                            id = d!.Id, name = d.Name, state = d.State, percent = d.Percent, speed = d.Speed, peak = d.Peak,
+                            disk = d.Disk, eta = d.EtaSeconds, paused = d.Paused, install = d.Install,
+                        } : null,
+                        queue = d?.Queue.Where(q => !active || q.Id != d.Id).Select(q => new { id = q.Id, name = q.Name, percent = q.Percent, paused = q.Paused }),
+                        history = active ? d!.History : [],
+                    });
+                    await RespondText(stream, json, "application/json; charset=utf-8");
                 }
                 else if (request.Is("GET", "/notices"))
                 {

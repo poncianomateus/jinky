@@ -138,7 +138,7 @@ public static partial class SteamLibrary
         return list;
     }
 
-    static bool IsGame(int id, string name) =>
+    public static bool IsGame(int id, string name) =>
         !NotGames.Contains(id) && !name.Contains("Redistributable") && !name.StartsWith("Proton") &&
         !name.StartsWith("Steam Linux Runtime") && !name.StartsWith("Steamworks");
 

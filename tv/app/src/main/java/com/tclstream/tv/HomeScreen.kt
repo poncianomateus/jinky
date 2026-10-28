@@ -61,6 +61,7 @@ class HomeScreen(
     private val onProfile: () -> Unit,
     private val onFriends: () -> Unit,
     private val onChoosePc: () -> Unit,
+    private val onDownloads: () -> Unit = {},
 ) : TvPage(context) {
 
     private sealed class Item {
@@ -68,6 +69,7 @@ class HomeScreen(
         object BigPicture : Item()
         object Desktop : Item()
         object Library : Item()
+        object Downloads : Item()
     }
 
     // Background: two layers for cross-fading artwork, under scrims that keep text readable.
@@ -166,6 +168,14 @@ class HomeScreen(
     private val pinButton = actionButton(R.drawable.ic_pin)
     private val info = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val hints = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    // Live downloads on the PC: the card at the bottom left (instead of the week line) and the
+    // "Downloads" tile in the row.
+    private val downloadCard = DownloadCard(context)
+    private var downloads: DownloadsState? = null
+    private var downloadsTileText: View? = null
+    private var downloadsTileBar: DownloadBar? = null
+    private var week: LibraryWeek? = null
+
     // "Esta semana": play time over the last days on this PC, and the game played most.
     private val weekLabel = mono(8.5f, Jinky.BLUE_SOFT, 700).apply { letterSpacing = 0.18f }
     private val weekTime = mono(13f, Jinky.TEXT, 700)
@@ -264,6 +274,7 @@ class HomeScreen(
 
         addView(hints, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(48), dp(20)) })
         addView(weekLine, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(48), 0, 0, dp(20)) })
+        addView(downloadCard, LayoutParams(dp(470), -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(48), 0, 0, dp(18)) })
 
         for (b in listOf(primary, details, pinButton)) b.id = View.generateViewId()
         libraryTab.id = View.generateViewId()
@@ -375,10 +386,40 @@ class HomeScreen(
     }
 
     /** The PC's games (null = not loaded / not available). */
+    /** The PC's downloads, every second or so while something downloads. */
+    fun setDownloads(state: DownloadsState?) {
+        val had = downloads?.any == true
+        downloads = state
+        val (ip, port) = art ?: ("" to 0)
+        downloadCard.show(state, ip, port)
+        setWeek(week)
+        if (had != (state?.any == true) && games != null) {
+            // The Downloads tile comes or goes: rebuild the row, keeping the focus where it was.
+            val keep = selected
+            val focusedRow = rowItems.hasFocus()
+            rebuildRow()
+            val keepId = (keep as? Item.Game)?.game?.id
+            val again = items.firstOrNull { (k, _) -> k == keep || (keepId != null && (k as? Item.Game)?.game?.id == keepId) }
+                ?: items.firstOrNull()
+            if (again != null) {
+                selected = null
+                if (focusedRow) again.second.requestFocus() else showItem(again.first)
+            }
+            return
+        }
+        val pct = state?.active?.percent
+        (downloadsTileText as? LinearLayout)?.let { l ->
+            (l.getChildAt(l.childCount - 1) as? android.widget.TextView)?.text = if (pct != null) "$pct%" else "na fila"
+        }
+        downloadsTileBar?.paused = state?.active?.paused == true
+        downloadsTileBar?.setProgress((pct ?: 0) / 100f)
+    }
+
     /** The week's play time on this PC (hidden until the PC has a record, or nothing was played). */
     fun setWeek(w: LibraryWeek?) {
+        week = w
         val time = Jinky.hours(w?.minutes ?: 0)
-        weekLine.gone(w == null || w.days <= 0 || time.isEmpty())
+        weekLine.gone(w == null || w.days <= 0 || time.isEmpty() || downloads?.active != null)
         if (w == null || time.isEmpty()) return
         weekLabel.text = Jinky.weekLabel(w.days).uppercase()
         weekTime.text = time
@@ -504,6 +545,7 @@ class HomeScreen(
         section("RECENTES", recent.map { Item.Game(it) }, divider = pinned.isNotEmpty() || running != null || paused.isNotEmpty())
         section(null, buildList {
             if (installed.isNotEmpty()) add(Item.Library)
+            if (downloads?.any == true) add(Item.Downloads)
             add(Item.BigPicture)
             add(Item.Desktop)
         }, divider = installed.isNotEmpty())
@@ -549,6 +591,16 @@ class HomeScreen(
             Item.BigPicture -> addView(tileLabel(null, "Steam", "Big Picture"), LayoutParams(-1, -1))
             Item.Desktop -> addView(tileLabel(null, "Área de trabalho", "a tela do PC"), LayoutParams(-1, -1))
             Item.Library -> addView(tileLabel(R.drawable.ic_grid, "Biblioteca", "${games?.size ?: 0}"), LayoutParams(-1, -1))
+            Item.Downloads -> {
+                // The live download right on the tile: its percent and a thin bar along the bottom.
+                val pct = downloads?.active?.percent
+                addView(tileLabel(null, "Downloads", if (pct != null) "$pct%" else "na fila").also { downloadsTileText = it },
+                    LayoutParams(-1, -1))
+                addView(DownloadBar(context, 2f).also { b ->
+                    downloadsTileBar = b
+                    b.setProgress((pct ?: 0) / 100f, animate = false)
+                }, LayoutParams(-1, dp(4), Gravity.BOTTOM).apply { setMargins(dp(10), 0, dp(10), dp(12)) })
+            }
         }
         foreground = GradientDrawable().apply {
             setColor(Color.TRANSPARENT); cornerRadius = dp(10).toFloat(); setStroke(dp(2) + dp(1) / 2, Color.TRANSPARENT)
@@ -716,6 +768,7 @@ class HomeScreen(
             Item.BigPicture -> describe("Steam Big Picture", "Modo console com a interface da Steam. Sair do Big Picture encerra a sessão.", "Abrir")
             Item.Desktop -> describe("Área de trabalho", "Mostra a tela do PC como ela está, sem modo console.", "Abrir")
             Item.Library -> describe("Biblioteca", "Todos os seus jogos, com busca e filtros.", "Ver todos")
+            Item.Downloads -> describe("Downloads", downloads?.active?.let { "${it.stateText} ${it.name} no PC." } ?: "Jogos na fila de download do PC.", "Ver downloads")
         }
     }
 
@@ -826,6 +879,7 @@ class HomeScreen(
             item == Item.BigPicture -> onPlay(h, false)
             item == Item.Desktop -> onPlay(h, true)
             item == Item.Library -> onLibrary(h, false)
+            item == Item.Downloads -> onDownloads()
         }
     }
 

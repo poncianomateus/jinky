@@ -44,6 +44,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var profileScreen: ProfileScreen
     private lateinit var friendsScreen: FriendsScreen
     private lateinit var capturesScreen: CapturesScreen
+    private lateinit var downloadsScreen: DownloadsScreen
     private lateinit var toast: AchievementToast
     private var bootSplash: BootSplash? = null
     private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
@@ -62,7 +63,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val settings by lazy { TvSettings(this) }
 
     /** Which of the TV's own screens is up while no game is on. */
-    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS, FRIENDS, CAPTURES }
+    private enum class Page { HOME, SETTINGS, HELP, LIBRARY, GAME, ACHIEVEMENTS, PROFILE, PCS, FRIENDS, CAPTURES, DOWNLOADS }
     private var page = Page.HOME
     private var homeHost: HomeHost? = null  // the PC the home screen shows
     private var askedForPc = false  // "Escolher PC" was shown by itself (several PCs, none chosen yet)
@@ -125,6 +126,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (inSession) {
                 checkPadBattery()
                 pollNotices()
+                pollDownloads()
                 // (the achievements page may be open over the game, from the menu)
                 if (!achievementsOverGame) showPage(null)
                 updateStartScreen()
@@ -135,6 +137,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (android.os.SystemClock.elapsedRealtime() - launchedAt > 3000) installing = false
                 updateHome()
                 pollNotices()
+                pollDownloads()
             }
             updateUiInput()
             if (menu.isOpen) menu.updateStream(streamLine())
@@ -209,7 +212,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     }
                 },
                 onFriends = ::openFriends,
-                onChoosePc = { showPage(Page.PCS) })
+                onChoosePc = { showPage(Page.PCS) },
+                onDownloads = {
+                    showPage(Page.DOWNLOADS)
+                    val h = homeHost
+                    if (h != null) downloadsScreen.show(lastDownloads, h.ip, h.updatePort)
+                    lastDownloadsPoll = 0L  // fresh numbers right away
+                })
             updater.register()
             addView(homeScreen, FrameLayout.LayoutParams(-1, -1))
             settingsScreen = SettingsScreen(this@MainActivity, settings,
@@ -282,6 +291,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(profileScreen, FrameLayout.LayoutParams(-1, -1))
             capturesScreen = CapturesScreen(this@MainActivity) { showPage(Page.PROFILE) }.apply { visibility = View.GONE }
             addView(capturesScreen, FrameLayout.LayoutParams(-1, -1))
+            downloadsScreen = DownloadsScreen(this@MainActivity) { id ->
+                pcGames.firstOrNull { it.id == id }?.let { openGame(it, Page.DOWNLOADS) }
+            }.apply { visibility = View.GONE }
+            addView(downloadsScreen, FrameLayout.LayoutParams(-1, -1))
             friendsScreen = FriendsScreen(this@MainActivity,
                 ownedGame = { id -> pcGames.firstOrNull { it.id == id } },
                 onOpenGame = { g -> openGame(g, Page.FRIENDS) },
@@ -548,6 +561,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             pcPicker.visibility == View.VISIBLE -> Page.PCS
             friendsScreen.visibility == View.VISIBLE -> Page.FRIENDS
             capturesScreen.visibility == View.VISIBLE -> Page.CAPTURES
+            downloadsScreen.visibility == View.VISIBLE -> Page.DOWNLOADS
             else -> null
         }
         if (p != null) page = p
@@ -561,6 +575,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         pcPicker.visibility = if (p == Page.PCS) View.VISIBLE else View.GONE
         friendsScreen.visibility = if (p == Page.FRIENDS) View.VISIBLE else View.GONE
         capturesScreen.visibility = if (p == Page.CAPTURES) View.VISIBLE else View.GONE
+        downloadsScreen.visibility = if (p == Page.DOWNLOADS) View.VISIBLE else View.GONE
         if (before == Page.FRIENDS && p != Page.FRIENDS) friendsScreen.hidden()
         if (p == Page.FRIENDS && before != Page.FRIENDS) friendsScreen.resumed()  // back from a game's page
         if (p == Page.PCS && before != Page.PCS) {
@@ -582,6 +597,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Page.PCS -> pcPicker
                 Page.FRIENDS -> friendsScreen
                 Page.CAPTURES -> capturesScreen
+                Page.DOWNLOADS -> downloadsScreen
             }
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(220).start()
@@ -601,6 +617,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Page.PCS -> pcPicker.focusFirst()
             Page.FRIENDS -> friendsScreen.focusFirst()
             Page.CAPTURES -> capturesScreen.focusFirst()
+            Page.DOWNLOADS -> downloadsScreen.focusFirst()
         }
         updateUiInput()
     }
@@ -817,6 +834,48 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** While playing: asks the PC every few seconds for achievements just unlocked, and shows them. */
+    // Live downloads (GET /downloads): every second while something downloads and the home screen
+    // or the Downloads page shows it (or an install from the TV waits for its download to start),
+    // every few seconds otherwise, to notice a new one.
+    private var lastDownloads: DownloadsState? = null
+    private var downloadsPolling = false
+    private var lastDownloadsPoll = 0L
+
+    private fun pollDownloads() {
+        val host = homeHost ?: return
+        if (host.updatePort == 0 || host.status == HomeHost.Status.OFFLINE) return
+        val inSession = receiver?.inSession() == true
+        if (inSession && !installing) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val busy = lastDownloads?.any == true || installing || downloadsScreen.visibility == View.VISIBLE
+        if (downloadsPolling || now - lastDownloadsPoll < (if (busy) 1000 else 5000)) return
+        lastDownloadsPoll = now
+        downloadsPolling = true
+        Thread {
+            val state = try { DownloadsApi.fetch(host.ip, host.updatePort) } catch (e: Exception) { null }
+            ui.post {
+                downloadsPolling = false
+                if (homeHost?.id != host.id) return@post
+                val was = lastDownloads
+                lastDownloads = state
+                // A download finished (or a new one appeared): the home row shows the new state.
+                if (was?.active?.id != state?.active?.id) gamesFrom = null
+                homeScreen.setDownloads(state)
+                if (downloadsScreen.visibility == View.VISIBLE) downloadsScreen.show(state, host.ip, host.updatePort)
+                // Installing from the TV: Steam took it (it is downloading or queued): back home.
+                val id = installingId
+                if (installing && id != 0 && receiver?.inSession() == true &&
+                    (state?.active?.id == id || state?.queue?.any { it.id == id } == true)) {
+                    installingId = 0
+                    receiver?.disconnect()
+                    showHint("${state?.active?.takeIf { it.id == id }?.name ?: "O jogo"} está baixando no PC. Acompanhe em Downloads, na tela inicial.")
+                    ui.removeCallbacks(hideHint)
+                    ui.postDelayed(hideHint, 5000)
+                }
+            }
+        }.start()
+    }
+
     private var noticesAfter = -1L
     private var noticesFrom: String? = null  // the PC whose notice ids [noticesAfter] counts
     private var noticePolling = false
@@ -1150,7 +1209,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
         profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||
-        friendsScreen.visibility == View.VISIBLE || capturesScreen.visibility == View.VISIBLE || menu.isOpen || keyboard.isOpen
+        friendsScreen.visibility == View.VISIBLE || capturesScreen.visibility == View.VISIBLE ||
+        downloadsScreen.visibility == View.VISIBLE || menu.isOpen || keyboard.isOpen
 
     /** The controller drives the TV's own screens (home, menu); during play it drives the PC. */
     private fun updateUiInput() {
@@ -1381,6 +1441,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // On the home screen Back leaves the app; settings/help go back one step; while playing it
         // opens/closes the menu.
         if (capturesScreen.visibility == View.VISIBLE) { if (!capturesScreen.closeViewer()) showPage(Page.PROFILE) }
+        else if (downloadsScreen.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (friendsScreen.visibility == View.VISIBLE) { if (!friendsScreen.backToList()) showPage(friendsOrigin) }
         else if (profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE) showPage(Page.HOME)
         else if (achievementsScreen.visibility == View.VISIBLE) { if (!achievementsScreen.closeDetail()) closeAchievements() }
