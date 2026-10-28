@@ -14,7 +14,9 @@ public sealed record SteamGame(int Id, string Name, long LastPlayed, string? Cov
                                GameState State = GameState.Installed, double Progress = 1, bool Family = false,
                                int Minutes = 0, string Platform = "",
                                // Its own program (shortcuts, Jinky's games): started straight, no Steam.
-                               string? Exe = null, string? Args = null, string? StartDir = null);
+                               string? Exe = null, string? Args = null, string? StartDir = null,
+                               // Other stores: how the store starts it ([Uri]) and the game's program, to count its time.
+                               string? Uri = null, string? TrackExe = null);
 
 /// <summary>
 /// The games in Steam on this PC, for the TV's Biblioteca: names and install state from the

@@ -394,7 +394,7 @@ class GameScreen(
     }
 
     private fun addStateChip(g: LibraryGame, d: Details?) {
-        if (g.ps2) addChip("PlayStation 2", dot = Jinky.VIOLET)
+        if (g.platformName.isNotEmpty()) addChip(g.platformName, dot = Jinky.VIOLET)
         when (g.state) {
             LibraryGame.State.INSTALLED -> if (g.updating) addChip(Jinky.downloadText(g, prefix = false), dot = Jinky.BLUE)
                 else addChip(if (g.running) "Rodando no PC" else "Instalado", dot = Jinky.GREEN)

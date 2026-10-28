@@ -12,8 +12,18 @@ namespace Jinky;
 /// </summary>
 public static class LaunchWatch
 {
-    /// <summary>What the TV shows: a phrase, a percent (-1 none), seconds left (-1 unknown).</summary>
-    public sealed record State(string Text, int Percent, int Eta, bool Waiting, bool Running);
+    /// <summary>
+    /// What the TV shows: a phrase, a percent (-1 none), seconds left (-1 unknown); [Ask]: Steam's
+    /// question for the player, answered on the TV ([Waiting] without it: the PC's window is shown);
+    /// [CanSkip]: shader processing can be skipped.
+    /// </summary>
+    public sealed record State(string Text, int Percent, int Eta, bool Waiting, bool Running, Prompt? Ask = null, bool CanSkip = false);
+
+    /// <summary>A question Steam asks before starting the game, as the TV shows it (one button per choice, and Cancelar).</summary>
+    public sealed record Prompt(string Title, string Text, List<Choice> Choices);
+    public sealed record Choice(string Label, string Value);
+
+    static int _actionId;  // Steam's game action being followed (for the answers)
 
     // Read-only: Steam's active "game actions" (its launch steps) with their details, and which
     // apps it reports running.
@@ -99,16 +109,24 @@ public static class LaunchWatch
             foreach (var a in root.GetProperty("actions").EnumerateArray())
                 if (AppOf(a) == id) mine = a;
             State next;
-            bool waiting = false, working = false;
+            bool waiting = false, working = false, canSkip = false;
+            Prompt? ask = null;
             if (mine is { } act)
             {
                 var task = Str(act, "strTaskName", "taskName", "strTask") ?? "";
+                var details = Str(act, "strTaskDetails", "taskDetails") ?? "";
                 waiting = Bool(act, "bWaitingForUI", "waitingForUI", "bWaitingForUser") || Waits(task);
                 working = !waiting;
                 Learn(task, act);
                 var text = Describe(task, waiting);
                 var percent = -1;
-                var eta = Int(act, "nSecondsRemaining", "secondsRemaining") ?? -1;
+                // ("nSecondsRemaing": Valve's own spelling.)
+                var eta = Int(act, "nSecondsRemaing", "nSecondsRemaining", "secondsRemaining") ?? -1;
+                lock (Lock) _actionId = Int(act, "nGameActionID", "gameActionID") ?? 0;
+                // Steam asks something: the TV asks it with its own buttons when it knows how to
+                // answer; the PC's window shows only for the rest.
+                ask = waiting ? PromptFor(task, details, id) : null;
+                canSkip = task == "ProcessingShaderCache";
                 if (Long(act, "strNumDone", "nNumDone") is { } done && Long(act, "strNumTotal", "nNumTotal") is { } total && total > 0)
                     percent = (int)Math.Clamp(done * 100 / total, 0, 100);
                 // Updating before it starts: the live download has the real numbers.
@@ -118,7 +136,7 @@ public static class LaunchWatch
                     percent = d.Percent;
                     eta = d.Paused ? -1 : d.EtaSeconds;
                 }
-                next = new State(text, percent, eta, waiting, running);
+                next = new State(text, percent, eta, waiting, running, ask, canSkip);
             }
             else
             {
@@ -131,8 +149,9 @@ public static class LaunchWatch
                 // On screen soon: the engine takes it from here.
                 if (running && mine is null && ++_runningTicks >= 5) _gameId = 0;
             }
-            if (waiting) _send?.Invoke("launch-waiting");
-            else if (working) _send?.Invoke("launch-busy");
+            // A question the TV asks itself keeps the launch screen up; any other shows the PC.
+            if (waiting && ask is null) _send?.Invoke("launch-waiting");
+            else if (working || ask is not null) _send?.Invoke("launch-busy");
         }
         catch (Exception)
         {
@@ -147,8 +166,102 @@ public static class LaunchWatch
     {
         foreach (var name in new[] { "nAppID", "unAppID", "appid", "appID", "nAppId" })
             if (a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number) return v.GetInt64();
-        if (Str(a, "strAppID", "strGameID") is { } s && ulong.TryParse(s, out var g)) return (long)(g & 0xFFFFFF);
+        // Steam's GameAction carries "gameid" ("730", or a 64-bit game id with the app in its low bits).
+        if (Str(a, "gameid", "strGameID", "strAppID") is { } s && ulong.TryParse(s, out var g)) return (long)(g & 0xFFFFFF);
         return 0;
+    }
+
+    /// <summary>
+    /// The question for Steam's request [task] ([details] tells the cloud cases apart), with the
+    /// value Steam's own dialogs answer each choice with; null when the TV can't ask it (the
+    /// license agreement, which has to be read: shown on the PC).
+    /// </summary>
+    static Prompt? PromptFor(string task, string details, int appId)
+    {
+        switch (task)
+        {
+            case "ShowLaunchOption":
+            {
+                var json = SteamClient.Run($"(async () => JSON.stringify(await SteamClient.Apps.GetLaunchOptionsForApp({appId})))()", awaitPromise: true);
+                if (json is null) return null;
+                var choices = new List<Choice>();
+                using (var doc = JsonDocument.Parse(json))
+                    foreach (var o in doc.RootElement.EnumerateArray())
+                    {
+                        var label = o.TryGetProperty("strDescription", out var d) ? d.GetString() ?? "" : "";
+                        var index = o.TryGetProperty("nIndex", out var n) ? n.GetInt32() : choices.Count;
+                        choices.Add(new Choice(OptionLabel(label), index.ToString()));
+                    }
+                return choices.Count == 0 ? null : new Prompt("Como abrir o jogo?", "A Steam oferece mais de um jeito de abrir este jogo.", choices);
+            }
+            case "SynchronizingCloud" when details == "cloudconflict":
+                return new Prompt("Saves diferentes na nuvem",
+                    "Os saves deste PC e os da Steam Cloud são diferentes. Qual você quer usar?",
+                    [new("Usar os deste PC", "KeepLocal"), new("Usar os da nuvem", "KeepRemote")]);
+            case "SynchronizingCloud" when details == "syncfailed":
+                return new Prompt("A nuvem não respondeu",
+                    "A Steam não conseguiu sincronizar os saves. Dá para jogar mesmo assim e sincronizar depois.",
+                    [new("Jogar mesmo assim", "IgnoreCloud")]);
+            case "SynchronizingCloud" when details == "pendingcloudsessions":
+                return new Prompt("Saves de outra sessão",
+                    "Outro aparelho ainda está enviando saves deste jogo para a nuvem.",
+                    [new("Jogar mesmo assim", "IgnorePendingCloudSessions")]);
+            case "KickingOtherSession":
+                return new Prompt("Jogo aberto em outro lugar",
+                    "Esta conta está jogando em outro computador. Jogar aqui fecha a outra sessão.",
+                    [new("Jogar aqui", "KickOtherSession")]);
+            case "RunningInstallScript":
+                return new Prompt("Instalação de componentes falhou",
+                    "Um componente do jogo não instalou. Ele pode abrir mesmo assim.",
+                    [new("Abrir mesmo assim", "IgnoreInstallError")]);
+            case "ShowGameArgs":
+                return new Prompt("Abrir com opções extras?",
+                    "Este jogo vai abrir com opções de inicialização diferentes das normais.",
+                    [new("Continuar", "ShowGameArgs")]);
+            case "ShowCDKey":
+                return new Prompt("Chave do jogo", "A Steam mostra a chave deste jogo (você pode vê-la depois na Steam).",
+                    [new("Continuar", "")]);
+            case "ShowDurationControl":
+                return new Prompt("Aviso de tempo de jogo", "A Steam avisa sobre o tempo de jogo nesta conta.",
+                    [new("Continuar", "")]);
+            default:
+                return null;
+        }
+    }
+
+    static string OptionLabel(string description)
+    {
+        if (!description.StartsWith('#')) return description.Length > 0 ? description : "Jogar";
+        return description switch
+        {
+            "#Steam_LaunchOption_Game" => "Jogar",
+            "#Steam_LaunchOption_SafeMode" => "Modo de segurança",
+            "#Steam_LaunchOption_Editor" => "Editor",
+            "#Steam_LaunchOption_Manual" => "Manual",
+            "#Steam_LaunchOption_Benchmark" => "Teste de desempenho",
+            "#Steam_LaunchOption_Config" => "Configurações",
+            "#Steam_LaunchOption_Server" => "Servidor",
+            "#Steam_LaunchOption_OtherVR" => "Realidade virtual",
+            _ => description.TrimStart('#').Replace("Steam_LaunchOption_", "").Replace('_', ' '),
+        };
+    }
+
+    /// <summary>
+    /// The player answered on the TV: [value] for Steam's request (one of the prompt's choices,
+    /// or "SkipShaders"), or cancel the launch. False when there is nothing to answer.
+    /// </summary>
+    public static bool Answer(int gameId, string? value, bool cancel)
+    {
+        int action;
+        lock (Lock)
+        {
+            if (gameId != _gameId || _actionId == 0) return false;
+            action = _actionId;
+        }
+        var call = cancel
+            ? $"SteamClient.Apps.CancelGameAction({action})"
+            : $"SteamClient.Apps.ContinueGameAction({action}, {JsonSerializer.Serialize(value ?? "")})";
+        return SteamClient.Run($"(() => {{ {call}; return 'ok'; }})()") == "ok";
     }
 
     static string? Str(JsonElement a, params string[] names)

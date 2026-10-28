@@ -300,7 +300,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onOpenGame = { g -> openGame(g, Page.FRIENDS) },
                 onPlayGame = { g -> homeHost?.let { playGame(it, g) } }).apply { visibility = View.GONE }
             addView(friendsScreen, FrameLayout.LayoutParams(-1, -1))
-            launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE }
+            launchScreen = LaunchScreen(this@MainActivity).apply { visibility = View.GONE; onAnswer = { answerSteam(it) } }
             addView(launchScreen, FrameLayout.LayoutParams(-1, -1))
             hint = TextView(this@MainActivity).apply {
                 visibility = View.GONE
@@ -882,10 +882,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     // "Jinky Shell": what Steam is doing to start the game on the launch screen (GET /launch).
-    data class SteamLaunch(val text: String, val percent: Int, val eta: Int, val waiting: Boolean)
+    data class SteamLaunch(val text: String, val percent: Int, val eta: Int, val waiting: Boolean,
+                           val ask: LaunchScreen.Ask? = null, val canSkip: Boolean = false)
     private var launchState: Pair<Int, SteamLaunch>? = null
     private var launchPolling = false
     private var lastLaunchPoll = 0L
+
+    /** The player's answer to Steam's question on the launch screen (null: cancel and go home). */
+    private fun answerSteam(value: String?) {
+        val host = homeHost ?: return
+        val game = launching ?: return
+        UiSounds.play(UiSounds.Sound.SELECT)
+        launchState = null
+        launchScreen.showAsk(null)
+        launchScreen.showSkip(false)
+        updateUiInput()
+        Thread {
+            try {
+                val q = if (value == null) "cancel=1" else "value=" + java.net.URLEncoder.encode(value, "UTF-8")
+                val c = java.net.URL("http://${host.ip}:${host.updatePort}/launch/answer?id=${game.id}&$q").openConnection() as java.net.HttpURLConnection
+                c.requestMethod = "POST"
+                c.connectTimeout = 3000
+                c.readTimeout = 5000
+                c.responseCode
+                c.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "steam answer: $e")
+            }
+        }.start()
+        // Cancelled: the game won't start; back to the home screen, like a console.
+        if (value == null) {
+            stopLaunching()
+            sessionGame = null
+            receiver?.disconnect()
+        }
+    }
 
     private fun pollLaunch() {
         val host = homeHost ?: return
@@ -901,7 +932,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 c.readTimeout = 4000
                 val o = org.json.JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
                 c.disconnect()
-                if (o.optBoolean("known")) SteamLaunch(o.optString("text"), o.optInt("percent", -1), o.optInt("eta", -1), o.optBoolean("waiting")) else null
+                if (o.optBoolean("known")) {
+                    val a = o.optJSONObject("ask")
+                    val ask = a?.let {
+                        val c = it.optJSONArray("choices")
+                        LaunchScreen.Ask(it.optString("title"), it.optString("text"),
+                            (0 until (c?.length() ?: 0)).map { i -> c!!.getJSONObject(i).let { x -> x.optString("label") to x.optString("value") } })
+                    }
+                    SteamLaunch(o.optString("text"), o.optInt("percent", -1), o.optInt("eta", -1), o.optBoolean("waiting"), ask, o.optBoolean("canSkip"))
+                } else null
             } catch (e: Exception) { null }  // an older PC: just "Abrindo o jogo…"
             ui.post {
                 launchPolling = false
@@ -1240,7 +1279,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** One of the TV's own screens (or the menu) is in front, not the game. */
-    private fun uiShown() = homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
+    private fun uiShown() = launchScreen.interactive || homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
         profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||
@@ -1354,7 +1393,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } else {
                 val steam = launchState?.takeIf { it.first == launching?.id }?.second
                 if (host != null && launching?.paused != true && steam != null && steam.text.isNotEmpty())
+                {
                     launchScreen.setSteamState(steam.text, steam.percent, steam.eta)
+                    launchScreen.showAsk(steam.ask)
+                    launchScreen.showSkip(steam.canSkip && steam.ask == null)
+                    updateUiInput()
+                }
                 else launchScreen.setStatus(when {
                     host == null -> "Conectando ao PC…"
                     launching?.paused == true -> "Continuando de onde parou…"

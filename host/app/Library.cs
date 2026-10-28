@@ -47,6 +47,8 @@ public static class Library
         }
         if (Ps2Library.FindPcsx2(shortcuts.Select(s => s.Exe!)) is { } pcsx2)
             all.AddRange(Ps2Library.Games(pcsx2, shortcuts.Select(s => s.Args ?? "").ToList()));
+        // Epic, GOG, Xbox / Game Pass.
+        all.AddRange(StoreLibrary.Games(shortcuts.Select(s => s.Exe!).ToList()));
         var list = all.OrderByDescending(g => g.LastPlayed).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         lock (Lock) _last = (DateTime.UtcNow, list);
         return list;
@@ -67,6 +69,24 @@ public static class Library
     /// </summary>
     public static bool Launch(SteamGame g)
     {
+        // Another store's game: started the way that store does it; its time counts once its
+        // program shows up.
+        if (g.Uri is { Length: > 0 } uri)
+        {
+            try
+            {
+                if (uri.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+                    Process.Start(new ProcessStartInfo("explorer.exe", uri) { UseShellExecute = false });
+                else
+                    Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+                if (g.TrackExe is { } track) TrackWhenStarted(g.Id, track);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
         if (g.Exe is { Length: > 0 } exe && File.Exists(exe))
         {
             try
@@ -96,6 +116,29 @@ public static class Library
             return true;
         }
         return false;
+    }
+
+    /// <summary>Waits (up to 3 minutes) for [exe] to start, then counts its time as game [id]'s.</summary>
+    static void TrackWhenStarted(int id, string exe)
+    {
+        var name = Path.GetFileNameWithoutExtension(exe);
+        _ = Task.Run(async () =>
+        {
+            for (var i = 0; i < 90; i++)
+            {
+                await Task.Delay(2000);
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    string? path = null;
+                    try { path = p.MainModule?.FileName; } catch (Exception) { }
+                    if (path is null || path.Equals(exe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        JinkyPlaytime.Track(id, p);
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// <summary>The game running now: one Jinky started, else what Steam reports (0 = none).</summary>

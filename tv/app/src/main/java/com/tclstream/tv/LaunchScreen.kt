@@ -37,6 +37,28 @@ class LaunchScreen(context: Context) : TvPage(context) {
     // What Steam is doing to start the game (Jinky Shell): an update's live bar and its numbers.
     private val bar = DownloadBar(context, 4f).apply { visibility = View.GONE }
     private val detail = mono(11f, 0xFF9AA6B8.toInt()).apply { gravity = Gravity.CENTER; visibility = View.GONE }
+    // Steam's question before the game starts, asked here with the TV's own buttons (Jinky Shell).
+    private val askTitle = text(20f, Color.WHITE, bold = true).apply { gravity = Gravity.CENTER }
+    private val askText = text(13f, 0xFFC9D2DE.toInt()).apply { gravity = Gravity.CENTER }
+    private val askButtons = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+    private val ask = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        visibility = View.GONE
+        setPadding(dp(30), dp(24), dp(30), dp(24))
+        background = Jinky.rounded(0xE60A0D14.toInt(), dp(18).toFloat(), dp(1), 0x26FFFFFF)
+        addView(askTitle)
+        addView(askText, LinearLayout.LayoutParams(dp(560), -2).apply { topMargin = dp(8) })
+        addView(askButtons, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20) })
+    }
+    private val skip = smallButton("Pular shaders").apply { visibility = View.GONE }
+    private var askKey: String? = null
+
+    /** The player answered Steam's question ([value]), or cancelled ([value] null: don't play). */
+    var onAnswer: (value: String?) -> Unit = {}
+
+    /** Steam's question or the skip button is up: the controller drives the TV, not the PC. */
+    val interactive: Boolean get() = visibility == View.VISIBLE && (ask.visibility == View.VISIBLE || skip.visibility == View.VISIBLE)
     private val pulses = mutableListOf<ValueAnimator>()
     private var gameId = -1
 
@@ -57,7 +79,10 @@ class LaunchScreen(context: Context) : TvPage(context) {
             addView(status, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
             addView(bar, LinearLayout.LayoutParams(dp(420), dp(8)).apply { topMargin = dp(18) })
             addView(detail, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+            addView(skip, LinearLayout.LayoutParams(-2, dp(36)).apply { topMargin = dp(18) })
+            addView(ask, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(26) })
         }
+        skip.setOnClickListener { onAnswer("SkipShaders"); skip.visibility = View.GONE }
         addView(center, LayoutParams(-2, -2, Gravity.CENTER))
     }
 
@@ -104,6 +129,41 @@ class LaunchScreen(context: Context) : TvPage(context) {
         status.text = text
         bar.visibility = View.GONE
         detail.visibility = View.GONE
+        showAsk(null)
+        skip.visibility = View.GONE
+    }
+
+    /** A Steam question: title, text and (label, value) choices; null hides it. */
+    data class Ask(val title: String, val text: String, val choices: List<Pair<String, String>>)
+
+    fun showAsk(a: Ask?) {
+        val key = a?.let { it.title + it.choices.joinToString { c -> c.second } }
+        if (key == askKey) return
+        askKey = key
+        askButtons.removeAllViews()
+        if (a == null) {
+            ask.visibility = View.GONE
+            return
+        }
+        askTitle.text = a.title
+        askText.text = a.text
+        val buttons = a.choices.map { (label, value) -> smallButton(label).apply { setOnClickListener { onAnswer(value) } } } +
+            smallButton("Cancelar").apply { setOnClickListener { onAnswer(null) } }
+        buttons.forEachIndexed { i, b ->
+            b.id = View.generateViewId()
+            askButtons.addView(b, LinearLayout.LayoutParams(-2, dp(40)).apply { if (i > 0) marginStart = dp(10) })
+        }
+        ask.visibility = View.VISIBLE
+        ask.alpha = 0f
+        ask.translationY = dp(12).toFloat()
+        ask.animate().alpha(1f).translationY(0f).setDuration(280).start()
+        buttons.first().requestFocus()
+    }
+
+    fun showSkip(show: Boolean) {
+        if ((skip.visibility == View.VISIBLE) == show) return
+        skip.visibility = if (show) View.VISIBLE else View.GONE
+        if (show && ask.visibility != View.VISIBLE) skip.requestFocus()
     }
 
     /**
@@ -127,6 +187,8 @@ class LaunchScreen(context: Context) : TvPage(context) {
     fun hide() {
         if (visibility != View.VISIBLE) return
         gameId = -1
+        showAsk(null)
+        skip.visibility = View.GONE
         animate().alpha(0f).setDuration(350).withEndAction {
             visibility = View.GONE
             stopPulse()

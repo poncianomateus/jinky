@@ -57,6 +57,14 @@ data class LibraryGame(
     val platform: String = "",  // "ps2" for a PlayStation 2 game (PCSX2), "" for a PC game
 ) {
     val ps2 get() = platform == "ps2"
+    /** Where it comes from, when not Steam ("PlayStation 2", "Epic Games"...), else "". */
+    val platformName get() = when (platform) {
+        "ps2" -> "PlayStation 2"
+        "epic" -> "Epic Games"
+        "gog" -> "GOG"
+        "xbox" -> "Xbox"
+        else -> ""
+    }
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 
     /** A "non-Steam game" added to the Steam library (negative ids). */
@@ -760,6 +768,9 @@ class LibraryScreen(
         /** The week's play time from the last [fetchGames] (null before one, or from an older PC). */
         @Volatile var lastWeek: LibraryWeek? = null
 
+        /** The PC has Steam (else no "Steam Big Picture" on the home screen). */
+        @Volatile var steamOnPc = true
+
         fun fetchGames(pcIp: String, port: Int): List<LibraryGame> {
             val c = URL("http://$pcIp:$port/library").openConnection() as HttpURLConnection
             c.connectTimeout = 4000
@@ -767,6 +778,7 @@ class LibraryScreen(
             val json = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
             c.disconnect()
             val root = org.json.JSONObject(json)
+            steamOnPc = root.optBoolean("steam", true)
             root.optJSONObject("week")?.let { w ->
                 lastWeek = LibraryWeek(w.optInt("days"), w.optInt("minutes"), w.optInt("topId"), w.optString("topName"))
             }

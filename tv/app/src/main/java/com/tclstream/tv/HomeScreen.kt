@@ -560,7 +560,7 @@ class HomeScreen(
         section(null, buildList {
             if (installed.isNotEmpty()) add(Item.Library)
             if (downloads?.any == true) add(Item.Downloads)
-            add(Item.BigPicture)
+            if (LibraryScreen.steamOnPc) add(Item.BigPicture)
             add(Item.Desktop)
         }, divider = installed.isNotEmpty())
         items = list
@@ -782,7 +782,7 @@ class HomeScreen(
                 else if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
                 else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
                 else setMeta(if (downloading) Jinky.BLUE else null,
-                    if (downloading) Jinky.downloadText(g) else (if (g.ps2) "PlayStation 2 · " else "") + lastPlayedText(g.lastPlayed), hours)
+                    if (downloading) Jinky.downloadText(g) else g.platformName.let { if (it.isEmpty()) "" else "$it · " } + lastPlayedText(g.lastPlayed), hours)
                 if (changed) {
                     title.text = g.name
                     title.visibility = View.VISIBLE

@@ -247,6 +247,8 @@ public sealed class TvService : IDisposable
                     }
                     var json = System.Text.Json.JsonSerializer.Serialize(new
                     {
+                        // Steam on this PC (else the TV hides "Steam Big Picture").
+                        steam = SteamLibrary.SteamPath() is not null,
                         // "Esta semana": minutes played over the last `days` days (0 = no record yet).
                         week = new
                         {
@@ -448,8 +450,20 @@ public sealed class TvService : IDisposable
                         eta = st?.Eta ?? -1,
                         waiting = st?.Waiting ?? false,
                         running = st?.Running ?? false,
+                        canSkip = st?.CanSkip ?? false,
+                        ask = st?.Ask is { } q ? new
+                        {
+                            title = q.Title, text = q.Text,
+                            choices = q.Choices.Select(c => new { label = c.Label, value = c.Value }),
+                        } : null,
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");
+                }
+                else if (request.Is("POST", "/launch/answer") && int.TryParse(request.Query("id"), out var answerId))
+                {
+                    // The player's answer to Steam's question, given on the TV ("cancel=1": don't play).
+                    var ok = await Task.Run(() => LaunchWatch.Answer(answerId, request.Query("value"), request.Query("cancel") == "1"));
+                    await RespondText(stream, ok ? "ok" : "nothing to answer");
                 }
                 else if (request.Is("GET", "/downloads"))
                 {
