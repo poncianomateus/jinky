@@ -56,6 +56,7 @@ public static class PcWatch
             {
                 _playtimeAt = DateTime.UtcNow;
                 PlaytimeHistory.Record(SteamLibrary.Games(_apiKey?.Invoke()));
+                EnsurePs2QuickResume();
             }
         }
         catch (Exception)
@@ -66,6 +67,28 @@ public static class PcWatch
             Interlocked.Exchange(ref _busy, 0);
         }
     }
+
+    /// <summary>
+    /// PS2 games' Quick Resume needs PINE on in PCSX2 (its local control channel): turned on while
+    /// PCSX2 is closed, for every PCSX2 the Steam shortcuts start.
+    /// </summary>
+    public static void EnsurePs2QuickResume()
+    {
+        try
+        {
+            var steam = SteamLibrary.SteamPath();
+            var me = steam is null ? null : SteamLibrary.SteamId(steam);
+            if (steam is null || me is null) return;
+            foreach (var exe in SteamShortcuts.Read(steam, me).Select(s => s.Exe).Where(Pcsx2.IsPcsx2).Distinct(StringComparer.OrdinalIgnoreCase))
+                if (Pcsx2.EnsurePine(exe)) Ps2QuickResumeTurnedOn?.Invoke();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>PINE was just turned on in PCSX2's settings (for the PC app's activity list).</summary>
+    public static event Action? Ps2QuickResumeTurnedOn;
 
     static void WatchDownloads()
     {

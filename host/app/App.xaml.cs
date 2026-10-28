@@ -96,6 +96,8 @@ public partial class App : Application
         _tvService.Notice += text => Dispatcher.Invoke(() => _vm.OnNotice(text));
         GamePause.ResumedOnPc += name => Dispatcher.Invoke(() => _vm.OnNotice($"{name} continuou aqui no PC"));
         GamePause.Start();
+        PcWatch.Ps2QuickResumeTurnedOn += () => Dispatcher.Invoke(() => _vm.OnNotice("PS2: Quick Resume ligado no PCSX2 (salvar e continuar de onde parou pela TV)"));
+        _ = Task.Run(PcWatch.EnsurePs2QuickResume);
         _vm.CheckWakeFromTv();
         _vm.CheckVirtualScreen();
         _tvService.Streaming = () => Dispatcher.Invoke(() => _vm.IsStreaming);

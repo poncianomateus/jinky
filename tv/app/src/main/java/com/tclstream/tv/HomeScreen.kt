@@ -778,7 +778,8 @@ class HomeScreen(
                 val hours = listOf(week, Jinky.hours(g.minutes).let { if (it.isEmpty()) "" else "$it no total" })
                     .filter { it.isNotEmpty() }.joinToString(" · ")
                 val downloading = g.state == LibraryGame.State.DOWNLOADING || g.updating
-                if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
+                if (g.paused && g.saved) setMeta(Jinky.AMBER, "Salvo ${pausedAgo(g.pausedAt)}· continua de onde parou, mesmo com o PC desligado", hours)
+                else if (g.paused) setMeta(Jinky.AMBER, "Pausado ${pausedAgo(g.pausedAt)}· continua de onde parou", hours)
                 else if (g.running) setMeta(Jinky.GREEN, "Rodando no PC", hours)
                 else setMeta(if (downloading) Jinky.BLUE else null,
                     if (downloading) Jinky.downloadText(g) else lastPlayedText(g.lastPlayed), hours)

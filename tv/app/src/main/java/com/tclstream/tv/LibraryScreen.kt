@@ -53,7 +53,10 @@ data class LibraryGame(
     val eta: Int = -1,  // seconds left of a download or update (-1 unknown)
     val updating: Boolean = false,  // installed, with an update downloading on the PC
     val weekMinutes: Int = 0,  // played over the last days ("esta semana", see LibraryWeek)
+    val saved: Boolean = false,  // paused into a save state on the PC (PS2): nothing runs, survives a restart
+    val platform: String = "",  // "ps2" for a PlayStation 2 game (PCSX2), "" for a PC game
 ) {
+    val ps2 get() = platform == "ps2"
     enum class State { INSTALLED, DOWNLOADING, NOT_INSTALLED }
 
     /** A "non-Steam game" added to the Steam library (negative ids). */
@@ -785,7 +788,9 @@ class LibraryScreen(
                     g.optBoolean("snapshot"),
                     g.optInt("eta", -1),
                     g.optBoolean("updating"),
-                    g.optInt("weekMinutes"))
+                    g.optInt("weekMinutes"),
+                    g.optBoolean("saved"),
+                    g.optString("platform"))
             }
         }
 

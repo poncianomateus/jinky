@@ -976,8 +976,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun playGame(host: HomeHost, game: LibraryGame) {
         if (host.status != HomeHost.Status.READY) return
         // Two games are already paused: one has to close to make room (the PC's video memory).
-        val paused = pcGames.filter { it.paused && it.id != game.id }
-        if (!game.paused && paused.size >= 2) {
+        // (PS2 games saved into a state take nothing: they never count.)
+        val paused = pcGames.filter { it.paused && !it.saved && it.id != game.id }
+        if (!game.paused && !game.ps2 && paused.size >= 2) {
             askWhichPausedToClose(host, game, paused)
             return
         }

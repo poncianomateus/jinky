@@ -277,6 +277,9 @@ public sealed class TvService : IDisposable
                             // When it was paused (Unix ms), and whether its last picture is there.
                             pausedAt = paused.TryGetValue(g.Id, out var pg) ? new DateTimeOffset(pg.Since).ToUnixTimeMilliseconds() : 0,
                             snapshot = paused.ContainsKey(g.Id) && GamePause.SnapshotOf(g.Id) is not null,
+                            // Paused into a save state (PS2): nothing runs, no limit, survives a restart.
+                            saved = paused.TryGetValue(g.Id, out var sp) && sp.Saved,
+                            platform = g.Platform,
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");

@@ -30,7 +30,13 @@ public static class GamePause
 
     /// <summary>[Started]: the process's start time (UTC file time), so a reused process id after a
     /// restart is never taken for the game (0 in lists saved by older versions).</summary>
-    public sealed record Paused(int GameId, string Name, int Pid, DateTime Since, long Started = 0);
+    public sealed record Paused(int GameId, string Name, int Pid, DateTime Since, long Started = 0,
+                                // A PS2 game paused into a save state (Pcsx2): nothing runs meanwhile;
+                                // continuing starts [Exe] [Args] from it. Survives restarts, no limit.
+                                string? StateFile = null, string? Exe = null, string? Args = null, string? StartDir = null)
+    {
+        public bool Saved => StateFile is not null;
+    }
 
     /// <summary>An update is about to close Jinky: paused games stay paused (the new version picks them up).</summary>
     public static bool KeepFrozenOnExit { get; set; }
@@ -135,11 +141,14 @@ public static class GamePause
         catch (Exception) { return "o jogo já tinha fechado"; }
         if (path is null) return "não deu para ler o jogo";
         if (OnlineGames.Contains(gameId) || HasAntiCheat(path)) return "este jogo é online ou tem anti-cheat; ele continua rodando, sem pausa";
+        // A PS2 game: a real save state instead of a frozen emulator (falls back to freezing if
+        // PCSX2 can't be asked, e.g. PINE still off in the copy that is running).
+        if (Pcsx2.IsPcsx2(path) && PauseIntoState(pid, gameId, name, path)) return null;
         lock (Lock)
         {
             Load();
             _list!.RemoveAll(p => p.Pid == pid || p.GameId == gameId || !Alive(p));
-            if (_list.Count >= MaxPaused) return "já há dois jogos pausados";
+            if (_list.Count(p => !p.Saved) >= MaxPaused) return "já há dois jogos pausados";
             // Minimised first (the game notices it lost the screen: most pause themselves and
             // go quiet), then frozen.
             foreach (var w in Windows(pid)) ShowWindow(w, SwMinimize);
@@ -159,6 +168,26 @@ public static class GamePause
         return null;
     }
 
+    /// <summary>The PS2 game in front: saved into Jinky's slot and PCSX2 closed. False if it couldn't.</summary>
+    static bool PauseIntoState(int pid, int gameId, string name, string exe)
+    {
+        // How to start it again: the Steam shortcut it was started from (the disc image is in its arguments).
+        var steam = SteamLibrary.SteamPath();
+        var me = steam is null ? null : SteamLibrary.SteamId(steam);
+        var shortcut = steam is null || me is null ? null : SteamShortcuts.Read(steam, me).FirstOrDefault(s => s.Id == gameId);
+        if (shortcut is null || !Pcsx2.IsPcsx2(shortcut.Exe)) return false;
+        var file = Pcsx2.SaveAndClose(pid, exe);
+        if (file is null) return false;
+        lock (Lock)
+        {
+            Load();
+            _list!.RemoveAll(p => p.GameId == gameId || !Alive(p));
+            _list.Add(new Paused(gameId, name, pid, DateTime.Now, 0, file, shortcut.Exe, shortcut.Args, shortcut.StartDir));
+            Save();
+        }
+        return true;
+    }
+
     /// <summary>Unfreezes game [gameId] and brings it back to the front. False if it isn't paused.</summary>
     public static bool Resume(int gameId)
     {
@@ -172,6 +201,8 @@ public static class GamePause
             Save();
         }
         if (!Alive(entry)) return false;
+        // A PS2 game: started again straight from its save state.
+        if (entry.Saved) return Pcsx2.StartFromState(entry.Exe!, entry.Args ?? "", entry.StartDir ?? "") is not null;
         try
         {
             using var p = Process.GetProcessById(entry.Pid);
@@ -223,6 +254,7 @@ public static class GamePause
             Save();
         }
         if (!Alive(entry)) return false;
+        if (entry.Saved) return true;  // nothing runs: dropping it from the list is all
         try
         {
             using var p = Process.GetProcessById(entry.Pid);
@@ -247,7 +279,8 @@ public static class GamePause
     public static List<string> MakeRoom()
     {
         var closed = new List<string>();
-        for (var list = List(); list.Count > 0; list = List())
+        // (Saved PS2 games take no memory: they never need to make room.)
+        for (var list = List().Where(p => !p.Saved).ToList(); list.Count > 0; list = List().Where(p => !p.Saved).ToList())
         {
             if (list.Count < MaxPaused && FreeMemory() >= MinFreeMemory) break;
             if (!Close(list[0].GameId)) break;
@@ -264,7 +297,7 @@ public static class GamePause
         foreach (var p in List())
             try
             {
-                if (!Alive(p)) continue;
+                if (p.Saved || !Alive(p)) continue;
                 using var proc = Process.GetProcessById(p.Pid);
                 var priority = MemoryPriorityNormal;
                 SetProcessInformation(proc.Handle, ProcessMemoryPriority, ref priority, 4);
@@ -273,7 +306,8 @@ public static class GamePause
             catch (Exception) { }
         lock (Lock)
         {
-            _list = [];
+            // PS2 games saved into a state stay paused: that is the point (they need nothing running).
+            _list = _list?.Where(p => p.Saved).ToList() ?? [];
             Save();
         }
         CleanSnapshots();
@@ -302,13 +336,14 @@ public static class GamePause
         List<Paused> list;
         lock (Lock)
         {
-            if (_list is null || _list.Count == 0)
+            // Only frozen games can be brought up on the PC (a saved PS2 game has no window).
+            if (_list is null || !_list.Any(p => !p.Saved))
             {
                 _watch?.Dispose();
                 _watch = null;
                 return;
             }
-            list = [.. _list];
+            list = _list.Where(p => !p.Saved).ToList();
         }
         var front = GetForegroundWindow();
         if (front == IntPtr.Zero || front == _lastFront) return;
@@ -451,6 +486,7 @@ public static class GamePause
     /// <summary>The paused game's process is still there (the same process, not a reused id).</summary>
     static bool Alive(Paused p)
     {
+        if (p.Saved) return File.Exists(p.StateFile);
         if (!Alive(p.Pid)) return false;
         if (p.Started == 0) return true;
         try

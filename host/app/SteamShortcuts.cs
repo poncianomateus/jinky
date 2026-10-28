@@ -10,7 +10,9 @@ namespace Jinky;
 /// </summary>
 public static class SteamShortcuts
 {
-    public sealed record Shortcut(int Id, string Name, long LastPlayed, string? Cover, string? Hero, string? Logo);
+    /// <summary>[Exe] (unquoted), [Args] and [StartDir]: how Steam starts it (to start it again ourselves, e.g. a PS2 game from its save state).</summary>
+    public sealed record Shortcut(int Id, string Name, long LastPlayed, string? Cover, string? Hero, string? Logo,
+                                  string Exe = "", string Args = "", string StartDir = "");
 
     /// <summary>The shortcuts of the Steam account [steamId64] (empty if none or unreadable).</summary>
     public static List<Shortcut> Read(string steam, string steamId64)
@@ -33,7 +35,10 @@ public static class SteamShortcuts
                 var grid = Path.Combine(config, "grid");
                 var u = (uint)id;
                 result.Add(new Shortcut(id, name, last,
-                    Image(grid, $"{u}p") ?? Image(grid, $"{u}"), Image(grid, $"{u}_hero"), Image(grid, $"{u}_logo")));
+                    Image(grid, $"{u}p") ?? Image(grid, $"{u}"), Image(grid, $"{u}_hero"), Image(grid, $"{u}_logo"),
+                    (Get(entry, "Exe") as string ?? Get(entry, "exe") as string ?? "").Trim().Trim('"'),
+                    Get(entry, "LaunchOptions") as string ?? "",
+                    (Get(entry, "StartDir") as string ?? "").Trim().Trim('"')));
             }
         }
         catch (Exception)
