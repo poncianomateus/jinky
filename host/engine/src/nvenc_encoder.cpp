@@ -78,6 +78,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     // One frame worth of VBV: frame sizes stay even, so no frame takes much longer to send.
     enc.rcParams.vbvBufferSize = cfg.bitrate_kbps * 1000 / cfg.fps;
     enc.rcParams.vbvInitialDelay = enc.rcParams.vbvBufferSize;
+    // Jinky Vision: a QP modifier per block on top of what the rate control picks.
+    if (cfg.qp_map) enc.rcParams.qpMapMode = NV_ENC_QP_MAP_DELTA;
 
     // Both codecs share the VUI layout; fill it once and copy it where it belongs.
     NV_ENC_CONFIG_H264_VUI_PARAMETERS vui{};
@@ -100,6 +102,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
         h.chromaFormatIDC = 1;
         h.maxNumRefFramesInDPB = cfg.max_ref_frames;
         h.hevcVUIParameters = vui;
+        h.maxCUSize = NV_ENC_HEVC_CUSIZE_32x32;  // Vision's map has one value per 32x32 CTB
         if (hdr) {
             h.inputBitDepth = h.outputBitDepth = NV_ENC_BIT_DEPTH_10;
             h.outputMasteringDisplay = 1;
@@ -136,6 +139,10 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     init.frameRateDen = 1;
     init.enablePTD = 1;
     init.encodeConfig = &enc;
+    if (cfg.block_stats) {
+        init.enableOutputStats = 1;
+        init.outputStatsLevel = NV_ENC_OUTPUT_STATS_BLOCK_LEVEL;
+    }
     if (!check(api_.nvEncInitializeEncoder(encoder_, &init), "nvEncInitializeEncoder")) return false;
 
     NV_ENC_REGISTER_RESOURCE reg{};
@@ -156,7 +163,8 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const Enco
     return true;
 }
 
-bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_t>& out, bool& is_keyframe) {
+bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_t>& out, bool& is_keyframe,
+                          const std::vector<int8_t>* qp_map) {
     NV_ENC_MAP_INPUT_RESOURCE map{};
     map.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
     map.registeredResource = registered_;
@@ -172,6 +180,10 @@ bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.inputTimeStamp = timestamp;
     if (force_idr) pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+    if (cfg_.qp_map && qp_map && qp_map->size() == block_count()) {
+        pic.qpDeltaMap = const_cast<int8_t*>(qp_map->data());
+        pic.qpDeltaMapSize = uint32_t(qp_map->size());
+    }
     if (cfg_.hdr) {
         // HDR10 metadata (mastering display, content light level) with the picture.
         pic.codecPicParams.hevcPicParams.pMasteringDisplay = &mastering_;
@@ -183,7 +195,17 @@ bool NvencEncoder::encode(bool force_idr, uint64_t timestamp, std::vector<uint8_
         NV_ENC_LOCK_BITSTREAM lock{};
         lock.version = NV_ENC_LOCK_BITSTREAM_VER;
         lock.outputBitstream = bitstream_;
+        if (cfg_.block_stats) {
+            stats_.assign(block_count(), NV_ENC_OUTPUT_STATS_BLOCK{});
+            for (auto& s : stats_) s.version = NV_ENC_OUTPUT_STATS_BLOCK_VER;
+            lock.outputStatsPtr = stats_.data();
+            lock.outputStatsPtrSize = uint32_t(stats_.size() * sizeof(NV_ENC_OUTPUT_STATS_BLOCK));
+        }
         ok = check(api_.nvEncLockBitstream(encoder_, &lock), "nvEncLockBitstream");
+        if (ok && cfg_.block_stats) {
+            block_qp_.resize(stats_.size());
+            for (size_t i = 0; i < stats_.size(); ++i) block_qp_[i] = stats_[i].QP;
+        }
         if (ok) {
             const auto* p = static_cast<const uint8_t*>(lock.bitstreamBufferPtr);
             out.assign(p, p + lock.bitstreamSizeInBytes);

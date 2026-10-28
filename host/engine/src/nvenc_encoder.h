@@ -28,6 +28,10 @@ struct EncoderConfig {
     // from the PC's monitor (the picture is "mastered" on it).
     bool hdr = false;
     float hdr_max_nits = 1000, hdr_min_nits = 0.005f, hdr_max_fall_nits = 400;
+    // Jinky Vision: every picture comes with a QP delta map (one value per macroblock / CTB).
+    bool qp_map = false;
+    // The QP each block was encoded with (Vision's self-test), see block_qp().
+    bool block_stats = false;
 };
 
 class NvencEncoder {
@@ -39,7 +43,17 @@ public:
     void close();
 
     // Encodes the current content of the input texture. `out` receives one Annex-B access unit.
-    bool encode(bool force_idr, uint64_t timestamp, std::vector<uint8_t>& out, bool& is_keyframe);
+    bool encode(bool force_idr, uint64_t timestamp, std::vector<uint8_t>& out, bool& is_keyframe,
+                const std::vector<int8_t>* qp_map = nullptr);
+
+    // The encoder's block size (16: H.264 macroblock, 32: HEVC CTB) and how many blocks a picture has.
+    uint32_t block_size() const { return cfg_.codec == VideoCodec::HEVC ? 32 : 16; }
+    size_t block_count() const {
+        const uint32_t b = block_size();
+        return size_t((cfg_.width + b - 1) / b) * ((cfg_.height + b - 1) / b);
+    }
+    // With block_stats: the QP of every block of the last picture.
+    const std::vector<uint8_t>& block_qp() const { return block_qp_; }
 
     // Changes the rate on the fly (automatic quality); no keyframe, no new session.
     bool set_bitrate(uint32_t kbps);
@@ -63,6 +77,8 @@ private:
     MASTERING_DISPLAY_INFO mastering_{};  // HDR10 SEI, sent with every keyframe
     CONTENT_LIGHT_LEVEL light_{};
     std::string error_;
+    std::vector<NV_ENC_OUTPUT_STATS_BLOCK> stats_;
+    std::vector<uint8_t> block_qp_;
 };
 
 }  // namespace tcl

@@ -37,6 +37,7 @@
 #include "nvenc_encoder.h"
 #include "rate_control.h"
 #include "virtual_display.h"
+#include "vision.h"
 #include "pairing.h"
 #include "steam_game.h"
 #include "tclproto/auth.h"
@@ -106,6 +107,8 @@ struct Options {
     bool insecure = false;  // accept any TV without pairing (test tools only)
     bool virtual_display = false;  // console sessions play on the virtual screen ("Monitor virtual")
     bool games_in_bp = false;      // games from the TV start inside Big Picture (the way before 1.0)
+    bool vision = false;           // Jinky Vision: a QP map per picture (sharper where it matters)
+    bool vision_selftest = false;  // prove NVENC follows the map, measure Vision, then exit
     std::string vdisplay_admin;    // install/uninstall/status of the virtual screen driver, then exit
     std::string vdisplay_folder;   // where the driver to install is
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
@@ -135,6 +138,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--insecure") o.insecure = true;
         else if (a == "--virtual-display") o.virtual_display = true;
         else if (a == "--games-in-big-picture") o.games_in_bp = true;
+        else if (a == "--vision") o.vision = true;
+        else if (a == "--vision-selftest") o.vision_selftest = true;
         else if (a == "--install-virtual-display" && (v = next())) {
             o.vdisplay_admin = "install";
             o.vdisplay_folder = v;
@@ -259,6 +264,7 @@ int main(int argc, char** argv) {
     // A previous run that died on the virtual screen: the PC's monitors come back first (the
     // capture starts on them). Outside sessions the virtual screen is never part of the desktop.
     tcl::VirtualDisplay::tidy();
+    opt.enc.qp_map = opt.vision || opt.vision_selftest;
     // If a previous run was killed while the PC was muted for streaming, give the sound back.
     if (tcl::ConsoleMode::restore_if_left())
         TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
@@ -307,6 +313,141 @@ int main(int argc, char** argv) {
                         opt.enc.height)) {
         TCL_ERROR("convert", "init failed: {}", converter.error());
         return 1;
+    }
+
+    if (opt.vision_selftest) {
+        // A moving noise background with a still, high-contrast "HUD" box in the top-left corner,
+        // encoded at the stream's rate. 1) A forced map (left half +8, right half -8) must show up
+        // in the QP NVENC reports per block. 2) With Vision's own map the HUD must get a lower QP
+        // than without it.
+        constexpr uint32_t W = 1920, H = 1080;
+        tcl::Nv12Converter c;
+        if (!c.init(capture.device(), capture.context(), W, H, W, H)) {
+            std::printf("converter: %s\n", c.error().c_str());
+            return 1;
+        }
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = W;
+        td.Height = H;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> src;
+        capture.device()->CreateTexture2D(&td, nullptr, &src);
+        std::vector<uint32_t> px(size_t(W) * H);
+        uint32_t seed = 1;
+        auto frame = [&](int n) {
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x) {
+                    uint32_t v;
+                    if (x < 480 && y < 160) {
+                        v = ((x / 6 + y / 10) % 2) ? 0xFFFFFFFFu : 0xFF101010u;  // still, sharp: a HUD
+                    } else {
+                        seed = seed * 1664525u + 1013904223u;
+                        const uint32_t g = ((x + n * 9) / 3 * 7 + (y / 3) * 13) % 200 + (seed >> 28);
+                        v = 0xFF000000u | (g << 16) | ((g / 2) << 8) | (255 - g);
+                    }
+                    px[size_t(y) * W + x] = v;
+                }
+            capture.context()->UpdateSubresource(src.Get(), 0, nullptr, px.data(), W * 4, 0);
+            c.convert(src.Get());
+        };
+        for (auto codec : {tcl::VideoCodec::H264, tcl::VideoCodec::HEVC}) {
+            tcl::EncoderConfig cfg = opt.enc;
+            cfg.codec = codec;
+            cfg.width = W;
+            cfg.height = H;
+            cfg.qp_map = cfg.block_stats = true;
+            tcl::NvencEncoder e;
+            if (!e.open(capture.device(), c.output(), cfg)) {
+                std::printf("encoder: %s\n", e.error().c_str());
+                return 1;
+            }
+            const char* name = codec == tcl::VideoCodec::HEVC ? "HEVC" : "H.264";
+            const uint32_t b = e.block_size(), bx = (W + b - 1) / b, by = (H + b - 1) / b;
+            std::vector<uint8_t> out;
+            bool key = false;
+            auto avg = [&](auto pick) {
+                double sum = 0;
+                int n = 0;
+                for (uint32_t y = 0; y < by; ++y)
+                    for (uint32_t x = 0; x < bx; ++x)
+                        if (pick(x, y)) {
+                            sum += e.block_qp()[size_t(y) * bx + x];
+                            n++;
+                        }
+                return n ? sum / n : 0.0;
+            };
+            auto hud = [&](uint32_t x, uint32_t y) { return (x + 1) * b <= 480 && (y + 1) * b <= 160; };
+            auto rest = [&](uint32_t x, uint32_t y) { return x * b >= 480 || y * b >= 160; };
+            // 1) The forced map.
+            std::vector<int8_t> halves(e.block_count());
+            for (uint32_t y = 0; y < by; ++y)
+                for (uint32_t x = 0; x < bx; ++x) halves[size_t(y) * bx + x] = x < bx / 2 ? 8 : -8;
+            double left = 0, right = 0;
+            for (int i = 0; i < 30; ++i) {
+                frame(i);
+                e.encode(i == 0, uint64_t(i), out, key, &halves);
+                if (i >= 20) {
+                    left += avg([&](uint32_t x, uint32_t) { return x < bx / 2; }) / 10;
+                    right += avg([&](uint32_t x, uint32_t) { return x >= bx / 2; }) / 10;
+                }
+            }
+            std::printf("%s forced map (+8 | -8): QP left %.1f, right %.1f -> %s\n", name, left, right,
+                        left > right + 4 ? "NVENC follows the map" : "MAP IGNORED");
+            // 2) Without a map, then with Vision's.
+            std::vector<int8_t> none(e.block_count(), 0);
+            double hud0 = 0, rest0 = 0, hud1 = 0, rest1 = 0;
+            for (int i = 0; i < 40; ++i) {
+                frame(100 + i);
+                e.encode(i == 0, uint64_t(100 + i), out, key, &none);
+                if (i >= 30) { hud0 += avg(hud) / 10; rest0 += avg(rest) / 10; }
+            }
+            tcl::Vision v;
+            if (!v.init(capture.device(), capture.context(), c.output(), W, H, b)) {
+                std::printf("vision: %s\n", v.error().c_str());
+                return 1;
+            }
+            for (int i = 0; i < 60; ++i) {
+                frame(200 + i);
+                const auto& map = v.analyse();
+                e.encode(i == 0, uint64_t(200 + i), out, key, map.empty() ? &none : &map);
+                if (i >= 50) { hud1 += avg(hud) / 10; rest1 += avg(rest) / 10; }
+            }
+            if (!v.last_map().empty()) {
+                const auto& m = v.last_map();
+                std::printf("  map row 0: ");
+                for (uint32_t x = 0; x < std::min<uint32_t>(bx, 40); ++x) std::printf("%d ", m[x]);
+                std::printf("\n  map centre row: ");
+                for (uint32_t x = 0; x < std::min<uint32_t>(bx, 40); ++x) std::printf("%d ", m[size_t(by / 2) * bx + x]);
+                std::printf("\n  hud block stats: %s\n", v.debug(0).c_str());
+            }
+            std::printf("%s HUD QP without Vision %.1f, with Vision %.1f (rest %.1f -> %.1f); map: %u blocks sharper, %u coarser\n",
+                        name, hud0, hud1, rest0, rest1, v.sharper(), v.coarser());
+            // Moving picture everywhere (where the encoder really codes every block): the centre
+            // should get a lower QP than the edges with Vision, and the same without.
+            auto r2 = [&](uint32_t x, uint32_t y) {
+                const float dx = (x - (bx - 1) / 2.0f) / ((bx - 1) / 2.0f), dy = (y - (by - 1) / 2.0f) / ((by - 1) / 2.0f);
+                return dx * dx + dy * dy;
+            };
+            auto centre = [&](uint32_t x, uint32_t y) { return r2(x, y) < 0.2f; };
+            auto edges = [&](uint32_t x, uint32_t y) { return r2(x, y) > 1.3f && !hud(x, y); };
+            double c0 = 0, e0 = 0, c1 = 0, e1 = 0;
+            for (int i = 0; i < 20; ++i) {
+                frame(400 + i);
+                e.encode(false, uint64_t(400 + i), out, key, &none);
+                if (i >= 10) { c0 += avg(centre) / 10; e0 += avg(edges) / 10; }
+            }
+            for (int i = 0; i < 20; ++i) {
+                frame(500 + i);
+                const auto& map = v.analyse();
+                e.encode(false, uint64_t(500 + i), out, key, map.empty() ? &none : &map);
+                if (i >= 10) { c1 += avg(centre) / 10; e1 += avg(edges) / 10; }
+            }
+            std::printf("%s moving picture: centre QP %.1f -> %.1f, edges %.1f -> %.1f (without -> with Vision)\n", name, c0, c1, e0, e1);
+        }
+        return 0;
     }
 
     if (opt.probe_hdr) {
@@ -455,6 +596,8 @@ int main(int argc, char** argv) {
     bool peer_game = false;     // a game chosen in the TV's library: console mode without Big Picture
     bool peer_hdr = false;      // the TV asked for HDR (and decodes HEVC)
     tcl::FecControl fec;        // loss protection, for TVs that rebuild lost packets from parity
+    tcl::Vision vision;         // Jinky Vision (--vision)
+    ID3D11Texture2D* vision_failed_for = nullptr;  // the picture Vision couldn't work with (don't retry every frame)
     bool peer_audio_fec = false;  // ...and lost sound chunks
     std::vector<std::vector<uint8_t>> parity;
     bool capture_reopen = false;  // capture again now (HDR turned on/off for the session)
@@ -1397,7 +1540,21 @@ int main(int argc, char** argv) {
         bool key = false;
         const bool fresh = dirty;
         const uint64_t t0 = now_us();
-        if (!encoder.encode(send_idr, t0, bitstream, key)) {
+        // Jinky Vision: the picture's QP map (sharper where it matters), measured on the GPU.
+        const std::vector<int8_t>* qp_map = nullptr;
+        if (opt.vision && !converter.hdr()) {
+            if (!vision.ready_for(converter.output(), encoder.block_size()) && vision_failed_for != converter.output()) {
+                if (vision.init(capture.device(), capture.context(), converter.output(), opt.enc.width, opt.enc.height,
+                                encoder.block_size()))
+                    TCL_INFO("vision", "Jinky Vision on ({} blocks of {} px)", vision.blocks(), encoder.block_size());
+                else {
+                    TCL_WARN("vision", "Jinky Vision unavailable: {}", vision.error());
+                    vision_failed_for = converter.output();
+                }
+            }
+            if (vision.ready_for(converter.output(), encoder.block_size())) qp_map = &vision.analyse();
+        }
+        if (!encoder.encode(send_idr, t0, bitstream, key, qp_map)) {
             // Log the first failures only; after half a second of them, start the encoder over.
             if (++encode_failures <= 3) TCL_ERROR("encoder", "{}", encoder.error());
             if (encode_failures >= 30) {

@@ -15,6 +15,7 @@ add_executable(jinky-engine
     src/capture.cpp
     src/console_mode.cpp
     src/virtual_display.cpp
+    src/vision.cpp
     src/frame_cap.cpp
     src/screenshot.cpp
     src/pad_mouse.cpp

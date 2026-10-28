@@ -19,6 +19,9 @@ public sealed class Settings
     /// <summary>"Jogar fora de casa (Tailscale)": TVs may reach this PC over Tailscale (100.64.0.0/10).</summary>
     public bool RemotePlay { get; set; }
 
+    /// <summary>"Jinky Vision (beta)": sharper picture in the centre, where the action is (same bandwidth).</summary>
+    public bool Vision { get; set; }
+
     /// <summary>Games from the TV start inside Steam Big Picture, the way before 1.0 (off: they start straight away).</summary>
     public bool GamesInBigPicture { get; set; }
 
@@ -88,7 +91,7 @@ public sealed class Settings
         // Offer the bundled TV app to TVs (they update from this PC).
         if (TvService.Available) args += $" --tv-update {TvService.VersionCode}:{TvService.Port}";
         if (ConsoleMode) args += (CapGames ? " --console --frame-cap" : " --console") + (KeepBigPicture ? " --keep-big-picture" : "") +
-                                (VirtualDisplay ? " --virtual-display" : "") + (GamesInBigPicture ? " --games-in-big-picture" : "");
+                                (VirtualDisplay ? " --virtual-display" : "") + (GamesInBigPicture ? " --games-in-big-picture" : "") + (Vision ? " --vision" : "");
         else if (SoundOnlyOnTv) args += " --mute-pc";
         return args;
     }

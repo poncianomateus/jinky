@@ -430,6 +430,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ? "Entre na sua conta do Tailscale (a página abriu no navegador; ou o ícone do Tailscale perto do relógio). Use a mesma conta na TV."
                 : "O Tailscale não está instalado. Desligue e ligue de novo para instalar.");
 
+    /// <summary>"Jinky Vision (beta)": the stream's bits go where the eye goes.</summary>
+    public bool Vision
+    {
+        get => _settings.Vision;
+        set { if (_settings.Vision == value) return; _settings.Vision = value; Notify(); _settingsChanged(); }
+    }
+
     /// <summary>"Abrir jogos pelo Big Picture": the way before 1.0 (off = straight away, Jinky Shell).</summary>
     public bool GamesInBigPicture
     {

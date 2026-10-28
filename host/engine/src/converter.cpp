@@ -208,8 +208,14 @@ bool Nv12Converter::init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     td.Format = DXGI_FORMAT_NV12;
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    // Shaders may read it too (Jinky Vision measures the picture the encoder gets); a GPU that
+    // can't do that just streams without Vision.
+    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     hr = device->CreateTexture2D(&td, nullptr, &output_);
+    if (FAILED(hr)) {
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        hr = device->CreateTexture2D(&td, nullptr, &output_);
+    }
     if (SUCCEEDED(hr)) {
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
         ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
