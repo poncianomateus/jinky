@@ -25,6 +25,11 @@ public:
     // Re-creates the duplication after AccessLost (mode change, UAC prompt, fullscreen switch...).
     bool reopen();
 
+    // Captures another monitor of the same GPU from the next reopen(): the one Windows calls
+    // `gdi_name` (e.g. DISPLAY3 with its \\.\ prefix), or with an empty name the main one. False if it isn't in the
+    // desktop (yet) or belongs to another GPU.
+    bool retarget(const std::wstring& gdi_name);
+
     // HDR sessions: capture the desktop as Windows composes it in HDR (16-bit float scRGB)
     // instead of the 8-bit SDR copy. Takes effect at the next (re)open; only when Windows HDR is
     // on for this monitor.

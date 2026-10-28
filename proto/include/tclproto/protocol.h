@@ -105,6 +105,9 @@ inline constexpr uint32_t kHelloResume = 1u << 15;
 // Hello.value flag, with kHelloGame: "Pausar jogos ao sair" is on. If the TV vanishes (Wi-Fi gone,
 // TV switched off) and doesn't come back, the PC pauses the game instead of leaving it running.
 inline constexpr uint32_t kHelloAutoPause = 1u << 26;
+// Hello.value flag: the TV rebuilds lost video fragments from parity fragments (fec.h), so the PC
+// sends them along with each frame.
+inline constexpr uint32_t kHelloFec = 1u << 27;
 
 // GameReady.value
 enum GameReadyReason : uint32_t {
@@ -229,10 +232,14 @@ struct MediaHeader {
     uint16_t frag_count = 0;
     uint32_t frame_size = 0;      // total bytes of the reassembled frame
     uint64_t capture_time_us = 0; // host clock, for latency measurement
+    // Parity fragments sent after the frame's data (fec.h); they carry frag_index frag_count ..
+    // frag_count + fec_count - 1. Older TVs skip them (an index past frag_count is rejected).
+    uint8_t fec_count = 0;
 
     static constexpr size_t kSize = 32;
 
     bool is_keyframe() const { return flags & kFlagKeyframe; }
+    bool is_parity() const { return frag_index >= frag_count; }
     bool is_hevc() const { return flags & kFlagHevc; }
 
     // Writes kSize bytes into out (out.size() must be >= kSize).

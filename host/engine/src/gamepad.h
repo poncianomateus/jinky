@@ -45,8 +45,10 @@ private:
         tclproto::InputState state{};
         tclproto::PadExtras extras{};
         uint8_t touch_counter = 0;
+        bool waiting = false;  // seen in the gathering window, plugged when it ends
     };
     void unplug(int index);
+    void plug_waiting();
     bool plug(int index);
     void send(int index);
 
@@ -57,6 +59,10 @@ public:
 private:
     void* client_ = nullptr;  // PVIGEM_CLIENT
     Pad pads_[kMaxPads];
+    // Windows numbers controllers (player 1, 2...) in the order they are plugged. The TV's pads
+    // repeat their state every 50 ms, so when none is plugged yet the first states are gathered
+    // for a moment and the pads plugged in the TV's order: its pad 1 is player 1 on the PC.
+    std::chrono::steady_clock::time_point gather_until_{};
     RumbleCallback on_rumble_;
     std::mutex mu_;
     std::string error_;

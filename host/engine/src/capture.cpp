@@ -127,6 +127,39 @@ bool DesktopCapture::open_duplication() {
 
 bool DesktopCapture::reopen() { return open_duplication(); }
 
+bool DesktopCapture::retarget(const std::wstring& gdi_name) {
+    // The device's GPU, found again in a fresh factory (an old one doesn't see new monitors).
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> current;
+    DXGI_ADAPTER_DESC cur{};
+    if (!device_ || FAILED(device_.As(&dxgi)) || FAILED(dxgi->GetAdapter(&current)) || FAILED(current->GetDesc(&cur))) return false;
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 d;
+        if (FAILED(adapter->GetDesc1(&d)) || d.AdapterLuid.LowPart != cur.AdapterLuid.LowPart ||
+            d.AdapterLuid.HighPart != cur.AdapterLuid.HighPart)
+            continue;
+        ComPtr<IDXGIOutput> output;
+        for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+            DXGI_OUTPUT_DESC od;
+            if (FAILED(output->GetDesc(&od)) || !od.AttachedToDesktop) continue;
+            const bool primary = od.DesktopCoordinates.left == 0 && od.DesktopCoordinates.top == 0;
+            if (gdi_name.empty() ? !primary : gdi_name != od.DeviceName) continue;
+            ComPtr<IDXGIOutput1> o1;
+            if (FAILED(output.As(&o1))) return false;
+            release();
+            dup_.Reset();
+            output_ = o1;
+            display_name_ = od.DeviceName;
+            return true;
+        }
+    }
+    error_ = "monitor not found on this GPU";
+    return false;
+}
+
 DesktopCapture::Result DesktopCapture::acquire(int timeout_ms, ComPtr<ID3D11Texture2D>& frame) {
     frame.Reset();
     if (!dup_) return Result::AccessLost;

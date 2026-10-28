@@ -44,7 +44,7 @@ constexpr uint32_t kMaxFrameSize = 16u * 1024 * 1024;
 
 }  // namespace
 
-// Layout: magic(4) version(1) type(1) flags(1) reserved(1) session(4) frame_id(4)
+// Layout: magic(4) version(1) type(1) flags(1) fec_count(1) session(4) frame_id(4)
 //         frag_index(2) frag_count(2) frame_size(4) capture_time_us(8) = 32 bytes
 void MediaHeader::write(std::span<uint8_t> out) const {
     uint8_t* p = out.data();
@@ -52,7 +52,7 @@ void MediaHeader::write(std::span<uint8_t> out) const {
     p[4] = kVersion;
     p[5] = uint8_t(type);
     p[6] = flags;
-    p[7] = 0;
+    p[7] = fec_count;
     put_u32(p + 8, session_id);
     put_u32(p + 12, frame_id);
     put_u16(p + 16, frag_index);
@@ -69,13 +69,14 @@ std::optional<MediaHeader> MediaHeader::read(std::span<const uint8_t> in) {
     h.type = PacketType(p[5]);
     if (!is_media(h.type)) return std::nullopt;
     h.flags = p[6];
+    h.fec_count = p[7];
     h.session_id = get_u32(p + 8);
     h.frame_id = get_u32(p + 12);
     h.frag_index = get_u16(p + 16);
     h.frag_count = get_u16(p + 18);
     h.frame_size = get_u32(p + 20);
     h.capture_time_us = get_u64(p + 24);
-    if (h.frag_count == 0 || h.frag_index >= h.frag_count) return std::nullopt;
+    if (h.frag_count == 0 || h.frag_index >= h.frag_count + h.fec_count) return std::nullopt;
     if (h.frame_size == 0 || h.frame_size > kMaxFrameSize) return std::nullopt;
     // Fragment count must match what the sender would produce for this frame size.
     const uint32_t expected = (h.frame_size + kMaxPayload - 1) / kMaxPayload;

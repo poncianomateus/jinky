@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "tclproto/fec.h"
+
 namespace tclproto {
 
 size_t write_fragment(const MediaHeader& base, std::span<const uint8_t> frame, size_t index, std::span<uint8_t> out) {
@@ -18,6 +20,21 @@ size_t write_fragment(const MediaHeader& base, std::span<const uint8_t> frame, s
     const size_t len = std::min(kMaxPayload, frame.size() - offset);
     std::memcpy(out.data() + MediaHeader::kSize, frame.data() + offset, len);
     return MediaHeader::kSize + len;
+}
+
+size_t write_parity(const MediaHeader& base, size_t frame_size, std::span<const uint8_t> parity, size_t index,
+                    std::span<uint8_t> out) {
+    const size_t count = fragment_count(frame_size);
+    if (!frame_size || count > UINT16_MAX - 256 || index >= base.fec_count || parity.size() != kMaxPayload ||
+        out.size() < MediaHeader::kSize + kMaxPayload)
+        return 0;
+    MediaHeader h = base;
+    h.frame_size = uint32_t(frame_size);
+    h.frag_count = uint16_t(count);
+    h.frag_index = uint16_t(count + index);
+    h.write(out);
+    std::memcpy(out.data() + MediaHeader::kSize, parity.data(), kMaxPayload);
+    return MediaHeader::kSize + kMaxPayload;
 }
 
 size_t fragment_frame(const MediaHeader& base, std::span<const uint8_t> frame,
@@ -45,7 +62,7 @@ void FrameAssembler::push(const MediaHeader& h, std::span<const uint8_t> payload
         stats_.packets_stale++;
         return;
     }
-    if (h.frag_count == 0 || h.frag_index >= h.frag_count) return;
+    if (h.frag_count == 0 || h.frag_index >= h.frag_count + h.fec_count) return;
 
     // Far ahead of anything held (a long network outage): none of it can be used any more; start
     // again from this frame, on a keyframe.
@@ -68,30 +85,62 @@ void FrameAssembler::push(const MediaHeader& h, std::span<const uint8_t> payload
         s.header = h;
         s.data.resize(h.frame_size);
         s.have.assign(h.frag_count, false);
-    } else if (s.header.frame_size != h.frame_size || s.header.frag_count != h.frag_count) {
+        s.parity.assign(h.fec_count, {});
+    } else if (s.header.frame_size != h.frame_size || s.header.frag_count != h.frag_count ||
+               s.header.fec_count != h.fec_count) {
         return;  // inconsistent with earlier fragments of this frame; ignore as corrupt
     }
     s.last_packet_us = now_us;
-    if (s.complete || s.have[h.frag_index]) {
-        stats_.packets_duplicate++;
-        return;
-    }
+    s.highest_any = std::max<uint16_t>(s.highest_any, uint16_t(h.frag_index + 1));
+    const size_t blocks = fec::block_count(h.frag_count);
 
-    const size_t offset = size_t(h.frag_index) * kMaxPayload;
-    const size_t expected = std::min(kMaxPayload, size_t(h.frame_size) - offset);
-    if (payload.size() != expected) return;
+    if (h.is_parity()) {
+        const size_t p = h.frag_index - h.frag_count;
+        if (s.complete || !s.parity[p].empty()) {
+            stats_.packets_duplicate++;
+            return;
+        }
+        if (payload.size() != kMaxPayload) return;
+        s.parity[p].assign(payload.begin(), payload.end());
+        s.parity_received++;
+        rebuild(h.frame_id, s, p % blocks);
+    } else {
+        if (s.complete || s.have[h.frag_index]) {
+            stats_.packets_duplicate++;
+            return;
+        }
+        const size_t offset = size_t(h.frag_index) * kMaxPayload;
+        const size_t expected = std::min(kMaxPayload, size_t(h.frame_size) - offset);
+        if (payload.size() != expected) return;
 
-    std::memcpy(s.data.data() + offset, payload.data(), expected);
-    s.have[h.frag_index] = true;
-    s.highest = std::max<uint16_t>(s.highest, uint16_t(h.frag_index + 1));
-    if (++s.received == h.frag_count) {
-        s.complete = true;
-        if (s.tries > 0) stats_.frames_recovered++;
-        // A whole keyframe makes everything before it unnecessary: stop waiting for those.
-        if (s.header.is_keyframe()) skip_to(h.frame_id);
+        std::memcpy(s.data.data() + offset, payload.data(), expected);
+        s.have[h.frag_index] = true;
+        s.highest = std::max<uint16_t>(s.highest, uint16_t(h.frag_index + 1));
+        ++s.received;
+        if (s.parity_received) rebuild(h.frame_id, s, h.frag_index % blocks);
     }
+    if (!s.complete && s.received == s.header.frag_count) on_complete(h.frame_id, s);
     while (slots_.size() > kMaxInFlight) drop_front(true);
     deliver_ready();
+}
+
+void FrameAssembler::rebuild(uint32_t, Slot& s, size_t block) {
+    if (s.complete || s.parity.empty()) return;
+    if (const size_t n = fec::recover_block(s.data, s.have, s.parity, block)) {
+        s.received = uint16_t(s.received + n);
+        s.fec_used = true;
+        stats_.packets_fec_rebuilt += n;
+    }
+}
+
+void FrameAssembler::on_complete(uint32_t frame_id, Slot& s) {
+    s.complete = true;
+    if (s.tries > 0) stats_.frames_recovered++;
+    if (s.fec_used) stats_.frames_fec_rebuilt++;
+    s.parity.clear();
+    s.parity.shrink_to_fit();
+    // A whole keyframe makes everything before it unnecessary: stop waiting for those.
+    if (s.header.is_keyframe()) skip_to(frame_id);
 }
 
 std::vector<NackMessage::Range> FrameAssembler::missing_ranges(uint32_t frame_id, const Slot& s, int64_t now_us) const {
@@ -100,8 +149,40 @@ std::vector<NackMessage::Range> FrameAssembler::missing_ranges(uint32_t frame_id
     // that is only clear once a newer frame started, or the frame has been quiet for a while.
     const bool older = has_newest_ && seq_newer(newest_, frame_id);
     const bool quiet = now_us - s.last_packet_us >= 2 * timing_.reorder_us;
-    const uint16_t end = older || quiet ? s.header.frag_count : s.highest;
     std::vector<NackMessage::Range> out;
+    if (s.header.fec_count) {
+        // With parity, a hole may still be rebuilt: wait until the frame's last packet came (or a
+        // newer frame started, or it went quiet), then ask only for what the parity can't cover,
+        // per block.
+        if (!(older || quiet || s.highest_any >= s.header.frag_count + s.header.fec_count)) return out;
+        const size_t k = s.header.frag_count, blocks = fec::block_count(k);
+        std::vector<uint16_t> want;
+        for (size_t b = 0; b < blocks; ++b) {
+            size_t parity = 0;
+            for (size_t p = b; p < s.parity.size(); p += blocks)
+                if (!s.parity[p].empty()) parity++;
+            size_t missing = 0;
+            for (size_t i = b; i < k; i += blocks)
+                if (!s.have[i]) missing++;
+            size_t need = missing > parity ? missing - parity : 0;
+            for (size_t i = b; i < k && need; i += blocks)
+                if (!s.have[i]) {
+                    want.push_back(uint16_t(i));
+                    need--;
+                }
+        }
+        std::sort(want.begin(), want.end());
+        for (uint16_t i : want) {
+            if (!out.empty() && out.back().first + out.back().count == i)
+                out.back().count++;
+            else if (out.size() < NackMessage::kMaxRanges)
+                out.push_back({i, 1});
+            else
+                break;
+        }
+        return out;
+    }
+    const uint16_t end = older || quiet ? s.header.frag_count : s.highest;
     for (uint16_t i = 0; i < end && out.size() < NackMessage::kMaxRanges; ++i) {
         if (s.have[i]) continue;
         if (!out.empty() && out.back().first + out.back().count == i)

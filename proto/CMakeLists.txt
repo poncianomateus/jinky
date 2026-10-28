@@ -4,6 +4,7 @@ project(tclproto LANGUAGES CXX)
 add_library(tclproto STATIC
     src/protocol.cpp
     src/framing.cpp
+    src/fec.cpp
     src/udp.cpp
     src/crypto.cpp
     src/auth.cpp

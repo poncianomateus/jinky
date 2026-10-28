@@ -340,6 +340,8 @@ void Receiver::send_nacks(int64_t now_us) {
     const auto nacks = assembler_.poll(now_us);
     packets_resent_asked_ = assembler_.stats().packets_missing;
     frames_recovered_ = assembler_.stats().frames_recovered;
+    packets_rebuilt_ = assembler_.stats().packets_fec_rebuilt;
+    frames_rebuilt_ = assembler_.stats().frames_fec_rebuilt;
     if (nacks.empty() || !host_) return;
     uint8_t buf[tclproto::NackMessage::kMaxSize];
     for (const auto& n : nacks) {
@@ -353,10 +355,13 @@ void Receiver::send_net_report() {
     // good. The PC lowers or raises the picture quality from this.
     const auto& st = assembler_.stats();
     const uint64_t packets = st.packets_received - report_packets_;
-    const uint64_t missing = st.packets_missing - report_missing_;
+    // Packets rebuilt from parity count as lost too: the network dropped them all the same, and
+    // the PC sizes its loss protection (and quality) from what the network really does.
+    const uint64_t missing = st.packets_missing - report_missing_ + (st.packets_fec_rebuilt - report_rebuilt_);
     const uint64_t lost = st.frames_lost - report_lost_;
     report_packets_ = st.packets_received;
     report_missing_ = st.packets_missing;
+    report_rebuilt_ = st.packets_fec_rebuilt;
     report_lost_ = st.frames_lost;
     video_kbps_ = uint32_t((video_bytes_ - report_bytes_) * 8 / 1000);
     report_bytes_ = video_bytes_;
@@ -415,7 +420,7 @@ void Receiver::net_loop() {
             // address changed.
             uint8_t b[tclproto::ControlMessage::kSize];
             tclproto::ControlMessage{PacketType::Hello, session_id_,
-                                     codec_support_ | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+                                     codec_support_ | tclproto::kHelloFec | (desktop_ ? tclproto::kHelloDesktop : 0u) |
                                          (game_ ? tclproto::kHelloGame : 0u)}
                 .write(b);
             sock_.send_to(tclproto::Endpoint::broadcast(host_port_), b);
@@ -423,7 +428,7 @@ void Receiver::net_loop() {
         }
         if (state_ == kActive && (now - last_hello >= 1000 || (takeover_until_ms_ > now && now - last_hello >= 250))) {
             const uint32_t takeover = now < takeover_until_ms_ ? tclproto::kHelloTakeover : 0;
-            send_hello(codec_support_ | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
+            send_hello(codec_support_ | tclproto::kHelloFec | takeover | (desktop_ ? tclproto::kHelloDesktop : 0u) |
                        (game_ ? tclproto::kHelloGame : 0u) | (pair_only_ ? tclproto::kHelloPairOnly | power_.load() : 0u));
             last_hello = now;
             if (host_ && state_ == kActive) {
@@ -557,7 +562,7 @@ void Receiver::net_loop() {
             session_id_ = h->session_id;
             have_session_ = true;
             assembler_.reset();
-            report_packets_ = report_missing_ = report_lost_ = 0;
+            report_packets_ = report_missing_ = report_lost_ = report_rebuilt_ = 0;
             {
                 std::lock_guard lock(mu_);
                 queue_.clear();
@@ -834,6 +839,7 @@ std::string Receiver::status() const {
       << "  descartados: " << frames_dropped_ << "  pedidos de keyframe: " << idr_requests_;
     s << "\nreenvio: pacotes pedidos de novo " << packets_resent_asked_ << "  quadros salvos " << frames_recovered_
       << "  vídeo " << video_kbps_ / 1000.0 << " Mbit/s";
+    s << "\nproteção contra perda: pacotes reconstruídos " << packets_rebuilt_ << "  quadros salvos " << frames_rebuilt_;
     return s.str();
 }
 

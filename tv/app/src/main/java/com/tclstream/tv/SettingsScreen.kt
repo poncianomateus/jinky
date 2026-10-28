@@ -247,6 +247,9 @@ class SettingsScreen(
                 toggle("Pausar jogos ao sair (como no Xbox)",
                     "Sair do jogo (Início no menu, o botão Home do controle remoto ou desligar a TV) congela o jogo no PC; Continuar volta exatamente de onde parou. Até 2 jogos. Jogos online ou com anti-cheat não são pausados.",
                     { settings.pauseGames }) { settings.pauseGames = !settings.pauseGames }
+                toggle("Ligar o PC ao abrir o Jinky",
+                    "Abrir o Jinky acorda o PC suspenso, sem apertar nada. No PC, ligue uma vez \"Ligar o PC pela TV\" no app Jinky. Não funciona com o PC desligado (use Suspender).",
+                    { settings.wakePc }) { settings.wakePc = !settings.wakePc }
                 toggle("Controle PlayStation no PC (beta)",
                     "DualSense/DualShock vira um DualShock 4 no PC: botões PlayStation nos jogos, touchpad e movimento (TVs com Android 12+). Precisa do Steam Input ligado para jogos sem suporte a PlayStation.",
                     { settings.psPad }) {

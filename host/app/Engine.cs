@@ -108,6 +108,7 @@ public sealed class Engine : IDisposable
 
     void OnExited(Process p)
     {
+        VirtualScreen.RestoreIfLeft();  // never leave the PC's monitors dark
         if (p != _process) return;
         Exited?.Invoke();
         if (_stopping) return;
@@ -147,7 +148,12 @@ public sealed class Engine : IDisposable
         catch (IOException)
         {
         }
-        if (!p.WaitForExit(6000)) p.Kill();
+        if (!p.WaitForExit(6000))
+        {
+            p.Kill();
+            p.WaitForExit(2000);
+            VirtualScreen.RestoreIfLeft();
+        }
     }
 
     /// <summary>Sends a command line to the engine (e.g. "pair-accept &lt;id&gt;").</summary>

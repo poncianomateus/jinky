@@ -228,10 +228,11 @@ private:
     bool host_silent_ = false;  // no packet for 5 s (Wi-Fi dropped, PC restarted): keep calling it
     int64_t last_broadcast_hello_ms_ = 0;
     // Network report (net thread): counters at the previous report.
-    uint64_t report_packets_ = 0, report_missing_ = 0, report_lost_ = 0, report_bytes_ = 0;
+    uint64_t report_packets_ = 0, report_missing_ = 0, report_lost_ = 0, report_bytes_ = 0, report_rebuilt_ = 0;
     uint64_t video_bytes_ = 0;
     std::atomic<uint32_t> video_kbps_{0};
     std::atomic<uint64_t> packets_resent_asked_{0}, frames_recovered_{0};
+    std::atomic<uint64_t> packets_rebuilt_{0}, frames_rebuilt_{0};  // by loss protection (parity)
     // Arrival jitter of completed frames (network thread only)
     int64_t last_frame_us_ = 0, gap_max_us_ = 0, last_jitter_log_ms_ = 0;
     uint64_t late_frames_ = 0, frames_in_window_ = 0;

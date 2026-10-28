@@ -180,10 +180,25 @@ void GamepadHub::apply(const tclproto::InputState& s) {
         }
         unplug(s.pad_index);
         pad.want_ds4 = false;
+        pad.waiting = false;
+        if (std::none_of(std::begin(pads_), std::end(pads_), [](const Pad& p) { return p.target.load() || p.waiting; }))
+            gather_until_ = {};  // all gone: the next ones are gathered again
         return;
     }
     // States are repeated and may arrive out of order; only move forward (wraparound-safe).
     if (pad.target && int32_t(s.seq - pad.last_seq) <= 0) return;
+    if (!pad.target) {
+        const auto now = std::chrono::steady_clock::now();
+        const bool none = std::none_of(std::begin(pads_), std::end(pads_), [](const Pad& p) { return p.target.load(); });
+        if (none && gather_until_ == std::chrono::steady_clock::time_point{}) gather_until_ = now + std::chrono::milliseconds(120);
+        if (none && now < gather_until_) {
+            pad.waiting = true;
+            pad.last_seq = s.seq;
+            pad.state = s;
+            return;
+        }
+        plug_waiting();  // the pads gathered so far go first, in order
+    }
     // The TV switched this pad between Xbox and DualShock 4: plug it again as the other kind.
     if (pad.target && pad.ds4 != pad.want_ds4) unplug(s.pad_index);
     if (!pad.target && !plug(s.pad_index)) return;
@@ -191,6 +206,17 @@ void GamepadHub::apply(const tclproto::InputState& s) {
     pad.last_update = std::chrono::steady_clock::now();
     pad.state = s;
     send(s.pad_index);
+}
+
+void GamepadHub::plug_waiting() {
+    for (int i = 0; i < kMaxPads; ++i) {
+        Pad& p = pads_[i];
+        if (!p.waiting) continue;
+        p.waiting = false;
+        if (p.target || !plug(i)) continue;
+        p.last_update = std::chrono::steady_clock::now();
+        send(i);
+    }
 }
 
 void GamepadHub::apply_extras(const tclproto::PadExtras& e) {
@@ -217,11 +243,17 @@ void GamepadHub::expire(std::chrono::steady_clock::duration timeout) {
             unplug(i);
         }
     }
+    if (std::none_of(std::begin(pads_), std::end(pads_), [](const Pad& p) { return p.target.load() || p.waiting; }))
+        gather_until_ = {};
 }
 
 void GamepadHub::unplug_all() {
     std::lock_guard lock(mu_);
-    for (int i = 0; i < kMaxPads; ++i) unplug(i);
+    for (int i = 0; i < kMaxPads; ++i) {
+        unplug(i);
+        pads_[i].waiting = false;
+    }
+    gather_until_ = {};
 }
 
 void GamepadHub::unplug(int index) {

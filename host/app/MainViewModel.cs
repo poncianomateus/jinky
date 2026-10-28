@@ -269,6 +269,110 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // --- "Monitor virtual" ----------------------------------------------------------------------
+
+    string? _virtualBusy;
+    bool _virtualInstalled;
+
+    /// <summary>Looks whether the virtual screen driver is there; off the UI thread.</summary>
+    public void CheckVirtualScreen() => Task.Run(() =>
+    {
+        var installed = VirtualScreen.Installed();
+        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+        {
+            _virtualInstalled = installed;
+            // Removed outside Jinky: stop asking the engine for it.
+            if (_settings.VirtualDisplay && !installed)
+            {
+                _settings.VirtualDisplay = false;
+                _settingsChanged();
+            }
+            Notify(nameof(VirtualDisplayOn));
+            Notify(nameof(VirtualDisplayText));
+        });
+    });
+
+    public bool VirtualDisplayOn
+    {
+        get => _settings.VirtualDisplay && _virtualInstalled;
+        set
+        {
+            if (VirtualDisplayOn == value || _virtualBusy is not null) return;
+            _ = SetVirtualDisplay(value);
+        }
+    }
+
+    async Task SetVirtualDisplay(bool on)
+    {
+        void Show(string text) { _virtualBusy = text; Notify(nameof(VirtualDisplayText)); }
+        string? error = null;
+        // Installed already (an earlier time): just start using it; off keeps nothing behind.
+        if (!on || !_virtualInstalled)
+            error = await VirtualScreen.SetAsync(on, text => System.Windows.Application.Current?.Dispatcher.Invoke(() => Show(text)));
+        _virtualBusy = null;
+        if (error is not null) Add("Monitor virtual: " + error, warning: true);
+        else
+        {
+            _virtualInstalled = on;
+            _settings.VirtualDisplay = on;
+            _settingsChanged();  // the engine starts again with (or without) it
+            Add(on ? "Monitor virtual ligado · na próxima sessão o jogo vai para ele" : "Monitor virtual desligado e removido");
+        }
+        Notify(nameof(VirtualDisplayOn));
+        Notify(nameof(VirtualDisplayText));
+    }
+
+    public string VirtualDisplayText =>
+        _virtualBusy ?? (VirtualDisplayOn ? "Ligado: jogando na TV, o PC usa a tela virtual; o monitor do PC fica apagado e volta como estava." : "");
+
+    // --- "Ligar o PC pela TV" (Wake-on-LAN) ----------------------------------------------------
+
+    bool? _wakeReady = null;   // the adapter may wake the PC (null = not checked yet / no network)
+    string? _wakeBusy;
+
+    /// <summary>Looks (without administrator) whether the TV can wake this PC; off the UI thread.</summary>
+    public void CheckWakeFromTv() => Task.Run(() =>
+    {
+        var ready = WakeOnLan.Ready();
+        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+        {
+            _wakeReady = ready;
+            Notify(nameof(WakeFromTv));
+            Notify(nameof(WakeFromTvText));
+        });
+    });
+
+    public bool WakeFromTv
+    {
+        get => _wakeReady == true;
+        set
+        {
+            if ((_wakeReady == true) == value || _wakeBusy is not null) return;
+            _ = SetWakeFromTv(value);
+        }
+    }
+
+    async Task SetWakeFromTv(bool on)
+    {
+        _wakeBusy = on ? "Liberando a placa de rede… (o Windows vai pedir permissão; o Wi-Fi pode piscar)" : "Desfazendo…";
+        Notify(nameof(WakeFromTvText));
+        var error = await WakeOnLan.SetAsync(on);
+        _wakeBusy = null;
+        if (error is not null) Add("Ligar o PC pela TV: " + error, warning: true);
+        else Add(on ? "A TV agora liga este PC (quando ele estiver suspenso)" : "Ligar o PC pela TV desligado");
+        _wakeReady = WakeOnLan.Ready();
+        Notify(nameof(WakeFromTv));
+        Notify(nameof(WakeFromTvText));
+    }
+
+    public string WakeFromTvText =>
+        _wakeBusy ?? _wakeReady switch
+        {
+            true => "Pronto: abrir o Jinky na TV acorda este PC suspenso.",
+            false => "Desligado: a placa de rede ainda não tem permissão para acordar o PC.",
+            _ => "",
+        };
+
     public string RemotePlayText =>
         _remoteBusy ?? (!_settings.RemotePlay ? "" :
         RemotePlay.TailscaleAddress() is { } ip
@@ -477,6 +581,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 else { _activePads.Remove(index); _ds4Pads.Remove(index); Add($"Controle {index + 1} desconectado"); }
                 var kind = _ds4Pads.Count == _activePads.Count && _ds4Pads.Count > 0 ? "PlayStation" : "Xbox";
                 PadsConnected = _activePads.Count switch { 0 => "nenhum", 1 => $"1 controle {kind}", var n => $"{n} controles" };
+                break;
+            case "virtual_display":
+                Add(e.Bool("on") == true ? "Monitor virtual ligado · a TV joga na tela virtual, o monitor do PC descansa"
+                                         : "Monitor virtual desligado · monitor do PC de volta");
                 break;
             case "console":
                 Add(e.Bool("on") == true ? "Modo console ligado · Big Picture, 60 Hz, som na TV" : "Modo console desligado · tela e som restaurados");

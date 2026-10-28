@@ -65,4 +65,45 @@ private:
     int calm_ = 0, cooldown_ = 0;
 };
 
+// Loss protection (fec.h): how many parity fragments go with each frame, as a share of its data
+// fragments. Follows the losses the TV reports: up at once when they grow, down slowly once the
+// network calms, so a short Wi-Fi hiccup is already covered when it comes back.
+class FecControl {
+public:
+    static constexpr unsigned kStart = 10, kFloor = 5, kCeiling = 50;
+
+    void reset(bool enabled) {
+        enabled_ = enabled;
+        percent_ = enabled ? kStart : 0;
+        calm_ = 0;
+    }
+
+    // Returns true when the share changed.
+    bool on_report(const tclproto::NetReport& r) {
+        if (!enabled_) return false;
+        // About three parity fragments per lost one, plus a margin; a lost frame asks for more.
+        unsigned want = std::min<unsigned>(kCeiling, kFloor + r.lost_permille * 3 / 10 + (r.frames_unrecovered ? 10 : 0));
+        if (r.packets < 100 && !r.frames_unrecovered) want = std::max(want, percent_);  // too little to judge
+        unsigned next = percent_;
+        if (want > percent_) {
+            next = want;
+            calm_ = 0;
+        } else if (want < percent_ && ++calm_ >= 5) {
+            next = std::max(want, percent_ > 2 ? percent_ - 2 : 0);
+            calm_ = 0;
+        }
+        next = std::clamp(next, kFloor, kCeiling);
+        if (next == percent_) return false;
+        percent_ = next;
+        return true;
+    }
+
+    unsigned percent() const { return percent_; }
+
+private:
+    bool enabled_ = false;
+    unsigned percent_ = 0;
+    int calm_ = 0;
+};
+
 }  // namespace tcl

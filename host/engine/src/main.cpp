@@ -36,9 +36,11 @@
 #include "netinfo.h"
 #include "nvenc_encoder.h"
 #include "rate_control.h"
+#include "virtual_display.h"
 #include "pairing.h"
 #include "steam_game.h"
 #include "tclproto/auth.h"
+#include "tclproto/fec.h"
 #include "test_pattern.h"
 #include "tclproto/framing.h"
 #include "tclproto/protocol.h"
@@ -102,6 +104,9 @@ struct Options {
     bool keep_big_picture = false;  // a session ending leaves Big Picture open (closed when the engine stops)
     bool stdin_control = false;
     bool insecure = false;  // accept any TV without pairing (test tools only)
+    bool virtual_display = false;  // console sessions play on the virtual screen ("Monitor virtual")
+    std::string vdisplay_admin;    // install/uninstall/status of the virtual screen driver, then exit
+    std::string vdisplay_folder;   // where the driver to install is
     uint32_t tv_update_version = 0;  // TV app update the Jinky app serves (version code), 0 = none
     uint16_t tv_update_port = 0;  // "quit" on stdin (or stdin closing) stops the engine cleanly
     std::string codec = "auto";  // auto = HEVC when the TV decodes it in hardware, else H.264
@@ -127,6 +132,13 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--events") tcl::events_enabled() = true;
         else if (a == "--stdin-control") o.stdin_control = true;
         else if (a == "--insecure") o.insecure = true;
+        else if (a == "--virtual-display") o.virtual_display = true;
+        else if (a == "--install-virtual-display" && (v = next())) {
+            o.vdisplay_admin = "install";
+            o.vdisplay_folder = v;
+        }
+        else if (a == "--uninstall-virtual-display") o.vdisplay_admin = "uninstall";
+        else if (a == "--virtual-display-status") o.vdisplay_admin = "status";
         else if (a == "--tv-update" && (v = next())) {
             // "<versionCode>:<port>" — the desktop app serves the TV app on that port.
             const std::string spec = v;
@@ -220,6 +232,22 @@ int main(int argc, char** argv) {
             if (std::wstring_view(wargv[i]) == L"--name") opt.name = utf8(wargv[i + 1]);
         LocalFree(wargv);
     }
+    // The Jinky app asks (as administrator, for install/uninstall) about the virtual screen driver.
+    if (opt.vdisplay_admin == "status") return tcl::VirtualDisplay::available() ? 0 : 1;
+    if (opt.vdisplay_admin == "uninstall") return tcl::VirtualDisplay::uninstall();
+    if (opt.vdisplay_admin == "install") {
+        int wargc = 0;
+        std::wstring folder;
+        if (LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc)) {
+            for (int i = 1; i + 1 < wargc; ++i)
+                if (std::wstring_view(wargv[i]) == L"--install-virtual-display") folder = wargv[i + 1];
+            LocalFree(wargv);
+        }
+        return tcl::VirtualDisplay::install(folder);
+    }
+    // A previous run that died on the virtual screen: the PC's monitors come back first (the
+    // capture starts on them). Outside sessions the virtual screen is never part of the desktop.
+    tcl::VirtualDisplay::tidy();
     // If a previous run was killed while the PC was muted for streaming, give the sound back.
     if (tcl::ConsoleMode::restore_if_left())
         TCL_INFO("console", "display and sound restored (a previous run ended in console mode)");
@@ -415,6 +443,8 @@ int main(int argc, char** argv) {
     bool peer_desktop = false;  // the TV chose "Área de trabalho": no console mode for this session
     bool peer_game = false;     // a game chosen in the TV's library: console mode without Big Picture
     bool peer_hdr = false;      // the TV asked for HDR (and decodes HEVC)
+    tcl::FecControl fec;        // loss protection, for TVs that rebuild lost packets from parity
+    std::vector<std::vector<uint8_t>> parity;
     bool capture_reopen = false;  // capture again now (HDR turned on/off for the session)
     tcl::SteamGameWatch game_watch;
     std::string peer_name;
@@ -507,6 +537,20 @@ int main(int argc, char** argv) {
     std::atomic<uint32_t> audio_session{0};
     tcl::ConsoleMode console;
     tcl::FrameCap frame_cap;
+    tcl::VirtualDisplay virtual_display;
+    std::wstring pc_display;  // the monitor captured before the virtual screen took over
+    // Points the capture at another monitor (it shows up a moment after a layout change); the
+    // main loop then captures it again (and sizes the encoder to it).
+    auto capture_monitor = [&](const std::wstring& name) {
+        for (int i = 0; i < 30; ++i) {
+            if (capture.retarget(name)) {
+                capture_reopen = true;
+                return true;
+            }
+            std::this_thread::sleep_for(100ms);
+        }
+        return false;
+    };
     // keep_console: the TV went silent (Wi-Fi dropped) rather than leaving; console mode (Big
     // Picture, 60 Hz, muted PC) stays on for a while so it can come straight back to the game.
     auto publish_peer = [&](bool keep_console = false) {
@@ -521,6 +565,22 @@ int main(int argc, char** argv) {
         audio_peer = peer ? (uint64_t(peer->ip) << 16 | peer->port) : 0;
         if (opt.console && !opt.test_pattern) {
             if (peer && !peer_desktop) {
+                // "Monitor virtual": the session plays on a virtual screen at the TV's size and
+                // rate; the PC's monitors stay as they are (dark meanwhile). Not for HDR, which
+                // needs the real monitor's Windows HDR.
+                if (opt.virtual_display && !peer_hdr && !virtual_display.active() && !console.active()) {
+                    std::wstring vname;
+                    const std::wstring before = capture.display_name();
+                    if (virtual_display.enter(opt.enc.width, opt.enc.height, opt.enc.fps, vname)) {
+                        if (capture_monitor(vname)) {
+                            pc_display = before;
+                        } else {
+                            TCL_WARN("vdisplay", "the virtual screen can't be captured ({}); using the PC's monitor", capture.error());
+                            virtual_display.leave();
+                            if (!capture_monitor(before)) capture_monitor(L"");
+                        }
+                    }
+                }
                 // Games from the TV's library also start inside Big Picture (it handles Steam's
                 // prompts and controller input in launchers); the TV hides it until the game shows.
                 console.enter(capture.display_name(), !peer_resume);
@@ -531,6 +591,10 @@ int main(int argc, char** argv) {
             }
             if (keep_console && console.active()) return;
             console.leave(!opt.keep_big_picture);  // no-op unless a console session just ended
+            if (virtual_display.active()) {
+                virtual_display.leave();
+                if (!capture_monitor(pc_display) && !capture_monitor(L"")) TCL_WARN("capture", "{}", capture.error());
+            }
             if (!peer && capture.hdr()) {
                 capture.want_hdr(false);
                 capture_reopen = true;  // back to the SDR capture
@@ -617,6 +681,7 @@ int main(int argc, char** argv) {
     std::mutex sent_mu;
     std::array<SentFrame, 64> sent;  // by frame_id % size
     std::atomic<uint64_t> packets_resent{0};
+    uint64_t parity_sent = 0;
     auto resend = [&](const tclproto::Endpoint& to, const tclproto::NackMessage& nack) {
         std::lock_guard lock(sent_mu);
         SentFrame& f = sent[nack.frame_id % sent.size()];
@@ -965,6 +1030,8 @@ int main(int argc, char** argv) {
                     }
                     // A new session starts at the chosen quality; automatic quality works below it.
                     rate.reset(opt.enc.bitrate_kbps);
+                    fec.reset(msg->value & tclproto::kHelloFec);
+                    if (fec.percent()) TCL_INFO("net", "loss protection on: {}% extra packets per frame", fec.percent());
                     if (encoder.bitrate_kbps() != opt.enc.bitrate_kbps && !encoder.set_bitrate(opt.enc.bitrate_kbps))
                         TCL_WARN("encoder", "{}", encoder.error());
                     console_linger_until = {};
@@ -1020,6 +1087,7 @@ int main(int argc, char** argv) {
                     if (r.lost_permille || r.frames_unrecovered)
                         TCL_INFO("receiver", "network: {:.1f}% of video packets asked again, {} frame(s) lost",
                                  r.lost_permille / 10.0, r.frames_unrecovered);
+                    if (fec.on_report(r)) TCL_INFO("net", "loss protection: {}% extra packets per frame", fec.percent());
                     if (const uint32_t kbps = rate.on_report(r)) {
                         if (encoder.set_bitrate(kbps)) {
                             TCL_INFO("encoder", "automatic quality: {} kbit/s (chosen {})", kbps, rate.ceiling());
@@ -1294,9 +1362,21 @@ int main(int argc, char** argv) {
         h.frame_id = frame_id++;
         // 0 = repeated old content (heartbeat/keyframe), so the receiver must not count it as latency.
         h.capture_time_us = fresh ? content_time_us : 0;
+        // Loss protection: parity fragments right after the data, so the TV rebuilds what Wi-Fi
+        // dropped without waiting for a resend. Worked out after the data is on its way.
+        const size_t data_fragments = tclproto::fragment_count(bitstream.size());
+        h.fec_count = uint8_t(tclproto::fec::parity_for(data_fragments, fec.percent()));
         tclproto::fragment_frame(h, bitstream, [&](std::span<const uint8_t> d) {
             if (!sock.send_to(*peer, d)) TCL_WARN("net", "{}", sock.error());
         });
+        if (h.fec_count) {
+            tclproto::fec::encode(bitstream, h.fec_count, parity);
+            uint8_t pbuf[tclproto::MediaHeader::kSize + tclproto::kMaxPayload];
+            for (size_t p = 0; p < h.fec_count; ++p)
+                if (const size_t n = tclproto::write_parity(h, bitstream.size(), parity[p], p, pbuf))
+                    sock.send_to(*peer, std::span<const uint8_t>(pbuf, n));
+            parity_sent += h.fec_count;
+        }
         {
             std::lock_guard lock(sent_mu);
             SentFrame& f = sent[h.frame_id % sent.size()];
@@ -1324,10 +1404,11 @@ int main(int argc, char** argv) {
         if (now - last_stats >= 2s) {
             const double secs = duration<double>(now - last_stats).count();
             const uint64_t resent = packets_resent.exchange(0);
-            tcl::emit_event("stats", std::format("\"fps\":{:.1f},\"mbps\":{:.1f},\"encode_ms\":{:.2f},\"target_mbps\":{:.1f},\"resent\":{}",
+            tcl::emit_event("stats", std::format("\"fps\":{:.1f},\"mbps\":{:.1f},\"encode_ms\":{:.2f},\"target_mbps\":{:.1f},\"resent\":{},\"parity\":{},\"fec_pct\":{}",
                                                  frames_sent / secs, bytes_sent * 8 / secs / 1e6,
                                                  frames_sent ? encode_us_total / 1000.0 / frames_sent : 0.0,
-                                                 encoder.bitrate_kbps() / 1000.0, resent));
+                                                 encoder.bitrate_kbps() / 1000.0, resent, parity_sent, fec.percent()));
+            parity_sent = 0;
             if (const uint64_t count = input_trip_count.exchange(0)) {
                 const double avg_ms = double(input_trip_sum_us.exchange(0)) / double(count) / 1000.0;
                 const double max_ms = double(input_trip_max_us.exchange(0)) / 1000.0;
@@ -1354,6 +1435,7 @@ int main(int argc, char** argv) {
     rx_thread.join();
     audio.stop();
     console.leave();
+    virtual_display.leave();
     // Jinky is closing: Big Picture, if left open between games, goes too.
     if (opt.keep_big_picture) tcl::ConsoleMode::close_big_picture();
     frame_cap.leave();

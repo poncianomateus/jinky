@@ -14,6 +14,7 @@ add_executable(jinky-engine
     src/audio_capture.cpp
     src/capture.cpp
     src/console_mode.cpp
+    src/virtual_display.cpp
     src/frame_cap.cpp
     src/screenshot.cpp
     src/pad_mouse.cpp
@@ -32,7 +33,7 @@ target_compile_definitions(jinky-engine PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNI
 target_include_directories(jinky-engine PRIVATE ../../third_party/nvenc ../../third_party/vigemclient/include)
 # NVIDIA NVAPI (driver settings: the frame cap for game sessions); a no-op without an NVIDIA driver.
 target_include_directories(jinky-engine SYSTEM PRIVATE ../../third_party/nvapi)
-target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 windowscodecs shell32 setupapi d3dcompiler bcrypt iphlpapi qwave wlanapi
+target_link_libraries(jinky-engine PRIVATE tclproto d3d11 dxgi winmm avrt ole32 windowscodecs shell32 setupapi newdev d3dcompiler bcrypt iphlpapi qwave wlanapi
                       ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nvapi/amd64/nvapi64.lib)
 if(MSVC)
     target_compile_options(jinky-engine PRIVATE /W4 /permissive- /utf-8 /external:W0)

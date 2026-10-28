@@ -19,6 +19,9 @@ public sealed class Settings
     /// <summary>"Jogar fora de casa (Tailscale)": TVs may reach this PC over Tailscale (100.64.0.0/10).</summary>
     public bool RemotePlay { get; set; }
 
+    /// <summary>"Monitor virtual": console sessions play on a virtual screen at the TV's size; the PC's monitors stay as they are.</summary>
+    public bool VirtualDisplay { get; set; }
+
     /// <summary>Console sessions cap games at the stream's 60 fps (NVIDIA driver), leaving GPU room for the stream.</summary>
     public bool CapGames { get; set; } = true;
 
@@ -81,7 +84,8 @@ public sealed class Settings
         var args = $"--events --stdin-control --port {Ports.Media} --name \"{name.Replace("\"", "'")}\"";
         // Offer the bundled TV app to TVs (they update from this PC).
         if (TvService.Available) args += $" --tv-update {TvService.VersionCode}:{TvService.Port}";
-        if (ConsoleMode) args += (CapGames ? " --console --frame-cap" : " --console") + (KeepBigPicture ? " --keep-big-picture" : "");
+        if (ConsoleMode) args += (CapGames ? " --console --frame-cap" : " --console") + (KeepBigPicture ? " --keep-big-picture" : "") +
+                                (VirtualDisplay ? " --virtual-display" : "");
         else if (SoundOnlyOnTv) args += " --mute-pc";
         return args;
     }

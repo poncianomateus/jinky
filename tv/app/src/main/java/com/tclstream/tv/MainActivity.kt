@@ -71,6 +71,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var wasInSession = false
     private val hostCache by lazy { HostCache(this) }
     private var wakingUntil = 0L
+    private var autoWakeSent = false  // "Ligar o PC ao abrir o Jinky": once per opening
     private val updater by lazy { Updater(this) }
     private var searchStartMs = 0L
     private var lastPictureMs = 0L  // last time this session showed a picture (0 = not yet)
@@ -426,6 +427,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onResume()
         runCatching { wifiLock?.acquire() }.onFailure { Log.w(TAG, "wifi lock: $it") }
         startReceiver()
+        autoWake()
+    }
+
+    /**
+     * "Ligar o PC ao abrir o Jinky": opening Jinky (or coming back to it) wakes the PC this TV
+     * uses, at once, without waiting to see whether it answers: a PC that is already on just
+     * ignores the packet, and a sleeping one gets a head start of a few seconds.
+     */
+    private fun autoWake() {
+        autoWakeSent = false
+        if (!settings.wakePc) return
+        val paired = pairingStore.hosts().keys
+        val target = hostCache.all().let { all ->
+            all.firstOrNull { it.id == settings.preferredPc } ?: all.firstOrNull { it.id in paired }
+        } ?: return
+        val mac = target.mac ?: return
+        HostCache.wake(mac, target.ip)
+        autoWakeSent = true
+        Log.i(TAG, "opening Jinky: waking ${target.name} in case it sleeps")
     }
 
     /** What the TV asks of the PC in every Hello: decodable codecs and the chosen quality. */
@@ -468,7 +488,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
         audio = AudioPlayer(r).also { it.delayMs = settings.audioDelayMs; it.start() }
-        gamepads = GamepadInput(this, r) { ui.post { showMenu() } }.also { it.playStationMode = settings.psPad; it.start() }
+        gamepads = GamepadInput(this, r, onMenuCombo = { ui.post { showMenu() } }, onPlayer = { player, name, joined ->
+            // Couch co-op: say who came in or left, while playing (each is its own controller on the PC).
+            ui.post {
+                if (receiver?.inSession() != true) return@post
+                showHint(when {
+                    joined && player == 1 -> "Controle conectado · $name"
+                    joined -> "Jogador $player entrou · $name"
+                    else -> "Controle do jogador $player desconectado"
+                })
+                ui.removeCallbacks(hideHint)
+                ui.postDelayed(hideHint, 4000)
+            }
+        }).also { it.playStationMode = settings.psPad; it.start() }
         if (surfaceView.holder.surface?.isValid == true) startPipeline(surfaceView.holder)
         ui.post(refresh)
     }
@@ -1056,6 +1088,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             ui.post { showPage(Page.PCS) }
         }
         if (host?.status != HomeHost.Status.OFFLINE) wakingUntil = 0L
+        // Woken on opening and still not answering: say so ("Ligando o PC…") instead of "desligado".
+        else if (autoWakeSent && wakingUntil == 0L) {
+            autoWakeSent = false
+            wakingUntil = now + 60_000
+        }
         homeHost = host
         lastPictureMs = 0L
         host?.let(::loadGames)

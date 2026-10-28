@@ -29,6 +29,8 @@ class GamepadInput(
     private val receiver: NativeReceiver,
     /** Called on the input thread when a pad holds View + Menu for a second. */
     private val onMenuCombo: () -> Unit,
+    /** A controller connected (true) or went away (false): its player number (1..4) and name. */
+    private val onPlayer: (player: Int, name: String, joined: Boolean) -> Unit = { _, _, _ -> },
 ) : InputManager.InputDeviceListener {
 
     /**
@@ -178,6 +180,7 @@ class GamepadInput(
             val index = (0 until MAX_PADS).firstOrNull { it !in used } ?: return
             pads[deviceId] = Pad(index, deviceId, dev.name, dev.vendorId == SONY_VENDOR).also { updateSensors(it) }
             updateSummary()
+            onPlayer(index + 1, dev.name, true)
         }
         Log.i(TAG, "gamepad connected: ${dev.name} (vendor ${dev.vendorId} product ${dev.productId}) axes=" +
             dev.motionRanges.joinToString { MotionEvent.axisToString(it.axis) })
@@ -189,6 +192,7 @@ class GamepadInput(
             stopSensors(pad)
             receiver.sendInput(pad.index, false, ++pad.seq, 0, 0, 0, 0, 0, 0, 0)
             updateSummary()
+            onPlayer(pad.index + 1, pad.name, false)
             Log.i(TAG, "gamepad disconnected: ${pad.name}")
         }
     }

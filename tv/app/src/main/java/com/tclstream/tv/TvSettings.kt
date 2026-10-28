@@ -39,6 +39,11 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("pause_games", true)
         set(v) = prefs.edit().putBoolean("pause_games", v).apply()
 
+    /** "Ligar o PC ao abrir o Jinky": opening Jinky wakes the chosen PC (Wake-on-LAN) if it sleeps. */
+    var wakePc: Boolean
+        get() = prefs.getBoolean("wake_pc", true)
+        set(v) = prefs.edit().putBoolean("wake_pc", v).apply()
+
     /** "Controle PlayStation no PC (beta)": a DualSense/DualShock becomes a DualShock 4 on the PC. */
     var psPad: Boolean
         get() = prefs.getBoolean("ps_pad", false)

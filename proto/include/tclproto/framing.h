@@ -18,6 +18,11 @@ inline size_t fragment_count(size_t frame_size) { return (frame_size + kMaxPaylo
 // `base` supplies type/flags/session/frame_id/capture time. Returns its size, 0 if out of range.
 size_t write_fragment(const MediaHeader& base, std::span<const uint8_t> frame, size_t index, std::span<uint8_t> out);
 
+// Builds parity datagram `index` (0 .. base.fec_count-1, see fec.h) of a frame of `frame_size`
+// bytes into `out`. Returns its size, 0 if out of range.
+size_t write_parity(const MediaHeader& base, size_t frame_size, std::span<const uint8_t> parity, size_t index,
+                    std::span<uint8_t> out);
+
 // Splits `frame` into datagrams of at most MediaHeader::kSize + kMaxPayload bytes.
 // `send` is called once per datagram, in order. Returns the number of datagrams produced.
 size_t fragment_frame(const MediaHeader& base, std::span<const uint8_t> frame,
@@ -26,10 +31,11 @@ size_t fragment_frame(const MediaHeader& base, std::span<const uint8_t> frame,
 // True if sequence number a is newer than b, tolerant of 32-bit wraparound.
 inline bool seq_newer(uint32_t a, uint32_t b) { return int32_t(a - b) > 0; }
 
-// Reassembles video frames and delivers them strictly in order. A frame with missing fragments
-// holds back the ones after it while poll() asks the host to send the gaps again; only when that
-// fails (or takes too long) is the frame lost, and then nothing is delivered until a keyframe, so
-// the decoder never receives a broken reference chain.
+// Reassembles video frames and delivers them strictly in order. Missing fragments are rebuilt
+// from the frame's parity fragments when there are enough (fec.h); otherwise a frame with missing
+// fragments holds back the ones after it while poll() asks the host to send the gaps again. Only
+// when that fails (or takes too long) is the frame lost, and then nothing is delivered until a
+// keyframe, so the decoder never receives a broken reference chain.
 class FrameAssembler {
 public:
     struct Frame {
@@ -47,6 +53,8 @@ public:
         uint64_t packets_missing = 0;   // gaps asked for again (a whole missing frame counts once)
         uint64_t frames_delivered = 0;
         uint64_t frames_recovered = 0;  // completed thanks to a resend
+        uint64_t packets_fec_rebuilt = 0;  // data fragments rebuilt from parity (never asked again)
+        uint64_t frames_fec_rebuilt = 0;   // frames completed thanks to parity
         uint64_t frames_lost = 0;       // never completed
         uint64_t frames_discarded = 0;  // completed but undecodable (waiting for keyframe)
     };
@@ -97,8 +105,12 @@ private:
         MediaHeader header;
         std::vector<uint8_t> data;
         std::vector<bool> have;
+        std::vector<std::vector<uint8_t>> parity;  // parity fragments received (empty = not yet)
         uint16_t received = 0;
-        uint16_t highest = 0;  // highest fragment index received + 1
+        uint16_t parity_received = 0;
+        uint16_t highest = 0;      // highest data fragment index received + 1
+        uint16_t highest_any = 0;  // the same counting parity fragments
+        bool fec_used = false;
         bool complete = false;
         int64_t last_packet_us = 0;
         int64_t missing_since_us = 0;  // 0 = no gap noticed yet
@@ -112,6 +124,8 @@ private:
     Slot& slot_for(uint32_t frame_id);
     std::vector<NackMessage::Range> missing_ranges(uint32_t frame_id, const Slot& s, int64_t now_us) const;
     void deliver_ready();
+    void rebuild(uint32_t frame_id, Slot& s, size_t block);
+    void on_complete(uint32_t frame_id, Slot& s);
     void drop_front(bool lost);
     void skip_to(uint32_t keyframe_id);
 

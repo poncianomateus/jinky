@@ -8,6 +8,7 @@
 
 #include "tclproto/auth.h"
 #include "tclproto/crypto.h"
+#include "tclproto/fec.h"
 #include "tclproto/framing.h"
 #include "tclproto/protocol.h"
 
@@ -33,6 +34,27 @@ static std::vector<Datagram> make_frame(uint32_t id, size_t size, bool key) {
     h.capture_time_us = 1000 + id;
     std::vector<Datagram> out;
     fragment_frame(h, frame, [&](std::span<const uint8_t> d) { out.emplace_back(d.begin(), d.end()); });
+    return out;
+}
+
+// A frame's datagrams with `parity` parity fragments after the data ones (as the PC sends them).
+static std::vector<Datagram> make_fec_frame(uint32_t id, size_t size, bool key, size_t parity) {
+    std::vector<uint8_t> frame(size);
+    for (size_t i = 0; i < size; ++i) frame[i] = uint8_t(i * 31 + id + (i >> 9));
+    MediaHeader h;
+    h.frame_id = id;
+    h.flags = key ? kFlagKeyframe : 0;
+    h.capture_time_us = 1000 + id;
+    h.fec_count = uint8_t(parity);
+    std::vector<Datagram> out;
+    fragment_frame(h, frame, [&](std::span<const uint8_t> d) { out.emplace_back(d.begin(), d.end()); });
+    std::vector<std::vector<uint8_t>> par;
+    fec::encode(frame, parity, par);
+    uint8_t buf[MediaHeader::kSize + kMaxPayload];
+    for (size_t p = 0; p < parity; ++p) {
+        const size_t n = write_parity(h, size, par[p], p, buf);
+        out.emplace_back(buf, buf + n);
+    }
     return out;
 }
 
@@ -463,6 +485,147 @@ static void test_lossy_network_simulation() {
                 (unsigned long long)a.stats().packets_missing, (unsigned long long)a.stats().frames_recovered);
 }
 
+static void test_fec_codec() {
+    std::mt19937 rng(7);
+    // Sizes around the block limits (128 data fragments per block), the last fragment short.
+    for (size_t k : {size_t(1), size_t(2), size_t(5), size_t(40), size_t(128), size_t(129), size_t(300)}) {
+        const size_t size = k * kMaxPayload - (k > 1 ? 333 : 1100);
+        std::vector<uint8_t> frame(size);
+        for (auto& b : frame) b = uint8_t(rng());
+        for (size_t m : {size_t(1), fec::parity_for(k, 10), fec::parity_for(k, 30), fec::parity_for(k, 100)}) {
+            std::vector<std::vector<uint8_t>> parity;
+            fec::encode(frame, m, parity);
+            CHECK(parity.size() == m);
+            const size_t blocks = fec::block_count(k);
+            for (int trial = 0; trial < 5; ++trial) {
+                // Lose as many data fragments of each block as it has parity (one fewer on odd
+                // trials), and drop the parity fragments the block can spare.
+                std::vector<uint8_t> got = frame;
+                std::vector<bool> have(k, true);
+                auto par = parity;
+                for (size_t b = 0; b < blocks; ++b) {
+                    std::vector<size_t> data, pars;
+                    for (size_t i = b; i < k; i += blocks) data.push_back(i);
+                    for (size_t p = b; p < m; p += blocks) pars.push_back(p);
+                    std::shuffle(data.begin(), data.end(), rng);
+                    std::shuffle(pars.begin(), pars.end(), rng);
+                    size_t lose = std::min(data.size(), pars.size());
+                    if (trial % 2 && lose > 1) lose--;
+                    for (size_t j = 0; j < lose; ++j) {
+                        have[data[j]] = false;
+                        std::fill(got.begin() + data[j] * kMaxPayload,
+                                  got.begin() + std::min(size, (data[j] + 1) * kMaxPayload), uint8_t(0xEE));
+                    }
+                    for (size_t j = lose; j < pars.size(); ++j) par[pars[j]].clear();
+                    if (lose == 0) continue;
+                    CHECK(fec::recover_block(got, have, par, b) == lose);
+                }
+                CHECK(got == frame);
+                CHECK(std::all_of(have.begin(), have.end(), [](bool h) { return h; }));
+            }
+            // One loss more than block 0 has parity: nothing is made up.
+            std::vector<bool> have(k, true);
+            std::vector<uint8_t> got = frame;
+            size_t block0_parity = 0;
+            for (size_t p = 0; p < m; p += blocks) block0_parity++;
+            size_t lost = 0;
+            for (size_t i = 0; i < k && lost <= block0_parity; i += blocks, ++lost) have[i] = false;
+            if (lost > block0_parity) CHECK(fec::recover_block(got, have, parity, 0) == 0);
+        }
+    }
+    CHECK(fec::parity_for(0, 10) == 0 && fec::parity_for(1, 10) == 1 && fec::parity_for(40, 10) == 4);
+    CHECK(fec::parity_for(10, 300) == 10 && fec::parity_for(1000, 50) == fec::kMaxParity);
+}
+
+static void test_fec_rebuilds_without_asking() {
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    auto f0 = make_fec_frame(0, 30'000, true, 4);  // 25 data + 4 parity
+    // Fragments 3, 10 and 24 (the last data one) never arrive.
+    for (size_t i = 0; i < f0.size(); ++i)
+        if (i != 3 && i != 10 && i != 24) feed(a, f0[i], 1000);
+    CHECK(got.size() == 1);
+    CHECK(a.stats().packets_fec_rebuilt == 3 && a.stats().frames_fec_rebuilt == 1);
+    CHECK(a.poll(50'000).empty() && a.stats().packets_missing == 0);
+
+    // Too many lost: only what the parity can not cover is asked for (5 lost, 2 parity arrived).
+    auto f1 = make_fec_frame(1, 30'000, false, 4);
+    for (size_t i = 0; i < f1.size(); ++i)
+        if (i != 1 && i != 2 && i != 7 && i != 8 && i != 9 && i != 25 && i != 26) feed(a, f1[i], 60'000);
+    CHECK(a.poll(80'000).empty());  // the gap is noticed; asked for once it is older than reordering
+    auto nacks = a.poll(84'000);
+    CHECK(nacks.size() == 1);
+    size_t asked = 0;
+    if (nacks.size() == 1) {
+        for (const auto& r : nacks[0].ranges) asked += r.count;
+        CHECK(nacks[0].frame_id == 1);
+        // The resent fragments complete the frame together with the parity.
+        for (const auto& r : nacks[0].ranges)
+            for (size_t i = r.first; i < size_t(r.first + r.count); ++i) feed(a, f1[i], 85'000);
+    }
+    CHECK(asked == 3);
+    CHECK(got.size() == 2);
+
+    // Parity first, then the data of the same small frame: duplicates are harmless.
+    auto f2 = make_fec_frame(2, 2'000, false, 1);  // 2 data + 1 parity
+    feed(a, f2[2], 90'000);
+    feed(a, f2[0], 90'000);
+    CHECK(got.size() == 3);
+    feed(a, f2[1], 90'000);
+    CHECK(got.size() == 3 && a.stats().frames_lost == 0);
+
+    // A TV that predates parity rejects parity datagrams, so the PC can send them to anyone.
+    auto h = MediaHeader::read(f2[2]);
+    CHECK(h && h->is_parity() && h->frag_index >= h->frag_count);
+}
+
+static void test_fec_lossy_network_simulation() {
+    // The same lossy Wi-Fi as test_lossy_network_simulation (heavier: 5%), with 20% parity.
+    std::mt19937 rng(43);
+    std::uniform_real_distribution<double> u(0, 1);
+    struct InFlight { int64_t at; Datagram d; };
+    std::vector<InFlight> wire;
+    std::map<uint32_t, std::vector<Datagram>> history;
+    std::vector<uint32_t> got;
+    FrameAssembler a([&](FrameAssembler::Frame&& f) { got.push_back(f.frame_id); });
+    const int64_t rtt = 8'000;
+    auto send = [&](const Datagram& d, int64_t now) {
+        if (u(rng) < 0.05) return;
+        wire.push_back({now + rtt / 2 + (u(rng) < 0.01 ? 4'000 : 0), d});
+    };
+    const int frames = 600;
+    int64_t now = 0;
+    for (int64_t step = 0; step < (frames + 20) * 16'667 / 500; ++step, now += 500) {
+        const int64_t frame = now / 16'667;
+        if (now % 16'667 < 500 && frame < frames) {
+            const size_t size = 1000 + size_t(u(rng) * 60'000);
+            auto dg = make_fec_frame(uint32_t(frame), size, frame == 0, fec::parity_for(fragment_count(size), 20));
+            history[uint32_t(frame)] = dg;
+            for (auto& d : dg) send(d, now);
+        }
+        std::stable_sort(wire.begin(), wire.end(), [](const InFlight& x, const InFlight& y) { return x.at < y.at; });
+        while (!wire.empty() && wire.front().at <= now) {
+            feed(a, wire.front().d, now);
+            wire.erase(wire.begin());
+        }
+        for (const auto& n : a.poll(now)) {
+            auto& dg = history[n.frame_id];
+            const size_t data = MediaHeader::read(dg[0])->frag_count;
+            for (const auto& r : n.ranges) {
+                const size_t end = r.count == NackMessage::kWholeFrame ? data : std::min<size_t>(data, r.first + r.count);
+                for (size_t i = r.first; i < end; ++i) send(dg[i], now + rtt / 2);
+            }
+        }
+    }
+    CHECK(int(got.size()) == frames);
+    CHECK(a.stats().frames_lost == 0);
+    CHECK(a.stats().packets_fec_rebuilt > 0);
+    // Parity covers most of the losses: far fewer packets asked again than rebuilt.
+    CHECK(a.stats().packets_missing * 4 < a.stats().packets_fec_rebuilt);
+    std::printf("simulation with parity (5%% loss): %zu frames, %llu packets rebuilt from parity, %llu asked again\n",
+                got.size(), (unsigned long long)a.stats().packets_fec_rebuilt, (unsigned long long)a.stats().packets_missing);
+}
+
 static void test_nack_and_report_messages() {
     NackMessage m{7, 1234, {{1, 2}, {9, NackMessage::kWholeFrame}}};
     uint8_t buf[NackMessage::kMaxSize];
@@ -523,6 +686,9 @@ int main() {
     test_keyframe_skips_missing_frames();
     test_nack_and_report_messages();
     test_lossy_network_simulation();
+    test_fec_codec();
+    test_fec_rebuilds_without_asking();
+    test_fec_lossy_network_simulation();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;
