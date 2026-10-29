@@ -253,8 +253,8 @@ class SettingsScreen(
                 toggle("Ligar o PC ao abrir o Jinky",
                     "Abrir o Jinky acorda o PC suspenso, sem apertar nada. No PC, ligue uma vez \"Ligar o PC pela TV\" no app Jinky. Não funciona com o PC desligado (use Suspender).",
                     { settings.wakePc }) { settings.wakePc = !settings.wakePc }
-                toggle("Controle PlayStation no PC (beta)",
-                    "DualSense/DualShock vira um DualShock 4 no PC: botões PlayStation nos jogos, touchpad e movimento (TVs com Android 12+). Precisa do Steam Input ligado para jogos sem suporte a PlayStation.",
+                toggle("Controle PlayStation no PC",
+                    "DualSense/DualShock aparece no PC como controle PlayStation: botões △ ○ ✕ □ nos jogos, touchpad e movimento (TVs com Android 12+). Desligado, ele aparece como controle de Xbox.",
                     { settings.psPad }) {
                     settings.psPad = !settings.psPad
                     onChanged()

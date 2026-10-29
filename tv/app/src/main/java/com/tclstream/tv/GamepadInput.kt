@@ -178,11 +178,11 @@ class GamepadInput(
             if (pads.containsKey(deviceId)) return
             val used = pads.values.map { it.index }.toSet()
             val index = (0 until MAX_PADS).firstOrNull { it !in used } ?: return
-            pads[deviceId] = Pad(index, deviceId, dev.name, dev.vendorId == SONY_VENDOR).also { updateSensors(it) }
+            pads[deviceId] = Pad(index, deviceId, dev.name, isPlayStation(dev)).also { updateSensors(it) }
             updateSummary()
             onPlayer(index + 1, dev.name, true)
         }
-        Log.i(TAG, "gamepad connected: ${dev.name} (vendor ${dev.vendorId} product ${dev.productId}) axes=" +
+        Log.i(TAG, "gamepad connected: ${dev.name} (vendor ${dev.vendorId} product ${dev.productId}, playstation ${isPlayStation(dev)}) axes=" +
             dev.motionRanges.joinToString { MotionEvent.axisToString(it.axis) })
     }
 
@@ -198,6 +198,17 @@ class GamepadInput(
     }
 
     override fun onInputDeviceChanged(deviceId: Int) {}
+
+    /**
+     * A Sony pad (DualSense, DualShock 4, DualSense Edge): Sony's vendor id, or, where the TV
+     * doesn't report it (some Fire TV / Bluetooth stacks give 0), the names Sony's pads use.
+     */
+    private fun isPlayStation(dev: InputDevice): Boolean {
+        if (dev.vendorId == SONY_VENDOR) return true
+        val name = dev.name.lowercase()
+        return name.contains("dualsense") || name.contains("dualshock") || name.contains("sony") ||
+            name.contains("ps5") || name.contains("ps4") || name == "wireless controller"
+    }
 
     private fun isGamepad(dev: InputDevice): Boolean {
         val s = dev.sources

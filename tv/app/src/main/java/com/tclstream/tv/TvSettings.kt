@@ -49,9 +49,9 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("pc_notices", true)
         set(v) = prefs.edit().putBoolean("pc_notices", v).apply()
 
-    /** "Controle PlayStation no PC (beta)": a DualSense/DualShock becomes a DualShock 4 on the PC. */
+    /** "Controle PlayStation no PC": a DualSense/DualShock becomes a DualShock 4 on the PC (on unless turned off). */
     var psPad: Boolean
-        get() = prefs.getBoolean("ps_pad", false)
+        get() = prefs.getBoolean("ps_pad", true)
         set(v) = prefs.edit().putBoolean("ps_pad", v).apply()
 
     /** "HDR (experimental)": ask the PC for HDR10 (only offered when this TV can show it). */
