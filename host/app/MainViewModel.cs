@@ -24,6 +24,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settings = settings;
         _settingsChanged = settingsChanged;
         _sendCommand = sendCommand;
+        LoadSessions();
     }
 
     // --- pairing --------------------------------------------------------------------------------
@@ -32,7 +33,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public event Action? PairingRequested;
 
     PairingRequest? _pairing;
-    public PairingRequest? Pairing { get => _pairing; private set { _pairing = value; Notify(); Notify(nameof(HasPairing)); Notify(nameof(PairingCode)); } }
+    public PairingRequest? Pairing { get => _pairing; private set { _pairing = value; Notify(); Notify(nameof(HasPairing)); Notify(nameof(PairingCode)); Notify(nameof(NoPairingYet)); } }
     public bool HasPairing => _pairing is not null;
     public string PairingCode => _pairing is null ? "" : $"{_pairing.Code[..3]} {_pairing.Code[3..]}";
 
@@ -209,6 +210,136 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string PadsConnected { get => _pads; private set { _pads = value; Notify(); } }
 
     public ObservableCollection<ActivityItem> Activity { get; } = new();
+
+    // --- the live session: chart, network, history -----------------------------------------------
+
+    public SessionSamples Samples { get; } = new();
+    public ObservableCollection<SessionRecord> RecentSessions { get; } = new();
+    public bool HasRecentSessions => RecentSessions.Count > 0;
+
+    string _netText = "";
+    /// <summary>"Rede: 0,8% de perdas · proteção 6%" while a TV plays.</summary>
+    public string NetText { get => _netText; private set { _netText = value; Notify(); } }
+
+    /// <summary>"Gráfico da sessão" (Sistema): the live chart on the home page; it can be turned off.</summary>
+    public bool SessionChart
+    {
+        get => _settings.SessionChart;
+        set { if (_settings.SessionChart == value) return; _settings.SessionChart = value; _settings.Save(); Notify(); Notify(nameof(ChartShown)); }
+    }
+
+    public bool ChartShown => IsStreaming && _settings.SessionChart;
+
+    DateTime _sessionStart;
+    string _sessionTv = "", _sessionGame = "";
+    double _latencySum, _mbpsSum, _worstLoss;
+    int _latencyCount, _mbpsCount, _framesLost;
+    DateTime _gameLookup;
+
+    void LoadSessions()
+    {
+        RecentSessions.Clear();
+        foreach (var r in SessionHistory.Load().Take(5)) RecentSessions.Add(r);
+        Notify(nameof(HasRecentSessions));
+    }
+
+    void BeginSession(string tv)
+    {
+        _sessionStart = DateTime.Now;
+        _sessionTv = tv;
+        _sessionGame = "";
+        _latencySum = _mbpsSum = _worstLoss = 0;
+        _latencyCount = _mbpsCount = _framesLost = 0;
+        _gameLookup = default;
+        NetText = "";
+        Samples.Clear();
+    }
+
+    void EndSession()
+    {
+        if (_sessionStart == default) return;
+        var minutes = (int)Math.Round((DateTime.Now - _sessionStart).TotalMinutes);
+        var record = new SessionRecord(_sessionStart, minutes, _tvName ?? _sessionTv, _sessionGame,
+                                       _latencyCount > 0 ? _latencySum / _latencyCount : 0, _mbpsCount > 0 ? _mbpsSum / _mbpsCount : 0,
+                                       _worstLoss, _framesLost);
+        _sessionStart = default;
+        // Only sessions that lasted (a TV peeking at the home screen isn't one).
+        if ((DateTime.Now - record.Start).TotalSeconds >= 45 || record.Game.Length > 0)
+        {
+            var list = SessionHistory.Add(record);
+            RecentSessions.Clear();
+            foreach (var r in list.Take(5)) RecentSessions.Add(r);
+            Notify(nameof(HasRecentSessions));
+        }
+    }
+
+    /// <summary>Which game the session is about (asked now and then, off the UI thread).</summary>
+    void LookUpGame()
+    {
+        if (_sessionGame.Length > 0 || DateTime.UtcNow - _gameLookup < TimeSpan.FromSeconds(15)) return;
+        _gameLookup = DateTime.UtcNow;
+        _ = Task.Run(() =>
+        {
+            var id = Library.Running();
+            var name = id != 0 ? Library.Find(id)?.Name : null;
+            if (name is not null) System.Windows.Application.Current?.Dispatcher.Invoke(() => { if (_sessionStart != default) _sessionGame = name; });
+        });
+    }
+
+    // --- "Biblioteca" page ------------------------------------------------------------------------
+
+    public LibraryView LibraryPage { get; } = new();
+    public void LoadLibrary() => LibraryPage.Load(_settings.SteamApiKey);
+
+    // --- "Testar conexão" -----------------------------------------------------------------------
+
+    public ObservableCollection<NetTest.Result> NetResults { get; } = new();
+    bool _netTesting;
+    public bool NetTesting { get => _netTesting; private set { _netTesting = value; Notify(); Notify(nameof(NetTestButton)); } }
+    public string NetTestButton => _netTesting ? "Testando…" : "Testar conexão";
+
+    public void TestConnection()
+    {
+        if (NetTesting) return;
+        NetTesting = true;
+        NetResults.Clear();
+        Task.Run(() =>
+        {
+            var results = NetTest.Run();
+            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            {
+                foreach (var r in results) NetResults.Add(r);
+                NetTesting = false;
+            });
+        });
+    }
+
+    // --- first-run guide ------------------------------------------------------------------------
+
+    bool _pairedKnown;
+    int _guideStep = 1;
+
+    /// <summary>The guide shows on a fresh install (no TV paired yet) until finished or skipped.</summary>
+    public bool GuideShown => _pairedKnown && !_settings.Onboarded;
+    public int GuideStep { get => _guideStep; set { _guideStep = Math.Clamp(value, 1, 3); Notify(); Notify(nameof(GuideStep1)); Notify(nameof(GuideStep2)); Notify(nameof(GuideStep3)); Notify(nameof(GuideNextText)); } }
+    public bool GuideStep1 => _guideStep == 1;
+    public bool GuideStep2 => _guideStep == 2;
+    public bool GuideStep3 => _guideStep == 3;
+    public string GuideNextText => _guideStep switch { 1 => "Já instalei", 2 => "Próximo", _ => "Começar" };
+    public bool NoPairingYet => _pairing is null;
+
+    public void FinishGuide()
+    {
+        _settings.Onboarded = true;
+        _settings.Save();
+        Notify(nameof(GuideShown));
+    }
+
+    /// <summary>"Encerrar sessão": the TV goes back to its home screen (the game keeps running here).</summary>
+    public void EndTvSession()
+    {
+        if (IsStreaming) _sendCommand("end-session");
+    }
 
     // --- preferences (two-way) -----------------------------------------------------------------
 
@@ -572,6 +703,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 LaunchReady = false;
                 SessionStarted?.Invoke();
                 Current = State.Streaming;
+                BeginSession(Host(e.Str("tv")));
+                NetTest.Seen(Host(e.Str("tv")));
                 StatusDetail = $"TV conectada · {Host(e.Str("tv"))}";
                 Add("TV conectada · " + Host(e.Str("tv")));
                 break;
@@ -581,10 +714,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 break;
             case "disconnected":
                 LaunchReady = false;
+                EndSession();
                 Current = State.Waiting;
                 StatusDetail = "Abra o Jinky na TV para começar.";
                 Latency = Fps = Bitrate = "—";
-                Add(e.Str("reason") == "silent" ? "A TV parou de responder · sessão encerrada" : "TV desconectou", e.Str("reason") == "silent");
+                NetText = "";
+                Add(e.Str("reason") switch
+                {
+                    "silent" => "A TV parou de responder · sessão encerrada",
+                    "ended" => "Sessão encerrada pelo PC · a TV voltou ao início",
+                    _ => "TV desconectou",
+                }, e.Str("reason") == "silent");
                 break;
             case "pair_request":
                 Pairing = new PairingRequest(e.Str("id") ?? "", CleanName(e.Str("name")), e.Str("code") ?? "000000");
@@ -593,6 +733,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 break;
             case "paired":
                 Pairing = null;
+                if (GuideShown) GuideStep = 3;
                 Add($"{CleanName(e.Str("name"))} pareada · já pode jogar");
                 break;
             case "pair_rejected":
@@ -609,9 +750,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         PairedTvs.Add(new PairedTvItem(tv.GetProperty("id").GetString() ?? "", CleanName(tv.GetProperty("name").GetString())));
                 Notify(nameof(NoPairedTvs));
                 Notify(nameof(PairedTvsText));
+                // Someone who already has a TV needs no guide.
+                if (PairedTvs.Count > 0 && !_settings.Onboarded && !_pairedKnown) { _settings.Onboarded = true; _settings.Save(); }
+                _pairedKnown = true;
+                Notify(nameof(GuideShown));
                 break;
             case "tv_name":
                 _tvName = CleanName(e.Str("name"));
+                if (_sessionTv.Length > 0) NetTest.Seen(_sessionTv, _tvName);
                 if (IsStreaming) StatusDetail = $"TV conectada · {_tvName}";
                 break;
             case "handoff":
@@ -625,12 +771,42 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Codec = e.Str("codec") ?? "—";
                 break;
             case "latency":
-                if (e.Num("ms") is { } ms) Latency = ms.ToString("0", PtBr) + " ms";
+                if (e.Num("ms") is { } ms)
+                {
+                    Latency = ms.ToString("0", PtBr) + " ms";
+                    if (IsStreaming)
+                    {
+                        Samples.AddLatency(ms);
+                        _latencySum += ms;
+                        _latencyCount++;
+                    }
+                }
                 break;
             case "stats":
                 if (!IsStreaming) break;
                 if (e.Num("fps") is { } fps) Fps = fps.ToString("0", PtBr) + " fps";
-                if (e.Num("mbps") is { } mbps) Bitrate = mbps.ToString("0.0", PtBr) + " Mbit/s";
+                if (e.Num("mbps") is { } mbps)
+                {
+                    Bitrate = mbps.ToString(mbps >= 10 ? "0" : "0.0", PtBr) + " Mbit/s";
+                    Samples.AddMbps(mbps);
+                    // Idle home screens send little: the average is about the playing.
+                    if (mbps >= 1)
+                    {
+                        _mbpsSum += mbps;
+                        _mbpsCount++;
+                    }
+                }
+                LookUpGame();
+                break;
+            case "net":
+                if (!IsStreaming) break;
+                var loss = (e.Num("loss_permille") ?? 0) / 10.0;
+                var lost = (int)(e.Num("frames_lost") ?? 0);
+                var fecPct = (int)(e.Num("fec_pct") ?? 0);
+                _worstLoss = Math.Max(_worstLoss, loss);
+                _framesLost += lost;
+                NetText = "Rede: " + (loss < 0.1 ? "sem perdas" : loss.ToString("0.#", PtBr) + "% de perdas") +
+                          (fecPct > 0 ? $" · proteção {fecPct}%" : "") + (_framesLost > 0 ? $" · {_framesLost} quadro(s) perdido(s)" : "");
                 break;
             case "pad":
                 var index = (int)(e.Num("index") ?? 0);
@@ -701,7 +877,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public void OnGameLaunched(string name) => Add($"Abrindo {name} pela TV");
+    public void OnGameLaunched(string name)
+    {
+        if (_sessionStart != default) _sessionGame = name;
+        Add($"Abrindo {name} pela TV");
+    }
 
     public void OnNotice(string text) => Add(text);
 
@@ -762,6 +942,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Notify(nameof(StatusTitle));
         Notify(nameof(PillText));
         Notify(nameof(IsStreaming));
+        Notify(nameof(ChartShown));
     }
 
     void Notify([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

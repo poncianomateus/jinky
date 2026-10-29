@@ -55,6 +55,7 @@ data class LibraryGame(
     val weekMinutes: Int = 0,  // played over the last days ("esta semana", see LibraryWeek)
     val saved: Boolean = false,  // paused into a save state on the PC (PS2): nothing runs, survives a restart
     val platform: String = "",  // "ps2" for a PlayStation 2 game (PCSX2), "" for a PC game
+    val favorite: Boolean = false,  // marked as favourite in the PC app: pinned on the home screen
 ) {
     val ps2 get() = platform == "ps2"
     /** Where it comes from, when not Steam ("PlayStation 2", "Epic Games"...), else "". */
@@ -802,7 +803,8 @@ class LibraryScreen(
                     g.optBoolean("updating"),
                     g.optInt("weekMinutes"),
                     g.optBoolean("saved"),
-                    g.optString("platform"))
+                    g.optString("platform"),
+                    g.optBoolean("favorite"))
             }
         }
 

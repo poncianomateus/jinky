@@ -61,11 +61,13 @@ public partial class App : Application
         };
         // The game the TV asked for starts once the engine says so (after Big Picture is up).
         _vm.ReadyToLaunch += () => _tvService?.OnSessionStarted();
-        // A TV asking to pair needs the user's eyes on the code: bring the window forward.
+        // A TV asking to pair: a Windows notification (clicking it opens the window with the
+        // code); the window doesn't jump in front of what the user is doing. Already open: it
+        // blinks in the taskbar.
         _vm.PairingRequested += () =>
         {
-            ShowWindow();
-            _tray?.ShowBalloonTip(5000, "Nova TV quer se conectar", $"{_vm.Pairing?.Name} · código {_vm.PairingCode}", Forms.ToolTipIcon.None);
+            _tray?.ShowBalloonTip(10000, "Nova TV quer se conectar", $"{_vm.Pairing?.Name} · código {_vm.PairingCode} · clique para confirmar", Forms.ToolTipIcon.None);
+            if (_window is { IsVisible: true } w) FlashTaskbar(w);
         };
         _window.Closing += (_, args) =>
         {
@@ -250,11 +252,52 @@ public partial class App : Application
             Visible = true,
             ContextMenuStrip = new Forms.ContextMenuStrip { Renderer = new TrayMenuRenderer(), ShowImageMargin = false },
         };
-        _tray.ContextMenuStrip.Items.Add("Abrir o Jinky", null, (_, _) => ShowWindow());
-        _tray.ContextMenuStrip.Items.Add(new Forms.ToolStripSeparator());
-        _tray.ContextMenuStrip.Items.Add("Sair", null, (_, _) => Quit());
+        // Built each time it opens: what is happening now, and what can be done about it.
+        _tray.ContextMenuStrip.Opening += (_, _) => BuildTrayMenu();
+        BuildTrayMenu();
         _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ShowWindow(); };
+        _tray.BalloonTipClicked += (_, _) => ShowWindow();
     }
+
+    void BuildTrayMenu()
+    {
+        if (_tray?.ContextMenuStrip is not { } menu || _vm is null) return;
+        menu.Items.Clear();
+        var status = new Forms.ToolStripMenuItem(_vm.IsStreaming ? _vm.StatusDetail : _vm.StatusTitle) { Enabled = false };
+        menu.Items.Add(status);
+        if (_vm.IsStreaming && _vm.Latency != "—")
+            menu.Items.Add(new Forms.ToolStripMenuItem($"{_vm.Latency} · {_vm.Fps} · {_vm.Bitrate}") { Enabled = false });
+        if (_vm.HasPairing)
+            menu.Items.Add($"Confirmar a TV {_vm.Pairing?.Name} ({_vm.PairingCode})", null, (_, _) => ShowWindow());
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        if (_vm.IsStreaming)
+            menu.Items.Add("Encerrar sessão da TV", null, (_, _) => _vm.EndTvSession());
+        menu.Items.Add("Abrir o Jinky", null, (_, _) => ShowWindow());
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add("Sair", null, (_, _) => Quit());
+    }
+
+    static void FlashTaskbar(Window w)
+    {
+        var info = new FlashInfo
+        {
+            Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FlashInfo>(),
+            Hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle,
+            Flags = 3 | 12,  // FLASHW_ALL | FLASHW_TIMERNOFG: until the window comes forward
+        };
+        FlashWindowEx(ref info);
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct FlashInfo
+    {
+        public uint Size;
+        public IntPtr Hwnd;
+        public uint Flags, Count, Timeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool FlashWindowEx(ref FlashInfo info);
 
     void UpdateTray()
     {
@@ -298,10 +341,11 @@ public partial class App : Application
 sealed class TrayMenuRenderer() : Forms.ToolStripProfessionalRenderer(new Colors())
 {
     static readonly System.Drawing.Color Text = System.Drawing.Color.FromArgb(0xF5, 0xF7, 0xFC);
+    static readonly System.Drawing.Color Dim = System.Drawing.Color.FromArgb(0xA6, 0xAE, 0xC2);
 
     protected override void OnRenderItemText(Forms.ToolStripItemTextRenderEventArgs e)
     {
-        e.TextColor = Text;
+        e.TextColor = e.Item?.Enabled == false ? Dim : Text;
         base.OnRenderItemText(e);
     }
 

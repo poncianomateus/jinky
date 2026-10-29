@@ -50,6 +50,12 @@ public sealed class Settings
     /// <summary>When console mode is off: still send the sound only to the TV.</summary>
     public bool SoundOnlyOnTv { get; set; } = true;
 
+    /// <summary>The live chart of the session (latency, picture) on the PC's home page.</summary>
+    public bool SessionChart { get; set; } = true;
+
+    /// <summary>The first-run guide was shown (or a TV was already paired).</summary>
+    public bool Onboarded { get; set; }
+
     /// <summary>Steam Web API key: lets the TV list (and install) the account's games.</summary>
     public string? SteamApiKey { get; set; }
 

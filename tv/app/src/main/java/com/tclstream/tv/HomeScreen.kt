@@ -518,7 +518,8 @@ class HomeScreen(
         val installed = games.orEmpty()
         val paused = installed.filter { it.paused }
         val running = installed.firstOrNull { it.running && !it.paused }
-        val pinnedIds = pins.pinned
+        // Pinned on this TV, then the PC app's favourites.
+        val pinnedIds = pins.pinned + installed.filter { it.favorite && it.id !in pins.pinned }.map { it.id }
         val pinned = pinnedIds.mapNotNull { id -> installed.firstOrNull { it.id == id } }.filter { it != running && !it.paused }
         val recent = installed.filter { it != running && it !in pinned && !it.paused }.take(RECENT)
         val list = mutableListOf<Pair<Item, View>>()

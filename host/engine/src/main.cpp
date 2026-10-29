@@ -1026,6 +1026,18 @@ int main(int argc, char** argv) {
             } else if (cmd == "launch-waiting") {
                 // Steam waits for the player before starting the game: show it on the TV now.
                 if (peer_game) game_watch.steam_waiting();
+            } else if (cmd == "end-session") {
+                // "Encerrar sessão" on the PC: the TV goes back to its home screen, like when the
+                // game closes; the game itself keeps running on the PC.
+                if (peer) {
+                    TCL_INFO("session", "the PC ended the session");
+                    for (int i = 0; i < 3; ++i) send_control(*peer, PacketType::SessionEnd, tclproto::kEndGameClosed);
+                    peer.reset();
+                    peer_name.clear();
+                    publish_peer();
+                    gamepads.unplug_all();
+                    tcl::emit_event("disconnected", "\"reason\":\"ended\"");
+                }
             }
         }
         if (pending && steady_clock::now() - pending->created > 120s) {
@@ -1280,6 +1292,8 @@ int main(int argc, char** argv) {
                     tcl::emit_event("latency", std::format("\"ms\":{:.1f}", msg->value / 1000.0));
                 } else if (msg->type == PacketType::NetReport) {
                     const auto r = tclproto::NetReport::unpack(msg->value);
+                    tcl::emit_event("net", std::format("\"loss_permille\":{},\"frames_lost\":{},\"fec_pct\":{}",
+                                                       r.lost_permille, r.frames_unrecovered, fec.percent()));
                     if (r.lost_permille || r.frames_unrecovered)
                         TCL_INFO("receiver", "network: {:.1f}% of video packets asked again, {} frame(s) lost",
                                  r.lost_permille / 10.0, r.frames_unrecovered);

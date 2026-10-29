@@ -48,6 +48,15 @@ public sealed class NonEmptyToVisibility : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }
 
+/// <summary>Visible when false.</summary>
+public sealed class NotVisibility : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is true ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
+}
+
 /// <summary>Small motion helpers: pages and options slide in instead of popping.</summary>
 public static class Motion
 {
@@ -97,5 +106,112 @@ public static class Motion
             },
             FillBehavior = FillBehavior.Stop,
         };
+    }
+}
+
+/// <summary>
+/// The live session chart: latency (blue line) and video rate (green area) over the last
+/// minutes. Drawn directly (one geometry per line), redrawn only when a point arrives.
+/// </summary>
+public sealed class SessionChart : FrameworkElement
+{
+    public static readonly DependencyProperty SourceProperty =
+        DependencyProperty.Register(nameof(Source), typeof(SessionSamples), typeof(SessionChart),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, (d, e) =>
+            {
+                var chart = (SessionChart)d;
+                if (e.OldValue is SessionSamples old) old.Changed -= chart.OnChanged;
+                if (e.NewValue is SessionSamples now) now.Changed += chart.OnChanged;
+            }));
+
+    public SessionSamples? Source { get => (SessionSamples?)GetValue(SourceProperty); set => SetValue(SourceProperty, value); }
+
+    static readonly Brush Blue = Freeze(new SolidColorBrush(Color.FromRgb(0x4F, 0x8B, 0xFF)));
+    static readonly Brush Green = Freeze(new SolidColorBrush(Color.FromRgb(0x3D, 0xDC, 0x97)));
+    static readonly Brush GreenFill = Freeze(new LinearGradientBrush(Color.FromArgb(0x55, 0x3D, 0xDC, 0x97), Color.FromArgb(0x00, 0x3D, 0xDC, 0x97), 90));
+    static readonly Pen BluePen = Freeze(new Pen(Blue, 2) { LineJoin = PenLineJoin.Round });
+    static readonly Pen GreenPen = Freeze(new Pen(Green, 1.5) { LineJoin = PenLineJoin.Round });
+    static readonly Pen GridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF)), 1));
+    static readonly Brush Label = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0xAE, 0xC2)));
+    static readonly Typeface Font = new(new FontFamily(new Uri("pack://application:,,,/"), "./Assets/Fonts/#JetBrains Mono"),
+                                        FontStyles.Normal, FontWeights.Medium, FontStretches.Normal);
+
+    static T Freeze<T>(T f) where T : Freezable { f.Freeze(); return f; }
+
+    void OnChanged()
+    {
+        if (Dispatcher.CheckAccess()) InvalidateVisual();
+        else Dispatcher.BeginInvoke(InvalidateVisual);
+    }
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        double w = ActualWidth, h = ActualHeight;
+        if (w < 40 || h < 30) return;
+        dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
+        const double top = 22;
+        var plot = h - top - 4;
+        for (var i = 0; i <= 2; i++)
+        {
+            var y = top + plot * i / 2;
+            dc.DrawLine(GridPen, new Point(0, y), new Point(w, y));
+        }
+        if (Source is not { } s) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var step = w / (SessionSamples.Capacity - 1);
+
+        // Video rate: area, scaled to the highest point (at least 20 Mbit/s).
+        var mbps = s.Mbps.ToArray();
+        if (mbps.Length > 1)
+        {
+            var max = Math.Max(20, mbps.Max() * 1.15);
+            var start = w - (mbps.Length - 1) * step;
+            var area = new StreamGeometry();
+            using (var g = area.Open())
+            {
+                g.BeginFigure(new Point(start, top + plot), true, true);
+                for (var i = 0; i < mbps.Length; i++) g.LineTo(new Point(start + i * step, top + plot - plot * mbps[i] / max), true, true);
+                g.LineTo(new Point(w, top + plot), false, false);
+            }
+            area.Freeze();
+            dc.DrawGeometry(GreenFill, null, area);
+            var line = new StreamGeometry();
+            using (var g = line.Open())
+            {
+                g.BeginFigure(new Point(start, top + plot - plot * mbps[0] / max), false, false);
+                for (var i = 1; i < mbps.Length; i++) g.LineTo(new Point(start + i * step, top + plot - plot * mbps[i] / max), true, true);
+            }
+            line.Freeze();
+            dc.DrawGeometry(null, GreenPen, line);
+        }
+
+        // Latency: line, scaled to at least 150 ms.
+        var lat = s.Latency.ToArray();
+        if (lat.Length > 1)
+        {
+            var max = Math.Max(150, lat.Max() * 1.15);
+            var start = w - (lat.Length - 1) * step;
+            var line = new StreamGeometry();
+            using (var g = line.Open())
+            {
+                g.BeginFigure(new Point(start, top + plot - plot * lat[0] / max), false, false);
+                for (var i = 1; i < lat.Length; i++) g.LineTo(new Point(start + i * step, top + plot - plot * lat[i] / max), true, true);
+            }
+            line.Freeze();
+            dc.DrawGeometry(null, BluePen, line);
+        }
+
+        // Legend: the latest values.
+        var x = 0.0;
+        void Legend(Brush color, string text)
+        {
+            dc.DrawRoundedRectangle(color, null, new Rect(x, 6, 10, 3), 1.5, 1.5);
+            var t = new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Font, 11, Label, dpi);
+            dc.DrawText(t, new Point(x + 15, 0));
+            x += 15 + t.Width + 22;
+        }
+        var pt = System.Globalization.CultureInfo.GetCultureInfo("pt-BR");
+        Legend(Blue, "Latência " + (lat.Length > 0 ? lat[^1].ToString("0", pt) + " ms" : "—"));
+        Legend(Green, "Vídeo " + (mbps.Length > 0 ? mbps[^1].ToString("0.0", pt) + " Mbit/s" : "—"));
     }
 }

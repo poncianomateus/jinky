@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 
 namespace Jinky;
@@ -116,6 +116,15 @@ public static class LaunchWatch
                 var task = Str(act, "strTaskName", "taskName", "strTask") ?? "";
                 var details = Str(act, "strTaskDetails", "taskDetails") ?? "";
                 waiting = Bool(act, "bWaitingForUI", "waitingForUI", "bWaitingForUser") || Waits(task);
+                // Steam's controller notices ("use Steam Input with this PlayStation controller?",
+                // "controller recommended"...): nothing to decide on a TV, so Jinky presses their OK,
+                // as if the player had, and the launch goes on without showing the PC.
+                if (waiting && task == "ShowInterstitials")
+                {
+                    AcceptInterstitials(id);
+                    waiting = false;
+                    task = "PreparingController";
+                }
                 working = !waiting;
                 Learn(task, act);
                 var text = Describe(task, waiting);
@@ -161,6 +170,58 @@ public static class LaunchWatch
             Interlocked.Exchange(ref _busy, 0);
         }
     }
+
+    static int _interstitialTries;
+    static int _interstitialAction;
+
+    /// <summary>
+    /// OKs the controller notices Steam shows before a game, through Steam's own notice queue
+    /// (closing it like its OK button: the launch continues and the notice goes away). While the
+    /// notices are still being prepared it waits; after a few seconds without any, it tells
+    /// Steam to go on directly.
+    /// </summary>
+    static void AcceptInterstitials(int appId)
+    {
+        int action;
+        lock (Lock) action = _actionId;
+        if (action != _interstitialAction)
+        {
+            _interstitialAction = action;
+            _interstitialTries = 0;
+        }
+        _interstitialTries++;
+        var result = SteamClient.Run(InterstitialsScript.Replace("APPID", appId.ToString()));
+        Note($"ShowInterstitials: OK pelo Jinky ({result ?? "sem resposta"})");
+        if (result == "ok") return;
+        if (_interstitialTries >= 4) Answer(appId, "ShowInterstitials", cancel: false);
+    }
+
+    // Finds Steam's notice store among its UI modules (by its methods, not by a module number,
+    // which changes with every Steam update) and closes the visible notices with "OK".
+    const string InterstitialsScript = """
+        (() => { try {
+          let store = window.__jinkyNotices;
+          if (!store) {
+            let req;
+            window.webpackChunksteamui.push([[Symbol('jinky')], {}, r => { req = r; }]);
+            for (const id of Object.keys(req.m)) {
+              const src = req.m[id].toString();
+              if (!src.includes('CloseInterstitials(') || !src.includes('AddInterstitialToQueue(')) continue;
+              const ex = req(id);
+              for (const k of Object.keys(ex)) {
+                const v = ex[k];
+                if (v && typeof v.CloseInterstitials === 'function') { store = v; break; }
+              }
+              if (store) break;
+            }
+            if (!store) return 'nostore';
+            window.__jinkyNotices = store;
+          }
+          if (!store.BHasVisibleInterstitials) return 'none';
+          store.CloseInterstitials(APPID, false, false);
+          return 'ok';
+        } catch (e) { return 'err ' + e; } })()
+        """;
 
     static long AppOf(JsonElement a)
     {
@@ -302,12 +363,25 @@ public static class LaunchWatch
         if (Has("Conflict")) return "A Steam encontrou saves diferentes na nuvem";
         if (waiting) return "A Steam está esperando você";
         if (Has("Cloud")) return "Sincronizando os saves com a nuvem";
+        if (Has("PreparingController")) return "Preparando o controle";
         if (Has("Shader")) return "Processando shaders";
         if (Has("Download") || Has("Depot") || Has("Updat")) return "Atualizando o jogo";
         if (Has("Script") || Has("Install") || Has("Redist") || Has("Dependen")) return "Instalando componentes do jogo";
         if (Has("Check") || Has("Version") || Has("Info")) return "Verificando o jogo";
         if (Has("Process") || Has("Window") || Has("Creat") || Has("Launch") || Has("Complet") || Has("Running")) return "Abrindo o jogo";
         return "Preparando o jogo";
+    }
+
+    static void Note(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(Settings.Folder, "logs"));
+            File.AppendAllText(Path.Combine(Settings.Folder, "logs", "steam-launch.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+        }
     }
 
     /// <summary>Notes each new kind of Steam launch step (to name them better later).</summary>

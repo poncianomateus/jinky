@@ -204,6 +204,8 @@ public sealed class TvService : IDisposable
                 var stream = client.GetStream();
                 var request = await Request.ReadAsync(stream);
                 if (request is null) return;
+                // TVs on the network, for "Testar conexão" (only the app's own requests count).
+                if (request.Path.StartsWith("/library") || request.Path.StartsWith("/notices")) NetTest.Seen(remote.Address.ToString());
 
                 if (request.Is("GET", "/tv/version"))
                 {
@@ -229,8 +231,10 @@ public sealed class TvService : IDisposable
                 }
                 else if (request.Is("GET", "/library"))
                 {
-                    var games = Library.Games(SteamApiKey?.Invoke());
-                    PlaytimeHistory.Record(games);
+                    var all = Library.Games(SteamApiKey?.Invoke());
+                    PlaytimeHistory.Record(all);
+                    // Hidden in the PC's "Biblioteca" page: not on the TV at all.
+                    var games = all.Where(g => !LibraryPrefs.IsHidden(g.Id)).ToList();
                     var week = PlaytimeHistory.ThisWeek();
                     var top = week.Minutes.OrderByDescending(m => m.Value).FirstOrDefault();
                     // The game downloading right now, live from Steam (its manifest lags behind).
@@ -241,7 +245,8 @@ public sealed class TvService : IDisposable
                     _known = games.ToDictionary(g => g.Id, g => g.Name);
                     foreach (var g in games)
                     {
-                        if (g.CoverPath is not null) _art[(g.Id, "cover")] = g.CoverPath;
+                        if (LibraryPrefs.CustomCover(g.Id) is { } own) _art[(g.Id, "cover")] = own;
+                        else if (g.CoverPath is not null) _art[(g.Id, "cover")] = g.CoverPath;
                         if (g.HeroPath is not null) _art[(g.Id, "hero")] = g.HeroPath;
                         if (g.LogoPath is not null) _art[(g.Id, "logo")] = g.LogoPath;
                     }
@@ -261,7 +266,7 @@ public sealed class TvService : IDisposable
                         {
                             id = g.Id, name = g.Name, lastPlayed = g.LastPlayed,
                             // Games without a local picture get one from Steam's servers on request.
-                            cover = g.CoverPath is not null || g.State != GameState.Installed,
+                            cover = g.CoverPath is not null || g.State != GameState.Installed || LibraryPrefs.CustomCover(g.Id) is not null,
                             hero = g.HeroPath is not null || g.State != GameState.Installed,
                             logo = g.LogoPath is not null || g.State != GameState.Installed,
                             state = g.State switch { GameState.Downloading => "downloading", GameState.NotInstalled => "notInstalled", _ => "installed" },
@@ -282,6 +287,8 @@ public sealed class TvService : IDisposable
                             // Paused into a save state (PS2): nothing runs, no limit, survives a restart.
                             saved = paused.TryGetValue(g.Id, out var sp) && sp.Saved,
                             platform = g.Platform,
+                            // Favourite in the PC's "Biblioteca" page: pinned on the TV's home.
+                            favorite = LibraryPrefs.IsFavorite(g.Id),
                         }),
                     });
                     await RespondText(stream, json, "application/json; charset=utf-8");

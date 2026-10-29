@@ -14,7 +14,7 @@
         </Grid.ColumnDefinitions>
 
         <!-- ============ Left menu: brand, pages, status and version at the bottom ============ -->
-        <Border Background="#0A0D14" BorderBrush="#151A26" BorderThickness="0,0,1,0">
+        <Border x:Name="Side" Background="#0A0D14" BorderBrush="#151A26" BorderThickness="0,0,1,0">
             <DockPanel Margin="16,22,16,18">
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,0,0,26">
                     <Image Source="Assets/tile-256.png" Width="30" Height="30" RenderOptions.BitmapScalingMode="HighQuality"/>
@@ -72,7 +72,8 @@
                 <StackPanel>
                     <RadioButton x:Name="NavHome" Style="{StaticResource Nav}" Content="Início" Tag="{StaticResource IcoHome}"
                                  IsChecked="True" Checked="Nav_Checked"/>
-                    <RadioButton x:Name="NavGames" Style="{StaticResource Nav}" Content="Jogos" Tag="{StaticResource IcoPad}" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="NavLibrary" Style="{StaticResource Nav}" Content="Biblioteca" Tag="{StaticResource IcoLibrary}" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="NavGames" Style="{StaticResource Nav}" Content="Jogar" Tag="{StaticResource IcoPad}" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavTvs" Style="{StaticResource Nav}" Content="TVs" Tag="{StaticResource IcoTv}" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavSystem" Style="{StaticResource Nav}" Content="Sistema" Tag="{StaticResource IcoSystem}" Checked="Nav_Checked"/>
                 </StackPanel>
@@ -80,7 +81,7 @@
         </Border>
 
         <!-- ============ Pages ============ -->
-        <Grid Grid.Column="1">
+        <Grid x:Name="PageArea" Grid.Column="1">
             <!-- A faint blue glow behind the top, like the TV's home -->
             <Rectangle IsHitTestVisible="False">
                 <Rectangle.Fill>
@@ -135,8 +136,16 @@
                                     </LinearGradientBrush>
                                 </Border.Background>
                                 <StackPanel>
-                                    <TextBlock Text="{Binding StatusTitle}" FontFamily="{StaticResource Display}" FontSize="24" FontWeight="ExtraBold" TextWrapping="Wrap"/>
-                                    <TextBlock Text="{Binding StatusDetail}" Foreground="{StaticResource Muted}" FontSize="13.5" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                    <DockPanel>
+                                        <!-- The TV goes back to its home screen; the game keeps running here -->
+                                        <Button DockPanel.Dock="Right" Content="Encerrar sessão" Style="{StaticResource GhostButton}" VerticalAlignment="Top"
+                                                Click="EndSession_Click" ToolTip="A TV volta para o início dela. O jogo continua aberto no PC."
+                                                Visibility="{Binding IsStreaming, Converter={StaticResource BoolToVisibility}}"/>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding StatusTitle}" FontFamily="{StaticResource Display}" FontSize="24" FontWeight="ExtraBold" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding StatusDetail}" Foreground="{StaticResource Muted}" FontSize="13.5" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </DockPanel>
                                     <UniformGrid Columns="4" Margin="0,20,-10,0" local:Motion.Reveal="True"
                                                  Visibility="{Binding IsStreaming, Converter={StaticResource BoolToVisibility}}">
                                         <Border Style="{StaticResource Tile}">
@@ -164,6 +173,16 @@
                                             </StackPanel>
                                         </Border>
                                     </UniformGrid>
+                                    <!-- Live chart (can be turned off: "Ocultar", or Sistema > Gráfico da sessão) -->
+                                    <Grid Margin="0,16,0,0" local:Motion.Reveal="True"
+                                          Visibility="{Binding ChartShown, Converter={StaticResource BoolToVisibility}}">
+                                        <local:SessionChart Source="{Binding Samples}" Height="110"/>
+                                        <Button Content="Ocultar" Style="{StaticResource GhostButton}" Padding="10,3" FontSize="11.5"
+                                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-4,0,0" Click="HideChart_Click"
+                                                ToolTip="Esconde o gráfico. Para mostrar de novo: Sistema › Gráfico da sessão."/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding NetText}" Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,10,0,0"
+                                               Visibility="{Binding NetText, Converter={StaticResource NonEmptyToVisibility}}"/>
                                 </StackPanel>
                             </Border>
 
@@ -173,6 +192,48 @@
                                                Visibility="{Binding NoPairedTvs, Converter={StaticResource BoolToVisibility}}">
                                 <Button Content="Instalar numa TV" Style="{StaticResource GhostButton}" Click="GoTvs_Click"/>
                             </local:SettingCard>
+
+                            <StackPanel Visibility="{Binding HasRecentSessions, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="Sessões recentes" Style="{StaticResource Section}"/>
+                                <ItemsControl ItemsSource="{Binding RecentSessions}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#10141F" BorderBrush="#1C2131" BorderThickness="1" CornerRadius="10" Padding="18,12" Margin="0,0,0,4">
+                                                <DockPanel>
+                                                    <Ellipse Width="8" Height="8" Margin="0,0,14,0" VerticalAlignment="Center">
+                                                        <Ellipse.Style>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Fill" Value="{StaticResource Good}"/>
+                                                                <Setter Property="ToolTip" Value="Sessão boa"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Grade}" Value="ok">
+                                                                        <Setter Property="Fill" Value="{StaticResource Warn}"/>
+                                                                        <Setter Property="ToolTip" Value="Algumas perdas ou atraso"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding Grade}" Value="bad">
+                                                                        <Setter Property="Fill" Value="#FF6B6B"/>
+                                                                        <Setter Property="ToolTip" Value="Rede ruim nesta sessão: experimente TVs › Testar conexão"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Ellipse.Style>
+                                                    </Ellipse>
+                                                    <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Length}" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                                                        <TextBlock Text="{Binding Quality}" FontFamily="{StaticResource Mono}" FontSize="11.5"
+                                                                   Foreground="{StaticResource Dim}" HorizontalAlignment="Right" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="{Binding When}" Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,2,0,0"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                    </StackPanel>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
 
                             <DockPanel Margin="0,22,0,10">
                                 <Button Content="Pasta de diagnóstico" Style="{StaticResource GhostButton}" DockPanel.Dock="Right"
@@ -203,6 +264,70 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                             </Border>
+                        </StackPanel>
+
+                        <!-- == Biblioteca == -->
+                        <StackPanel x:Name="PageLibrary" Visibility="Collapsed" DataContext="{Binding LibraryPage}">
+                            <TextBlock Text="Os jogos que a TV mostra. Esconda o que não é para a TV, marque favoritos e troque capas."
+                                       Foreground="{StaticResource Muted}" FontSize="13" Margin="2,8,0,0" TextWrapping="Wrap"/>
+                            <DockPanel Margin="0,18,0,0">
+                                <TextBox DockPanel.Dock="Right" Style="{StaticResource Field}" Width="230" FontFamily="{StaticResource Body}"
+                                         FontSize="13" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Tag="Buscar jogo"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <RadioButton Style="{StaticResource Chip}" GroupName="libfilter" Content="Instalados" Tag="installed" IsChecked="True" Checked="LibraryFilter_Checked"/>
+                                    <RadioButton Style="{StaticResource Chip}" GroupName="libfilter" Content="Favoritos" Tag="favorites" Checked="LibraryFilter_Checked"/>
+                                    <RadioButton Style="{StaticResource Chip}" GroupName="libfilter" Content="Escondidos" Tag="hidden" Checked="LibraryFilter_Checked"/>
+                                    <RadioButton Style="{StaticResource Chip}" GroupName="libfilter" Content="Todos" Tag="all" Checked="LibraryFilter_Checked"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock Text="{Binding CountText}" Foreground="{StaticResource Dim}" FontSize="12" Margin="2,14,0,8"/>
+                            <ItemsControl ItemsSource="{Binding View}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border x:Name="Row" Background="#10141F" BorderBrush="#1C2131" BorderThickness="1" CornerRadius="10" Padding="10,8,14,8" Margin="0,0,0,4">
+                                            <DockPanel>
+                                                <Grid Width="42" Height="56" Margin="0,0,16,0">
+                                                    <Border CornerRadius="6" Background="#171C2A"
+                                                            Visibility="{Binding NoCover, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBlock Text="{Binding Initial}" FontFamily="{StaticResource Display}" FontSize="18" FontWeight="ExtraBold"
+                                                                   Foreground="{StaticResource Dim}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <Border CornerRadius="6">
+                                                        <Border.Background>
+                                                            <ImageBrush ImageSource="{Binding Cover}" Stretch="UniformToFill"/>
+                                                        </Border.Background>
+                                                    </Border>
+                                                </Grid>
+                                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <!-- Cover buttons only under the mouse: the list stays clean -->
+                                                    <StackPanel x:Name="CoverButtons" Orientation="Horizontal" Visibility="Hidden">
+                                                    <Button Content="Trocar capa" Style="{StaticResource GhostButton}" Padding="12,6" FontSize="12" Margin="0,0,6,0"
+                                                            Click="ChangeCover_Click" ToolTip="Escolher uma imagem (PNG ou JPG, de preferência em pé, 600×900)"/>
+                                                    <Button Content="Original" Style="{StaticResource GhostButton}" Padding="12,6" FontSize="12" Margin="0,0,6,0"
+                                                            Click="ResetCover_Click" ToolTip="Voltar para a capa original"
+                                                            Visibility="{Binding HasOwnCover, Converter={StaticResource BoolToVisibility}}"/>
+                                                    </StackPanel>
+                                                    <ToggleButton Style="{StaticResource Star}" IsChecked="{Binding Favorite}" Margin="0,0,10,0"/>
+                                                    <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ShownOnTv}" ToolTip="Mostrar na TV"/>
+                                                </StackPanel>
+                                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding Meta}" Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+                                        <DataTemplate.Triggers>
+                                            <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="CoverButtons" Property="Visibility" Value="Visible"/>
+                                                <Setter TargetName="Row" Property="Background" Value="#151A28"/>
+                                            </Trigger>
+                                            <DataTrigger Binding="{Binding Hidden}" Value="True">
+                                                <Setter TargetName="Row" Property="Opacity" Value="0.55"/>
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
 
                         <!-- == Jogos == -->
@@ -247,7 +372,7 @@
                             <local:SettingCard Header="Chave da API da Steam" Icon="{StaticResource IcoKey}"
                                                Description="Conquistas e perfil na TV. Crie em steamcommunity.com/dev/apikey."
                                                Status="{Binding SteamKeyStatus}">
-                                <TextBox Style="{StaticResource Field}" Width="230" Height="38"
+                                <TextBox Style="{StaticResource Field}" Width="230" Tag="Cole a chave aqui"
                                          Text="{Binding SteamApiKey, UpdateSourceTrigger=PropertyChanged}"/>
                             </local:SettingCard>
                         </StackPanel>
@@ -268,12 +393,45 @@
                                                Description="No app Downloader da TV, digite este endereço. Depois ela se atualiza sozinha."
                                                ToolTip="Fire TV ou Google TV: instale o app Downloader e permita que ele instale apps (&quot;Fontes desconhecidas&quot;).">
                                 <TextBox Text="{Binding TvInstallUrl, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource Field}"
-                                         Width="290" Height="38" FontWeight="Bold"/>
+                                         Width="340" FontWeight="Bold"/>
                             </local:SettingCard>
                             <local:SettingCard Header="Nome deste PC na TV" Icon="{StaticResource IcoTag}" Description="{Binding TvNameHint}">
-                                <TextBox Style="{StaticResource Field}" Width="230" Height="38" FontFamily="{StaticResource Body}" FontSize="13.5"
+                                <TextBox Style="{StaticResource Field}" Width="230" FontFamily="{StaticResource Body}" FontSize="13.5"
                                          Text="{Binding TvName}"/>
                             </local:SettingCard>
+
+                            <TextBlock Text="Rede" Style="{StaticResource Section}"/>
+                            <local:SettingCard Header="Testar conexão" Icon="{StaticResource IcoPulse}"
+                                               Description="Mede a rede entre o PC e cada TV e diz o que melhorar.">
+                                <Button Content="{Binding NetTestButton}" Style="{StaticResource GhostButton}" Click="TestConnection_Click"/>
+                            </local:SettingCard>
+                            <ItemsControl ItemsSource="{Binding NetResults}" Margin="32,0,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#10141F" BorderBrush="#1C2131" BorderThickness="1" CornerRadius="10" Padding="18,12" Margin="0,0,0,4">
+                                            <DockPanel>
+                                                <Ellipse Width="8" Height="8" Margin="0,6,14,0" VerticalAlignment="Top">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{StaticResource Warn}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Good}" Value="True">
+                                                                    <Setter Property="Fill" Value="{StaticResource Good}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Tv}" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding Summary}" FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Dim}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Advice}" Foreground="{StaticResource Soft}" FontSize="12.5" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
                             <TextBlock Text="Ligar, desligar e jogar de longe" Style="{StaticResource Section}"/>
                             <local:SettingCard Header="Ligar o PC pela TV" Icon="{StaticResource IcoMoon}"
@@ -307,6 +465,10 @@
                             <local:SettingCard Header="Iniciar com o Windows" Icon="{StaticResource IcoStart}"
                                                Description="O Jinky fica perto do relógio, sempre pronto para a TV.">
                                 <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding StartWithWindows}"/>
+                            </local:SettingCard>
+                            <local:SettingCard Header="Gráfico da sessão" Icon="{StaticResource IcoPulse}"
+                                               Description="No Início, enquanto a TV joga: latência e vídeo ao vivo.">
+                                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding SessionChart}"/>
                             </local:SettingCard>
 
                             <TextBlock Text="Atualizações" Style="{StaticResource Section}"/>
@@ -357,6 +519,75 @@
                     </Grid>
                 </StackPanel>
             </ScrollViewer>
+        </Grid>
+
+        <!-- ============ First-run guide (fresh install, no TV yet) ============ -->
+        <Grid Grid.ColumnSpan="2" Visibility="{Binding GuideShown, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+            <Rectangle Fill="#E607090D"/>
+            <Border Width="600" VerticalAlignment="Center" HorizontalAlignment="Center" CornerRadius="18" Padding="40,36"
+                    BorderBrush="#23283A" BorderThickness="1">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#16234A" Offset="0"/>
+                        <GradientStop Color="#10141F" Offset="0.7"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="Assets/tile-256.png" Width="34" Height="34" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <TextBlock Text="{Binding GuideStep, StringFormat=Passo {0} de 3}" FontFamily="{StaticResource Mono}" FontSize="12"
+                                   Foreground="{StaticResource AccentSoft}" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                    </StackPanel>
+
+                    <!-- 1: the app on the TV -->
+                    <StackPanel Visibility="{Binding GuideStep1, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+                        <TextBlock Text="Instale o Jinky na TV" FontFamily="{StaticResource Display}" FontSize="26" FontWeight="ExtraBold" Margin="0,22,0,0"/>
+                        <TextBlock Foreground="{StaticResource Soft}" FontSize="14" TextWrapping="Wrap" Margin="0,10,0,0" LineHeight="21"
+                                   Text="Na TV (Fire TV ou Google TV), instale o app Downloader pela loja, permita que ele instale apps (&quot;Fontes desconhecidas&quot;) e digite este endereço:"/>
+                        <TextBox Text="{Binding TvInstallUrl, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource Field}"
+                                 FontSize="16" FontWeight="Bold" Margin="0,16,0,0"/>
+                        <TextBlock Text="A TV e este PC precisam estar na mesma rede. Depois disso, a TV se atualiza sozinha."
+                                   Foreground="{StaticResource Muted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    </StackPanel>
+
+                    <!-- 2: pairing (the request shows here too) -->
+                    <StackPanel Visibility="{Binding GuideStep2, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+                        <TextBlock Text="Abra o Jinky na TV" FontFamily="{StaticResource Display}" FontSize="26" FontWeight="ExtraBold" Margin="0,22,0,0"/>
+                        <TextBlock Foreground="{StaticResource Soft}" FontSize="14" TextWrapping="Wrap" Margin="0,10,0,0" LineHeight="21"
+                                   Text="Ela encontra este PC sozinha e mostra um código de 6 números. O mesmo código aparece aqui: confira e clique em Permitir. Só é preciso fazer isso uma vez."/>
+                        <Border CornerRadius="12" Padding="20,16" Margin="0,18,0,0" Background="#10141F" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                                Visibility="{Binding HasPairing, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="Recusar" Style="{StaticResource GhostButton}" Margin="0,0,10,0" Click="RejectPairing_Click"/>
+                                    <Button Content="Permitir" Style="{StaticResource PrimaryButton}" Click="AcceptPairing_Click"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Pairing.Name}" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding PairingCode}" FontFamily="{StaticResource Mono}" FontSize="28" FontWeight="Bold" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <TextBlock Text="Esperando a TV…" Foreground="{StaticResource Muted}" FontSize="13" Margin="0,16,0,0"
+                                   Visibility="{Binding NoPairingYet, Converter={StaticResource BoolToVisibility}}"/>
+                    </StackPanel>
+
+                    <!-- 3: done -->
+                    <StackPanel Visibility="{Binding GuideStep3, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+                        <TextBlock Text="Pronto para jogar" FontFamily="{StaticResource Display}" FontSize="26" FontWeight="ExtraBold" Margin="0,22,0,0"/>
+                        <TextBlock Foreground="{StaticResource Soft}" FontSize="14" TextWrapping="Wrap" Margin="0,10,0,0" LineHeight="21"
+                                   Text="Escolha um jogo na TV e jogue com o controle dela. O Jinky fica perto do relógio do Windows, sempre pronto."/>
+                        <TextBlock Foreground="{StaticResource Muted}" FontSize="13" TextWrapping="Wrap" Margin="0,12,0,0" LineHeight="20"
+                                   Text="Dica: em Jogar fica o Modo console (o PC vira um console enquanto a TV joga). Em Biblioteca você escolhe o que aparece na TV."/>
+                    </StackPanel>
+
+                    <DockPanel Margin="0,30,0,0">
+                        <Button Content="Pular" Style="{StaticResource GhostButton}" DockPanel.Dock="Left" Click="GuideSkip_Click"
+                                Visibility="{Binding GuideStep3, Converter={StaticResource NotVisibility}}"/>
+                        <Button Content="{Binding GuideNextText}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" Click="GuideNext_Click"/>
+                    </DockPanel>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>
