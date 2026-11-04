@@ -49,6 +49,11 @@ class TvSettings(context: Context) {
         get() = prefs.getBoolean("pc_notices", true)
         set(v) = prefs.edit().putBoolean("pc_notices", v).apply()
 
+    /** The first-run tour was seen (or skipped). */
+    var tourSeen: Boolean
+        get() = prefs.getBoolean("tour_seen", false)
+        set(v) = prefs.edit().putBoolean("tour_seen", v).apply()
+
     /** "Controle PlayStation no PC": a DualSense/DualShock becomes a DualShock 4 on the PC (on unless turned off). */
     var psPad: Boolean
         get() = prefs.getBoolean("ps_pad", true)

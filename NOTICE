@@ -1,0 +1,15 @@
+Jinky
+Copyright 2026 Mateus (github.com/poncianomateus)
+
+Jinky foi criado por Mateus (github.com/poncianomateus).
+https://github.com/poncianomateus/jinky
+
+Este produto é distribuído sob a Licença Apache, versão 2.0 (veja o arquivo LICENSE).
+Quem distribuir o Jinky, ou um trabalho derivado dele, deve manter este aviso de autoria.
+
+Este produto inclui componentes de terceiros, cada um com a sua própria licença
+(lista completa em docs/THIRD_PARTY_LICENSES.md):
+- ViGEmClient (MIT) e o driver ViGEmBus (BSD-3-Clause), de Nefarius Software Solutions
+- NVIDIA Video Codec SDK, cabeçalho nvEncodeAPI.h (MIT), da NVIDIA
+- NVAPI (MIT), da NVIDIA
+- Fontes Montserrat e JetBrains Mono (SIL Open Font License 1.1)

@@ -14,7 +14,43 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = vm;
         SourceInitialized += (_, _) => UseDarkTitleBar();
+        // The tour plays the first time the window shows (after the guide, on a fresh install).
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) Dispatcher.BeginInvoke(MaybeStartTour, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        };
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.TourIndex) && Vm.TourOpen) ShowTourPage();
+            if (e.PropertyName == nameof(MainViewModel.GuideShown)) Dispatcher.BeginInvoke(MaybeStartTour, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        };
     }
+
+    void MaybeStartTour()
+    {
+        if (!IsVisible || !Vm.PairedKnown || Vm.TourSeen || Vm.TourOpen || Vm.GuideShown) return;
+        Vm.StartTour();
+        ShowTourPage();
+    }
+
+    /// <summary>The page the tour talks about comes up behind its card; the card's text slides in.</summary>
+    void ShowTourPage()
+    {
+        if (FindName(Vm.TourStep.Page) is RadioButton nav) nav.IsChecked = true;
+        Motion.SlideIn(TourText, 0, 10, 260);
+    }
+
+    void TourNext_Click(object sender, RoutedEventArgs e) => Vm.TourMove(+1);
+    void TourBack_Click(object sender, RoutedEventArgs e) => Vm.TourMove(-1);
+    void TourSkip_Click(object sender, RoutedEventArgs e) => Vm.EndTour();
+
+    void TourAgain_Click(object sender, RoutedEventArgs e)
+    {
+        Vm.StartTour();
+        ShowTourPage();
+    }
+
+    void GuideAgain_Click(object sender, RoutedEventArgs e) => Vm.ShowGuideAgain();
 
     /// <summary>
     /// Dark title bar; on Windows 11 (22H2 and later) the window's back is Mica, the translucent
@@ -69,7 +105,8 @@ public partial class MainWindow : Window
     void Nav_Checked(object sender, RoutedEventArgs e)
     {
         if (Pages is null || sender is not RadioButton { Content: string title } nav) return;
-        var page = nav == NavLibrary ? PageLibrary : nav == NavGames ? PageGames : nav == NavTvs ? PageTvs : nav == NavSystem ? PageSystem : PageHome;
+        var page = nav == NavLibrary ? PageLibrary : nav == NavGames ? PageGames : nav == NavTvs ? PageTvs : nav == NavSystem ? PageSystem :
+                   nav == NavHelp ? PageHelp : PageHome;
         if (page == PageLibrary) Vm.LoadLibrary();
         foreach (UIElement p in Pages.Children) p.Visibility = p == page ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text = title;
@@ -113,11 +150,19 @@ public partial class MainWindow : Window
         if (sender is FrameworkElement { DataContext: LibraryItem item }) item.ResetCover();
     }
 
-    void GuideSkip_Click(object sender, RoutedEventArgs e) => Vm.FinishGuide();
+    void GuideSkip_Click(object sender, RoutedEventArgs e)
+    {
+        Vm.FinishGuide();
+        MaybeStartTour();
+    }
 
     void GuideNext_Click(object sender, RoutedEventArgs e)
     {
-        if (Vm.GuideStep >= 3) Vm.FinishGuide();
+        if (Vm.GuideStep >= 3)
+        {
+            Vm.FinishGuide();
+            MaybeStartTour();
+        }
         else Vm.GuideStep++;
     }
 

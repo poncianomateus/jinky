@@ -7,7 +7,7 @@
 
 namespace tcl {
 
-// The PC's name as the user sees it in Windows (e.g. "DESKTOP-BF21OEI"), UTF-8.
+// The PC's name as the user sees it in Windows (e.g. "DESKTOP-SALA"), UTF-8.
 std::string computer_name();
 
 // MAC address of the network adapter Windows uses to reach `ip` (host byte order): the one a

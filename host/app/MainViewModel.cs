@@ -321,6 +321,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>The guide shows on a fresh install (no TV paired yet) until finished or skipped.</summary>
     public bool GuideShown => _pairedKnown && !_settings.Onboarded;
+    /// <summary>The engine told which TVs are paired (until then, the guide-or-tour choice waits).</summary>
+    public bool PairedKnown => _pairedKnown;
     public int GuideStep { get => _guideStep; set { _guideStep = Math.Clamp(value, 1, 3); Notify(); Notify(nameof(GuideStep1)); Notify(nameof(GuideStep2)); Notify(nameof(GuideStep3)); Notify(nameof(GuideNextText)); } }
     public bool GuideStep1 => _guideStep == 1;
     public bool GuideStep2 => _guideStep == 2;
@@ -333,6 +335,67 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settings.Onboarded = true;
         _settings.Save();
         Notify(nameof(GuideShown));
+    }
+
+    /// <summary>"Rever o guia de instalação" (Ajuda): the first-run guide from its first step.</summary>
+    public void ShowGuideAgain()
+    {
+        _pairedKnown = true;
+        _settings.Onboarded = false;
+        GuideStep = 1;
+        Notify(nameof(GuideShown));
+    }
+
+    // --- tour of the window and "Ajuda" ---------------------------------------------------------
+
+    public IReadOnlyList<FaqGroup> Faq => HelpContent.Faq;
+    public IReadOnlyList<TourStep> TourSteps => HelpContent.Tour;
+    public bool TourSeen => _settings.TourSeen;
+
+    bool _tourOpen;
+    int _tourIndex;
+    public bool TourOpen { get => _tourOpen; private set { _tourOpen = value; Notify(); } }
+    public int TourIndex
+    {
+        get => _tourIndex;
+        private set
+        {
+            _tourIndex = value;
+            Notify();
+            Notify(nameof(TourStep));
+            Notify(nameof(TourNextText));
+            Notify(nameof(TourCanGoBack));
+            Notify(nameof(TourDots));
+        }
+    }
+    public TourStep TourStep => HelpContent.Tour[_tourIndex];
+    public string TourNextText => _tourIndex == HelpContent.Tour.Count - 1 ? "Começar" : "Próximo";
+    public bool TourCanGoBack => _tourIndex > 0;
+    /// <summary>One entry per page of the tour: true for the current one (the dots).</summary>
+    public IReadOnlyList<bool> TourDots => HelpContent.Tour.Select((_, i) => i == _tourIndex).ToList();
+
+    public void StartTour()
+    {
+        TourIndex = 0;
+        TourOpen = true;
+    }
+
+    public void TourMove(int delta)
+    {
+        var next = _tourIndex + delta;
+        if (next < 0) return;
+        if (next >= HelpContent.Tour.Count) { EndTour(); return; }
+        TourIndex = next;
+    }
+
+    public void EndTour()
+    {
+        TourOpen = false;
+        if (!_settings.TourSeen)
+        {
+            _settings.TourSeen = true;
+            _settings.Save();
+        }
     }
 
     /// <summary>"Encerrar sessão": the TV goes back to its home screen (the game keeps running here).</summary>

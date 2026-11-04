@@ -76,6 +76,7 @@
                     <RadioButton x:Name="NavGames" Style="{StaticResource Nav}" Content="Jogar" Tag="{StaticResource IcoPad}" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavTvs" Style="{StaticResource Nav}" Content="TVs" Tag="{StaticResource IcoTv}" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavSystem" Style="{StaticResource Nav}" Content="Sistema" Tag="{StaticResource IcoSystem}" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="NavHelp" Style="{StaticResource Nav}" Content="Ajuda" Tag="{StaticResource IcoHelp}" Checked="Nav_Checked"/>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -516,9 +517,138 @@
                                 <Button Content="Abrir pasta" Style="{StaticResource GhostButton}" Click="OpenLogs_Click"/>
                             </local:SettingCard>
                         </StackPanel>
+                        <!-- == Ajuda == -->
+                        <StackPanel x:Name="PageHelp" Visibility="Collapsed">
+                            <TextBlock Text="Perguntas e respostas sobre o Jinky. Clique numa pergunta para ver a resposta."
+                                       Foreground="{StaticResource Muted}" FontSize="13" Margin="2,8,0,0" TextWrapping="Wrap"/>
+                            <WrapPanel Margin="0,16,0,0">
+                                <Button Content="Ver o tour de novo" Style="{StaticResource GhostButton}" Margin="0,0,8,8" Click="TourAgain_Click"/>
+                                <Button Content="Rever o guia de instalação" Style="{StaticResource GhostButton}" Margin="0,0,8,8" Click="GuideAgain_Click"/>
+                                <Button Content="Pasta de diagnóstico" Style="{StaticResource GhostButton}" Margin="0,0,8,8" Click="OpenLogs_Click"/>
+                            </WrapPanel>
+                            <ItemsControl ItemsSource="{Binding Faq}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" Style="{StaticResource Section}"/>
+                                            <ItemsControl ItemsSource="{Binding Items}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border x:Name="Card" Background="#10141F" BorderBrush="#1C2131" BorderThickness="1" CornerRadius="10" Margin="0,0,0,4">
+                                                            <StackPanel>
+                                                                <ToggleButton IsChecked="{Binding IsOpen}" Cursor="Hand" FocusVisualStyle="{x:Null}">
+                                                                    <ToggleButton.Template>
+                                                                        <ControlTemplate TargetType="ToggleButton">
+                                                                            <Border x:Name="Head" Background="Transparent" Padding="18,14" CornerRadius="10">
+                                                                                <DockPanel>
+                                                                                    <Path x:Name="Chevron" DockPanel.Dock="Right" Data="M1,1 L6,6 L11,1" Stroke="{StaticResource Muted}"
+                                                                                          StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                                                          VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" Margin="12,0,0,0">
+                                                                                        <Path.RenderTransform>
+                                                                                            <RotateTransform x:Name="Turn" Angle="0"/>
+                                                                                        </Path.RenderTransform>
+                                                                                    </Path>
+                                                                                    <TextBlock Text="{Binding Question}" FontWeight="SemiBold" FontSize="14" TextWrapping="Wrap"
+                                                                                               Foreground="{StaticResource Text}"/>
+                                                                                </DockPanel>
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="Head" Property="Background" Value="#151A28"/>
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                                                                    <Setter TargetName="Head" Property="Background" Value="#1C2236"/>
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsChecked" Value="True">
+                                                                                    <Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource AccentSoft}"/>
+                                                                                    <Trigger.EnterActions>
+                                                                                        <BeginStoryboard>
+                                                                                            <Storyboard>
+                                                                                                <DoubleAnimation Storyboard.TargetName="Turn" Storyboard.TargetProperty="Angle" To="180" Duration="0:0:0.22">
+                                                                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                                                                </DoubleAnimation>
+                                                                                            </Storyboard>
+                                                                                        </BeginStoryboard>
+                                                                                    </Trigger.EnterActions>
+                                                                                    <Trigger.ExitActions>
+                                                                                        <BeginStoryboard>
+                                                                                            <Storyboard>
+                                                                                                <DoubleAnimation Storyboard.TargetName="Turn" Storyboard.TargetProperty="Angle" To="0" Duration="0:0:0.2"/>
+                                                                                            </Storyboard>
+                                                                                        </BeginStoryboard>
+                                                                                    </Trigger.ExitActions>
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </ToggleButton.Template>
+                                                                </ToggleButton>
+                                                                <TextBlock Text="{Binding Answer}" Foreground="{StaticResource Soft}" FontSize="13.5" TextWrapping="Wrap"
+                                                                           LineHeight="21" Margin="18,0,44,16" local:Motion.Reveal="True"
+                                                                           Visibility="{Binding IsOpen, Converter={StaticResource BoolToVisibility}}"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
             </ScrollViewer>
+        </Grid>
+
+        <!-- ============ Tour of the window: a card that walks through the pages ============ -->
+        <Grid Grid.ColumnSpan="2" Visibility="{Binding TourOpen, Converter={StaticResource BoolToVisibility}}" local:Motion.Reveal="True">
+            <Rectangle Fill="#8007090D"/>
+            <Border x:Name="TourCard" Width="430" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,36,32"
+                    CornerRadius="16" Padding="28,24" BorderBrush="#2A3146" BorderThickness="1">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#1C2F66" Offset="0"/>
+                        <GradientStop Color="#10141F" Offset="0.75"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="40" ShadowDepth="0" Opacity="0.55" Color="Black"/>
+                </Border.Effect>
+                <StackPanel>
+                    <StackPanel x:Name="TourText">
+                        <TextBlock Text="{Binding TourStep.Eyebrow}" FontFamily="{StaticResource Mono}" FontSize="11" Foreground="{StaticResource AccentSoft}"/>
+                        <TextBlock Text="{Binding TourStep.Title}" FontFamily="{StaticResource Display}" FontSize="21" FontWeight="ExtraBold"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="{Binding TourStep.Text}" Foreground="{StaticResource Soft}" FontSize="13.5" TextWrapping="Wrap"
+                                   LineHeight="21" Margin="0,10,0,0"/>
+                    </StackPanel>
+                    <DockPanel Margin="0,22,0,0">
+                        <ItemsControl ItemsSource="{Binding TourDots}" VerticalAlignment="Center" DockPanel.Dock="Left">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border x:Name="Dot" Width="7" Height="7" CornerRadius="3.5" Background="#2A3146" Margin="0,0,5,0"/>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding}" Value="True">
+                                            <Setter TargetName="Dot" Property="Background" Value="{StaticResource Accent}"/>
+                                            <Setter TargetName="Dot" Property="Width" Value="20"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Pular" Style="{StaticResource GhostButton}" Background="Transparent" BorderBrush="Transparent"
+                                    Margin="0,0,4,0" Click="TourSkip_Click"/>
+                            <Button Content="Voltar" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="TourBack_Click"
+                                    Visibility="{Binding TourCanGoBack, Converter={StaticResource BoolToVisibility}}"/>
+                            <Button Content="{Binding TourNextText}" Style="{StaticResource PrimaryButton}" Padding="20,8" Click="TourNext_Click"/>
+                        </StackPanel>
+                    </DockPanel>
+                </StackPanel>
+            </Border>
         </Grid>
 
         <!-- ============ First-run guide (fresh install, no TV yet) ============ -->

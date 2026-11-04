@@ -299,7 +299,7 @@ static void test_host_info() {
     h.state = HostInfo::kBusy;
     h.flags = HostInfo::kPairingKnown | HostInfo::kPairedWithYou;
     h.mac = {0xDC, 0x71, 0x96, 0x6A, 0x45, 0x28};
-    h.name = "DESKTOP-BF21OEI";
+    h.name = "DESKTOP-SALA";
     h.busy_with = "TCL 55P7K";
     h.tv_version_code = 300;
     h.update_port = 47101;
@@ -308,11 +308,11 @@ static void test_host_info() {
     auto r = HostInfo::read(std::span<const uint8_t>(buf, len));
     CHECK(r && r->host_id == h.host_id && r->state == HostInfo::kBusy && r->mac == h.mac);
     CHECK(r->flags == (HostInfo::kPairingKnown | HostInfo::kPairedWithYou));
-    CHECK(r->name == "DESKTOP-BF21OEI" && r->busy_with == "TCL 55P7K");
+    CHECK(r->name == "DESKTOP-SALA" && r->busy_with == "TCL 55P7K");
     CHECK(r->tv_version_code == 300 && r->update_port == 47101);
     // A message from an older PC (no update fields) still parses, with no update offered.
     auto old = HostInfo::read(std::span<const uint8_t>(buf, len - 6));
-    CHECK(old && old->name == "DESKTOP-BF21OEI" && old->tv_version_code == 0);
+    CHECK(old && old->name == "DESKTOP-SALA" && old->tv_version_code == 0);
 }
 
 static void test_in_order_delivery() {

@@ -115,6 +115,7 @@
         <Geometry x:Key="IcoChip">M5,5 H15 V15 H5 Z M8,8 H12 V12 H8 Z M8,2.5 V5 M12,2.5 V5 M8,15 V17.5 M12,15 V17.5 M2.5,8 H5 M2.5,12 H5 M15,8 H17.5 M15,12 H17.5</Geometry>
         <Geometry x:Key="IcoLibrary">M3.5,3.5 V16.5 M7.5,3.5 V16.5 M11,4.5 L15.5,16</Geometry>
         <Geometry x:Key="IcoPulse">M2,10 H6 L8,5 L12,15 L14,10 H18</Geometry>
+        <Geometry x:Key="IcoHelp">M10,2.5 A7.5,7.5 0 1 1 10,17.5 A7.5,7.5 0 1 1 10,2.5 Z M7.6,7.8 C7.6,6.4 8.7,5.5 10,5.5 C11.4,5.5 12.4,6.4 12.4,7.6 C12.4,9.4 10,9.5 10,11.4 M10,14.2 V14.3</Geometry>
 
         <!-- Switch: the thumb slides and the track fills with blue (animated), white ring for keyboard focus -->
         <Style x:Key="Switch" TargetType="CheckBox">

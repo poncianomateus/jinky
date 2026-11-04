@@ -1,6 +1,6 @@
-# TclStream — Arquitetura
+# Jinky — Arquitetura
 
-> Status: Fase 0 (definição). Nada aqui foi testado em hardware real ainda.
+> O projeto nasceu com o nome provisório "TclStream" (ainda presente em alguns nomes internos, como o pacote `com.tclstream.tv`). As seções abaixo registram as decisões desde o início; as mais recentes estão no fim de cada uma.
 
 ## 1. Objetivo
 

@@ -47,6 +47,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var downloadsScreen: DownloadsScreen
     private lateinit var toast: AchievementToast
     private var bootSplash: BootSplash? = null
+    private var tour: TourScreen? = null
     private var sessionGame: LibraryGame? = null  // the game played from the TV's library, if any
     private var achievementsOverGame = false        // the achievements page opened from the menu
     private var unlocksAfter = -1L                  // PC clock of the last unlock check (-1 = learn it)
@@ -243,7 +244,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     pausedNames = { pcGames.filter { it.paused }.map { it.name } }
                 }
             addView(settingsScreen, FrameLayout.LayoutParams(-1, -1))
-            helpScreen = HelpScreen(this@MainActivity) { showPage(Page.SETTINGS) }.apply { visibility = View.GONE }
+            helpScreen = HelpScreen(this@MainActivity, onBack = { showPage(Page.SETTINGS) }, onTour = { showTour() }).apply { visibility = View.GONE }
             addView(helpScreen, FrameLayout.LayoutParams(-1, -1))
             pcPicker = PcPickerScreen(this@MainActivity,
                 onChoose = { h ->
@@ -393,8 +394,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 val splash = BootSplash(this@MainActivity)
                 bootSplash = splash
                 addView(splash, FrameLayout.LayoutParams(-1, -1))
-                splash.play(fast = settings.boot == "fast") { removeView(splash); bootSplash = null }
-            }
+                splash.play(fast = settings.boot == "fast") { removeView(splash); bootSplash = null; if (!settings.tourSeen) showTour() }
+            } else if (savedInstanceState == null && !settings.tourSeen) post { showTour() }
         })
         // A new look rebuilt the screens: back to where the user was choosing it.
         if (savedInstanceState?.getBoolean(KEY_LOOK) == true) {
@@ -1154,10 +1155,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         pipeline = null
     }
 
+    /** The first-run tour (also from Ajuda › Ver o tour de novo), over everything. */
+    private fun showTour() {
+        if (tour != null) return
+        val root = window.decorView.findViewById<FrameLayout>(android.R.id.content).getChildAt(0) as? FrameLayout ?: return
+        val t = TourScreen(this) {
+            settings.tourSeen = true
+            tour?.let { root.removeView(it) }
+            tour = null
+            updateUiInput()
+        }
+        tour = t
+        root.addView(t, FrameLayout.LayoutParams(-1, -1))
+        t.appear()
+        updateUiInput()
+    }
+
     // Gamepad input goes to the PC; everything else (the TV remote) keeps working normally.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // While the opening plays, any button skips it (and nothing moves behind it).
         bootSplash?.let { if (event.action == KeyEvent.ACTION_DOWN) it.skip(); return true }
+        // The tour takes every button while it is up.
+        tour?.let { return it.onKey(event) }
         // The controller's Share/Capture button (Xbox Series, some others) takes a screenshot while playing.
         if (event.keyCode == KeyEvent.KEYCODE_MEDIA_RECORD && receiver?.inSession() == true && !uiShown()) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) takeScreenshot()
@@ -1279,7 +1298,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** One of the TV's own screens (or the menu) is in front, not the game. */
-    private fun uiShown() = launchScreen.interactive || homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
+    private fun uiShown() = tour != null || launchScreen.interactive || homeScreen.visibility == View.VISIBLE || settingsScreen.visibility == View.VISIBLE ||
         helpScreen.visibility == View.VISIBLE || libraryScreen.visibility == View.VISIBLE ||
         gameScreen.visibility == View.VISIBLE || achievementsScreen.visibility == View.VISIBLE ||
         profileScreen.visibility == View.VISIBLE || pcPicker.visibility == View.VISIBLE ||

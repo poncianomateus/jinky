@@ -265,7 +265,7 @@ class SettingsScreen(
                     else "Procurando também em ${remote.joinToString()}. Aperte para trocar.") { onAddRemotePc() }
                 powerRow(off = false)
                 powerRow(off = true)
-                action("Ajuda e informações", "Controles, dicas de rede e dados desta TV") { onHelp() }
+                action("Ajuda e informações", "Perguntas e respostas, o tour de novo e os dados desta TV") { onHelp() }
             }
         }
     }

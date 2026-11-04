@@ -53,6 +53,9 @@ public sealed class Settings
     /// <summary>The live chart of the session (latency, picture) on the PC's home page.</summary>
     public bool SessionChart { get; set; } = true;
 
+    /// <summary>The tour of the window's pages was seen (or skipped).</summary>
+    public bool TourSeen { get; set; }
+
     /// <summary>The first-run guide was shown (or a TV was already paired).</summary>
     public bool Onboarded { get; set; }
 
