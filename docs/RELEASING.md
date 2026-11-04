@@ -4,7 +4,7 @@
 
 | Onde | Como |
 |---|---|
-| **PC** | O Jinky consulta o GitHub Releases (repositório público só de instaladores) ao abrir e a cada 6 h. Botão "Atualizar para X" → baixa o instalador, confere o SHA-256 publicado junto, executa em modo silencioso (pede admin), o instalador fecha o Jinky com limpeza, atualiza e reabre na bandeja. |
+| **PC** | O Jinky consulta o GitHub Releases do repositório do projeto (`poncianomateus/jinky`; até a 1.0.1 era `jinky-releases`, que o GitHub redireciona para cá) ao abrir e a cada 6 h. Botão "Atualizar para X" → baixa o instalador, confere o SHA-256 publicado junto, executa em modo silencioso (pede admin), o instalador fecha o Jinky com limpeza, atualiza e reabre na bandeja. |
 | **TVs** | Cada instalador leva o app da TV da mesma versão. O Jinky do PC o serve na rede de casa (porta 47101, só rede local). A TV vê a versão no HostInfo e mostra "Atualizar o Jinky" na tela inicial; o Android pede confirmação. |
 
 Atualizar o PC = as TVs passam a se atualizar a partir dele.
@@ -24,7 +24,7 @@ Não existe "voltar versão" num PC alheio: se um estável quebrar, a saída é 
 O app da TV só se atualiza pelo PC, então a **primeira** instalação é manual:
 
 - **Pela rede de casa (mais fácil):** o card "TVs pareadas" do Jinky do PC mostra o endereço `http://<IP do PC>:47101/tv/jinky.apk`. Fire TV: app **Downloader** → digitar o endereço. Google TV (TCL etc.): ativar *Fontes desconhecidas* e abrir o endereço num navegador da TV (ou instalar o APK por pen drive).
-- **Pela internet:** cada release traz `Jinky-TV.apk`; a versão estável fica sempre em `https://github.com/poncianomateus/jinky-releases/releases/latest/download/Jinky-TV.apk`.
+- **Pela internet:** cada release traz `Jinky-TV.apk`; a versão estável fica sempre em `https://github.com/poncianomateus/jinky/releases/latest/download/Jinky-TV.apk`.
 
 ## Passo a passo
 

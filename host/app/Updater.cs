@@ -16,8 +16,11 @@ public sealed record UpdateInfo(Version Version, string SetupUrl, string Checksu
 /// </summary>
 public sealed class Updater
 {
-    /// <summary>Public repository that holds only the release installers (the code stays private).</summary>
-    public const string Repository = "poncianomateus/jinky-releases";
+    /// <summary>
+    /// The project's public repository: the code and the releases (installers) together. Before
+    /// 1.0.2 the releases lived in "poncianomateus/jinky-releases"; GitHub sends that old name here.
+    /// </summary>
+    public const string Repository = "poncianomateus/jinky";
 
     static readonly HttpClient Http = CreateClient();
 

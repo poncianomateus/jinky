@@ -7,7 +7,7 @@
 Jogue os jogos do seu PC com Windows na TV da sala, com o controle na mão e sem encostar no computador.<br>
 Feito para **Google TV** e **Fire TV**, numa interface própria pensada para o controle.
 
-[![Versão](https://img.shields.io/github/v/release/poncianomateus/jinky-releases?label=vers%C3%A3o&color=4F8BFF)](https://github.com/poncianomateus/jinky-releases/releases/latest)
+[![Versão](https://img.shields.io/github/v/release/poncianomateus/jinky?label=vers%C3%A3o&color=4F8BFF)](https://github.com/poncianomateus/jinky/releases/latest)
 [![Licença](https://img.shields.io/badge/licen%C3%A7a-Apache%202.0-4F8BFF)](LICENSE)
 ![Windows](https://img.shields.io/badge/PC-Windows%2010%2F11%20%2B%20NVIDIA-0b0e15)
 ![TV](https://img.shields.io/badge/TV-Google%20TV%20%7C%20Fire%20TV-0b0e15)
@@ -133,8 +133,8 @@ Nada de Sunshine nem Moonlight: o protocolo, o motor e as duas interfaces são d
 
 ## Instalação
 
-1. **No PC**: baixe o `Jinky-Setup-<versão>.exe` mais recente em **[Releases](https://github.com/poncianomateus/jinky-releases/releases/latest)** e instale. O Jinky abre um guia rápido na primeira vez.
-2. **Na TV**: instale o app **Downloader** pela loja da TV, permita que ele instale apps ("Fontes desconhecidas") e digite o endereço que o Jinky do PC mostra em **TVs › Instalar numa TV nova** (algo como `http://192.168.0.10:47101/tv/jinky.apk`). Também dá para baixar o `Jinky-TV.apk` direto das [Releases](https://github.com/poncianomateus/jinky-releases/releases/latest).
+1. **No PC**: baixe o `Jinky-Setup-<versão>.exe` mais recente em **[Releases](https://github.com/poncianomateus/jinky/releases/latest)** e instale. O Jinky abre um guia rápido na primeira vez.
+2. **Na TV**: instale o app **Downloader** pela loja da TV, permita que ele instale apps ("Fontes desconhecidas") e digite o endereço que o Jinky do PC mostra em **TVs › Instalar numa TV nova** (algo como `http://192.168.0.10:47101/tv/jinky.apk`). Também dá para baixar o `Jinky-TV.apk` direto das [Releases](https://github.com/poncianomateus/jinky/releases/latest).
 3. **Abra o Jinky na TV**: ela encontra o PC sozinha e mostra um código. Confira o mesmo código no PC e clique em **Permitir**. Pronto.
 
 Depois disso, tudo se atualiza sozinho: o PC pelo GitHub, e as TVs pelo PC.
@@ -175,7 +175,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
 
 Gera em `dist/` o instalador do Windows e o APK da TV. Para testar a TV sem uma TV, `scripts/tv-emulator.ps1` abre o app num emulador de Android TV no próprio PC.
 
-> **Fazendo a sua versão?** O atualizador procura versões em `poncianomateus/jinky-releases` (`host/app/Updater.cs`). Troque pelo seu repositório para publicar as suas.
+> **Fazendo a sua versão?** O atualizador procura versões nas Releases de `poncianomateus/jinky` (`host/app/Updater.cs`). Troque pelo seu repositório para publicar as suas.
 
 ## Organização do código
 
