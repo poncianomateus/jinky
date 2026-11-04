@@ -11,7 +11,7 @@ Feito para **Google TV** e **Fire TV**, numa interface própria pensada para o c
 [![Licença](https://img.shields.io/badge/licen%C3%A7a-Apache%202.0-4F8BFF)](LICENSE)
 ![Windows](https://img.shields.io/badge/PC-Windows%2010%2F11%20%2B%20NVIDIA-0b0e15)
 ![TV](https://img.shields.io/badge/TV-Google%20TV%20%7C%20Fire%20TV-0b0e15)
-[![Apoie](https://img.shields.io/badge/%E2%98%95%20apoie%20o%20criador-PayPal-FFC84A)](PAYPAL_LINK)
+[![Apoie](https://img.shields.io/badge/%E2%98%95%20apoie%20o%20criador-Ko--fi-FFC84A)](https://ko-fi.com/poncianomateus)
 
 <img src="docs/screenshots/tv-inicio.jpg" alt="Tela inicial do Jinky na TV" width="900">
 
@@ -200,7 +200,9 @@ Ideias, correções e melhorias são bem-vindas:
 
 O Jinky é gratuito e vai continuar sendo. Se ele deixou a sua sala mais divertida e você quiser agradecer, **um café simbólico** ajuda a manter o projeto vivo:
 
-<a href="PAYPAL_LINK"><img src="https://img.shields.io/badge/%E2%98%95%20pague%20um%20caf%C3%A9-PayPal-FFC84A?style=for-the-badge" alt="Pague um café pelo PayPal"></a>
+<a href="https://ko-fi.com/poncianomateus"><img src="https://img.shields.io/badge/%E2%98%95%20pague%20um%20caf%C3%A9-Ko--fi-FFC84A?style=for-the-badge" alt="Pague um café pelo Ko-fi"></a>
+
+O Ko-fi aceita cartão e PayPal, de qualquer país.
 
 ## Licença
 
