@@ -107,6 +107,8 @@ public static class Library
         }
         if (g.Id > 0 && !IsOwn(g.Id))
         {
+            // Steam's controller notices would wait for a click on the PC: seen already.
+            LaunchWatch.PrepareSteamLaunch(g.Id);
             SteamLibrary.Launch(g.Id);
             return true;
         }

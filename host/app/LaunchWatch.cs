@@ -173,12 +173,15 @@ public static class LaunchWatch
 
     static int _interstitialTries;
     static int _interstitialAction;
+    static bool _interstitialAnswered;
 
     /// <summary>
-    /// OKs the controller notices Steam shows before a game, through Steam's own notice queue
-    /// (closing it like its OK button: the launch continues and the notice goes away). While the
-    /// notices are still being prepared it waits; after a few seconds without any, it tells
-    /// Steam to go on directly.
+    /// Steam's controller notices before a game ("use Steam Input with this PlayStation
+    /// controller?", "controller recommended"...) wait for a click on the PC. Before a launch from
+    /// the TV, Jinky marks them as seen for that game (<see cref="PrepareSteamLaunch"/>), so Steam
+    /// doesn't show them. One that shows anyway gets its own OK button pressed, page by page, in
+    /// Steam's notice window: emptying Steam's notice list instead makes that window take it as
+    /// "Cancelar" and cancel the launch. No window after a few seconds: Steam is told to go on.
     /// </summary>
     static void AcceptInterstitials(int appId)
     {
@@ -188,17 +191,54 @@ public static class LaunchWatch
         {
             _interstitialAction = action;
             _interstitialTries = 0;
+            _interstitialAnswered = false;
         }
+        if (_interstitialAnswered) return;
         _interstitialTries++;
-        var result = SteamClient.Run(InterstitialsScript.Replace("APPID", appId.ToString()));
-        Note($"ShowInterstitials: OK pelo Jinky ({result ?? "sem resposta"})");
-        if (result == "ok") return;
-        if (_interstitialTries >= 4) Answer(appId, "ShowInterstitials", cancel: false);
+        var result = SteamClient.Run(PressNoticeOkScript);
+        if (_interstitialTries == 1 || result == "ok") Note($"ShowInterstitials: botão OK pelo Jinky ({result ?? "sem resposta"})");
+        if (result is "ok" or "wait") return;
+        if (_interstitialTries >= 6)
+        {
+            _interstitialAnswered = true;
+            Note("ShowInterstitials: sem janela de aviso, a Steam segue direto");
+            Answer(appId, "ShowInterstitials", cancel: false);
+        }
     }
 
-    // Finds Steam's notice store among its UI modules (by its methods, not by a module number,
-    // which changes with every Steam update) and closes the visible notices with "OK".
-    const string InterstitialsScript = """
+    // Steam's notice window (a popup with the notice's own OK / Next button): presses it, like a
+    // click. "wait" while the button is still disabled (some notices hold it for a second).
+    const string PressNoticeOkScript = """
+        (() => { try {
+          for (const p of g_PopupManager.GetPopups()) {
+            const doc = p.window && p.window.document;
+            if (!doc || !doc.querySelector('[class*="ConfiguratorInterstitialContainer"]')) continue;
+            const ok = doc.querySelector('[class*="ConfiguratorInterstitialContainer"] [class*="OKButton"]');
+            if (!ok) return 'nobutton';
+            if (ok.disabled || ok.getAttribute('aria-disabled') === 'true' || /Disabled/.test(ok.className)) return 'wait';
+            ok.click();
+            return 'ok';
+          }
+          return 'nopopup';
+        } catch (e) { return 'err ' + e; } })()
+        """;
+
+    /// <summary>
+    /// Before Steam game [appId] is started from the TV: its controller notices count as seen,
+    /// so Steam starts it without asking anything on the PC (only for that game; the same as
+    /// having seen them once). Quiet when Steam's reading is off.
+    /// </summary>
+    public static void PrepareSteamLaunch(int appId)
+    {
+        if (appId <= 0) return;
+        var result = SteamClient.Run(MarkNoticesSeenScript.Replace("APPID", appId.ToString()));
+        if (result is not null && result != "ok") Note($"Avisos de controle de {appId}: {result}");
+    }
+
+    // Steam's notice store, found among its UI modules by its methods (module numbers change with
+    // every Steam update). Notices: 3 keyboard, 5 launcher, 6 small text, 11 controller
+    // recommended, 12 controller unsupported, 13 PlayStation controller + Steam Input.
+    const string MarkNoticesSeenScript = """
         (() => { try {
           let store = window.__jinkyNotices;
           if (!store) {
@@ -206,19 +246,20 @@ public static class LaunchWatch
             window.webpackChunksteamui.push([[Symbol('jinky')], {}, r => { req = r; }]);
             for (const id of Object.keys(req.m)) {
               const src = req.m[id].toString();
-              if (!src.includes('CloseInterstitials(') || !src.includes('AddInterstitialToQueue(')) continue;
+              if (!src.includes('MarkInterstitialSeen(') || !src.includes('AddInterstitialToQueue(')) continue;
               const ex = req(id);
               for (const k of Object.keys(ex)) {
                 const v = ex[k];
-                if (v && typeof v.CloseInterstitials === 'function') { store = v; break; }
+                if (v && typeof v.MarkInterstitialSeen === 'function') { store = v; break; }
               }
               if (store) break;
             }
             if (!store) return 'nostore';
             window.__jinkyNotices = store;
           }
-          if (!store.BHasVisibleInterstitials) return 'none';
-          store.CloseInterstitials(APPID, false, false);
+          for (const e of [3, 5, 6, 11, 12, 13]) {
+            try { if (!store.BHasUserSeenInterstitial(e, APPID)) store.MarkInterstitialSeen(e, APPID); } catch (x) {}
+          }
           return 'ok';
         } catch (e) { return 'err ' + e; } })()
         """;
