@@ -475,14 +475,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void CheckVirtualScreen() => Task.Run(() =>
     {
         var state = VirtualScreen.Check();
-        var leftover = state == VirtualScreen.State.MultiseatWithDriver;
         System.Windows.Application.Current?.Dispatcher.Invoke(() =>
         {
             _multiseat = state is VirtualScreen.State.Multiseat or VirtualScreen.State.MultiseatWithDriver;
             var installed = state == VirtualScreen.State.Ready;
             _virtualInstalled = installed;
-            // A driver installed before Jinky knew about ASTER: offer to take it away.
-            if (leftover) _ = OfferVirtualRemoval();
+            // With ASTER a virtual screen driver may be a workplace's own monitor (a "TV" workplace
+            // without a real screen): never offer to take it away.
             // Removed outside Jinky: stop asking the engine for it.
             if (_settings.VirtualDisplay && !installed)
             {
@@ -512,22 +511,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             _ = SetVirtualDisplay(value);
         }
-    }
-
-    async Task OfferVirtualRemoval()
-    {
-        var answer = System.Windows.MessageBox.Show(
-            "Este PC usa o ASTER (várias pessoas no mesmo PC). O ASTER esconde telas novas, então o monitor virtual " +
-            "não funciona aqui, e trocar de monitor apagaria as telas dos outros lugares.\n\n" +
-            "O driver do monitor virtual ficou instalado sem uso. Remover agora? (o Windows vai pedir permissão)",
-            "Monitor virtual", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
-        if (answer != System.Windows.MessageBoxResult.Yes) return;
-        _virtualBusy = "Removendo o monitor virtual… (o Windows vai pedir permissão)";
-        Notify(nameof(VirtualDisplayText));
-        var error = await VirtualScreen.SetAsync(false, _ => { });
-        _virtualBusy = null;
-        Add(error is null ? "Monitor virtual removido" : "Monitor virtual: " + error, warning: error is not null);
-        Notify(nameof(VirtualDisplayText));
     }
 
     async Task SetVirtualDisplay(bool on)
