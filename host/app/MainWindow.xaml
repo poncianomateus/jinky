@@ -125,6 +125,36 @@
                         </Grid>
                     </Border>
 
+                    <!-- A TV asking another workplace of this PC (one without a screen, maybe) to pair -->
+                    <ItemsControl ItemsSource="{Binding OtherPairings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="14" Padding="22,18" Margin="0,16,0,0" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                                        local:Motion.Reveal="True">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1C2F66" Offset="0"/>
+                                            <GradientStop Color="#10141F" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button Content="Recusar" Style="{StaticResource GhostButton}" Margin="0,0,10,0" Padding="20,11" Click="OtherReject_Click"/>
+                                            <Button Content="Permitir" Style="{StaticResource PrimaryButton}" Click="OtherAccept_Click"/>
+                                        </StackPanel>
+                                        <StackPanel VerticalAlignment="Center" Margin="0,0,20,0">
+                                            <TextBlock Text="OUTRO LUGAR DESTE PC" FontFamily="{StaticResource Mono}" FontSize="11" Foreground="{StaticResource AccentSoft}"/>
+                                            <TextBlock Text="{Binding PairingText}" FontFamily="{StaticResource Display}" FontSize="17" FontWeight="ExtraBold"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            <TextBlock Text="Confira se a TV mostra o mesmo código." Foreground="{StaticResource Muted}" FontSize="13" Margin="0,4,0,8"/>
+                                            <TextBlock Text="{Binding PairingCode}" FontFamily="{StaticResource Mono}" FontSize="32" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <Grid x:Name="Pages">
                         <!-- == Início == -->
                         <StackPanel x:Name="PageHome">
@@ -400,6 +430,46 @@
                                 <TextBox Style="{StaticResource Field}" Width="230" FontFamily="{StaticResource Body}" FontSize="13.5"
                                          Text="{Binding TvName}"/>
                             </local:SettingCard>
+
+                            <StackPanel Visibility="{Binding HasOtherSeats, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="Outros lugares deste PC" Style="{StaticResource Section}"/>
+                                <TextBlock Text="Os Jinkys de outros usuários do Windows (ou lugares do ASTER) neste PC. Dá para cuidar deles daqui, até de um lugar sem tela, como um lugar só da TV."
+                                           Foreground="{StaticResource Muted}" FontSize="12.5" TextWrapping="Wrap" Margin="2,-4,0,10"/>
+                                <ItemsControl ItemsSource="{Binding OtherSeats}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#10141F" BorderBrush="#1C2131" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,4">
+                                                <StackPanel>
+                                                    <DockPanel>
+                                                        <Path Data="{StaticResource IcoScreens}" Width="20" Height="20" Stretch="None" Margin="0,0,16,0"
+                                                              Stroke="{StaticResource Soft}" StrokeThickness="1.5" StrokeLineJoin="Round" VerticalAlignment="Center"/>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14"/>
+                                                            <TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                    </DockPanel>
+                                                    <Grid Margin="36,12,0,0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <DockPanel>
+                                                            <Button DockPanel.Dock="Right" Content="Salvar nome" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                                                    Click="OtherName_Click" VerticalAlignment="Center"/>
+                                                            <TextBox Style="{StaticResource Field}" FontFamily="{StaticResource Body}" FontSize="13" Tag="Nome na TV"
+                                                                     Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" Width="280" HorizontalAlignment="Left"/>
+                                                        </DockPanel>
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                                                            <TextBlock Text="Modo console" Foreground="{StaticResource Soft}" FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                                            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ConsoleMode}"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
 
                             <TextBlock Text="Rede" Style="{StaticResource Section}"/>
                             <local:SettingCard Header="Testar conexão" Icon="{StaticResource IcoPulse}"

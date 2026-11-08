@@ -69,6 +69,12 @@ public partial class App : Application
             _tray?.ShowBalloonTip(10000, "Nova TV quer se conectar", $"{_vm.Pairing?.Name} · código {_vm.PairingCode} · clique para confirmar", Forms.ToolTipIcon.None);
             if (_window is { IsVisible: true } w) FlashTaskbar(w);
         };
+        // The same for another workplace of this PC (one without a screen can't ask by itself).
+        _vm.OtherPairingRequested += seat =>
+        {
+            _tray?.ShowBalloonTip(10000, "Nova TV quer se conectar", $"{seat.PairingText} · código {seat.PairingCode} · clique para confirmar", Forms.ToolTipIcon.None);
+            if (_window is { IsVisible: true } w) FlashTaskbar(w);
+        };
         _window.Closing += (_, args) =>
         {
             // The window's X hides to the tray; only "Sair" quits.

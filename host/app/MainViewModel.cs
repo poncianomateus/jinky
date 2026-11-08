@@ -25,6 +25,89 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _settingsChanged = settingsChanged;
         _sendCommand = sendCommand;
         LoadSessions();
+        // The other Jinkys of this PC (other Windows users / ASTER workplaces): see them, and
+        // let them be run from here (a workplace without a screen of its own).
+        SeatLink.Start();
+        _seatTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _seatTimer.Tick += (_, _) => SeatTick();
+        _seatTimer.Start();
+    }
+
+    // --- other workplaces of this PC ------------------------------------------------------------
+
+    readonly System.Windows.Threading.DispatcherTimer _seatTimer;
+    bool _seatBusy;
+
+    public ObservableCollection<OtherSeat> OtherSeats { get; } = new();
+    public bool HasOtherSeats => OtherSeats.Count > 0;
+    public IEnumerable<OtherSeat> OtherPairings => OtherSeats.Where(o => o.HasPairing);
+    public bool HasOtherPairings => OtherSeats.Any(o => o.HasPairing);
+
+    /// <summary>A TV asks another workplace's Jinky to pair (the app tells the user here).</summary>
+    public event Action<OtherSeat>? OtherPairingRequested;
+
+    void SeatTick()
+    {
+        if (_seatBusy) return;
+        _seatBusy = true;
+        var mine = new SeatLink.SeatInfo(SeatLink.Me, 0,
+            string.IsNullOrWhiteSpace(_settings.TvName) ? Settings.DefaultTvName : _settings.TvName.Trim(),
+            _settings.ConsoleMode, IsStreaming, IsStreaming ? StatusDetail : PillText,
+            _pairing is { } p ? new SeatLink.PairingAsk(p.Id, p.Name, p.Code) : null,
+            Updater.Current.ToString(), DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        Task.Run(() =>
+        {
+            SeatLink.Publish(mine);
+            var others = SeatLink.Others();
+            var commands = SeatLink.Take();
+            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            {
+                _seatBusy = false;
+                foreach (var c in commands) Obey(c);
+                foreach (var info in others)
+                {
+                    var seat = OtherSeats.FirstOrDefault(o => o.User.Equals(info.User, StringComparison.OrdinalIgnoreCase));
+                    var isNew = seat is null;
+                    seat ??= new OtherSeat(info.User);
+                    var hadPairing = seat.HasPairing;
+                    seat.Update(info);
+                    if (isNew) OtherSeats.Add(seat);
+                    if (seat.HasPairing && !hadPairing)
+                    {
+                        Add($"{seat.Pairing!.Name} quer se conectar a {seat.Title} · confirme em TVs");
+                        OtherPairingRequested?.Invoke(seat);
+                    }
+                }
+                foreach (var gone in OtherSeats.Where(o => !others.Any(i => i.User.Equals(o.User, StringComparison.OrdinalIgnoreCase))).ToList())
+                    OtherSeats.Remove(gone);
+                Notify(nameof(HasOtherSeats));
+                Notify(nameof(OtherPairings));
+                Notify(nameof(HasOtherPairings));
+            });
+        });
+    }
+
+    /// <summary>What another workplace's Jinky asked this one to do.</summary>
+    void Obey(SeatLink.Command c)
+    {
+        switch (c.Kind)
+        {
+            case "pair-accept" when _pairing?.Id == c.Value:
+                Add("Pareamento permitido por outro lugar deste PC");
+                AcceptPairing();
+                break;
+            case "pair-reject" when _pairing?.Id == c.Value:
+                RejectPairing();
+                break;
+            case "name":
+                TvName = c.Value ?? "";
+                Add("Nome na TV trocado por outro lugar deste PC");
+                break;
+            case "console":
+                ConsoleMode = c.Value == "1";
+                Add(ConsoleMode ? "Modo console ligado por outro lugar deste PC" : "Modo console desligado por outro lugar deste PC");
+                break;
+        }
     }
 
     // --- pairing --------------------------------------------------------------------------------

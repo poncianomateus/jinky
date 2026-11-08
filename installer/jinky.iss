@@ -62,7 +62,15 @@ Name: "{userdesktop}\Jinky"; Filename: "{app}\Jinky.exe"; Tasks: desktopicon
 Type: files; Name: "{commondesktop}\Jinky.lnk"; Check: IsAdminInstallMode
 Type: files; Name: "{commonprograms}\Jinky.lnk"; Check: IsAdminInstallMode
 
+[Dirs]
+; Where the Jinkys of the PC's Windows users / ASTER workplaces see each other (a workplace
+; without a screen is run from another one). Every user may write there.
+Name: "{commonappdata}\Jinky\lugares"; Permissions: users-modify; Check: IsAdminInstallMode
+
 [Registry]
+; ASTER PC, installed for all users: Jinky starts in every workplace's Windows account, so a
+; workplace without a screen of its own (a "TV" one) has its Jinky up without anyone there.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Jinky"; ValueData: """{app}\Jinky.exe"" --tray"; Flags: uninsdeletevalue; Check: IsAdminInstallMode and IsMultiseat
 ; Same value the app's "Iniciar com o Windows" switch writes, so both stay in sync.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Jinky"; ValueData: """{app}\Jinky.exe"" --tray"; Tasks: startup; Flags: uninsdeletevalue
 
@@ -80,6 +88,12 @@ Filename: "{app}\Jinky.exe"; Parameters: "--tray"; Flags: nowait runasoriginalus
 [Code]
 var
   SystemSetupChecked, SystemSetupNeeded: Boolean;
+
+{ ASTER (several workplaces on one PC) is installed: its kernel driver's service. }
+function IsMultiseat: Boolean;
+begin
+  Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE');
+end;
 
 function ViGEmBusInstalled: Boolean;
 begin

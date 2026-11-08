@@ -52,6 +52,11 @@ public partial class MainWindow : Window
 
     void GuideAgain_Click(object sender, RoutedEventArgs e) => Vm.ShowGuideAgain();
 
+    // Another workplace of this PC: its pairing request, and its name, sent to its Jinky.
+    void OtherAccept_Click(object sender, RoutedEventArgs e) { if (sender is FrameworkElement { DataContext: OtherSeat seat }) seat.Accept(); }
+    void OtherReject_Click(object sender, RoutedEventArgs e) { if (sender is FrameworkElement { DataContext: OtherSeat seat }) seat.Reject(); }
+    void OtherName_Click(object sender, RoutedEventArgs e) { if (sender is FrameworkElement { DataContext: OtherSeat seat }) seat.SaveName(); }
+
     /// <summary>
     /// Dark title bar; on Windows 11 (22H2 and later) the window's back is Mica, the translucent
     /// material of Windows' own apps (the desktop's colours show faintly through the menu).
