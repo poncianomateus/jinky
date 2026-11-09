@@ -113,6 +113,7 @@ public partial class App : Application
         _tvService.SteamApiKey = () => _settings.SteamApiKey;
         _tvService.EngineCommand = line => _engine?.Send(line);
         PcWatch.Start(() => _settings.SteamApiKey);  // downloads and friends, for the TV's notices
+        _vm.EnsureSteamDirect();
         _vm.CheckSteamKey();
 
         _engine = new Engine();

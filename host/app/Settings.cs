@@ -53,6 +53,12 @@ public sealed class Settings
     /// <summary>The live chart of the session (latency, picture) on the PC's home page.</summary>
     public bool SessionChart { get; set; } = true;
 
+    /// <summary>
+    /// "Ler direto da Steam" was set once by Jinky (on by default) or by the user: from then on
+    /// only the user's switch decides.
+    /// </summary>
+    public bool SteamDirectDecided { get; set; }
+
     /// <summary>The tour of the window's pages was seen (or skipped).</summary>
     public bool TourSeen { get; set; }
 

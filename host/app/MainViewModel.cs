@@ -765,10 +765,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set
         {
             if (SteamLibrary.SteamPath() is not { } steam) return;
+            _settings.SteamDirectDecided = true;
+            _settings.Save();
             var error = SteamClient.SetEnabled(steam, value);
             Notify();
             if (error is not null) SteamKeyStatus = error;
             else CheckSteamKey();
+        }
+    }
+
+    /// <summary>
+    /// "Ler direto da Steam" comes on by itself the first time (the TV's live downloads, Steam's
+    /// questions and the launch screen need it); a user who turns it off later keeps it off. Not
+    /// over another Steam add-on that keeps Steam's developer interface shut on purpose.
+    /// </summary>
+    public void EnsureSteamDirect()
+    {
+        if (_settings.SteamDirectDecided) return;
+        if (SteamLibrary.SteamPath() is not { } steam) return;  // no Steam yet: decide when there is one
+        _settings.SteamDirectDecided = true;
+        _settings.Save();
+        if (SteamClient.Enabled(steam) || SteamClient.Blocked(steam)) return;
+        if (SteamClient.SetEnabled(steam, true) is null)
+        {
+            Add("Leitura direta da Steam ligada · vale depois que a Steam reiniciar");
+            Notify(nameof(SteamDirect));
         }
     }
 
