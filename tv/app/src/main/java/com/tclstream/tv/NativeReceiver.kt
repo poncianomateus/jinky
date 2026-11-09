@@ -39,6 +39,9 @@ class NativeReceiver : AutoCloseable {
     fun sendExtras(values: IntArray) = nativeSendExtras(handle, values)
     /** Menu "Teclado": Backspace on the PC. */
     fun backspace() = nativeTypeText(handle, "", 2)
+
+    /** Presses keys together on the PC ("alt+enter", "esc", "f11"), not as text. */
+    fun pressKeys(combo: String) = nativeTypeText(handle, combo, 4)
     /** Ends the session and goes back to discovering PCs. */
     fun disconnect() = nativeDisconnect(handle)
     fun inSession(): Boolean = nativeInSession(handle)

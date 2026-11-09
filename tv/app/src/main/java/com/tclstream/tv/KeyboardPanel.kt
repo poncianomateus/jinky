@@ -22,6 +22,7 @@ class KeyboardPanel(
     context: Context,
     private val onType: (text: String, enter: Boolean) -> Unit,
     private val onBackspace: () -> Unit,
+    private val onKeys: (combo: String) -> Unit,
     private val onClose: () -> Unit,
 ) : TvPage(context) {
     private val field = EditText(context).apply {
@@ -70,6 +71,13 @@ class KeyboardPanel(
                 for (b in listOf(sendButton, enterButton, backButton, hideButton, closeButton))
                     addView(b, LinearLayout.LayoutParams(-2, -2).apply { if (childCount > 0) marginStart = dp(8) })
             }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) })
+            // Keys and shortcuts pressed on the PC as keys (Alt+Enter for full screen, Esc...).
+            addView(text(9.5f, Jinky.MUTED).apply { text = "Teclas e atalhos" }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
+            addView(keyRow(listOf(
+                "Alt+Enter" to "alt+enter", "Esc" to "esc", "Tab" to "tab", "Alt+Tab" to "alt+tab",
+                "Windows" to "win", "Espaço" to "space", "↑" to "up", "↓" to "down", "←" to "left", "→" to "right",
+            )), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(keyRow((1..12).map { "F$it" to "f$it" }), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
             addView(note, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
         }
         // Near the top: the TV's keyboard takes the bottom half of the screen.
@@ -89,6 +97,23 @@ class KeyboardPanel(
         visibility = View.GONE
     }
 
+    /** A row of key buttons (scrolls sideways when it doesn't fit). */
+    private fun keyRow(keys: List<Pair<String, String>>) = android.widget.HorizontalScrollView(context).apply {
+        isHorizontalScrollBarEnabled = false
+        isFillViewport = false
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            keys.forEachIndexed { i, (label, combo) ->
+                addView(smallButton(label).apply {
+                    setOnClickListener {
+                        onKeys(combo)
+                        note.text = "$label apertado no PC."
+                    }
+                }, LinearLayout.LayoutParams(-2, -2).apply { if (i > 0) marginStart = dp(6) })
+            }
+        })
+    }
+
     private fun send(enter: Boolean) {
         val text = field.text.toString()
         if (text.isEmpty() && !enter) return
@@ -99,7 +124,7 @@ class KeyboardPanel(
 
     fun open() {
         visibility = View.VISIBLE
-        note.text = "Enviar digita o texto; Enter confirma no PC."
+        note.text = "Enviar digita o texto. As teclas de baixo são apertadas no PC (Alt+Enter deixa muitos jogos em tela cheia)."
         field.requestFocus()
         post {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager

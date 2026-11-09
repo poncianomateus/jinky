@@ -215,6 +215,7 @@ struct TextMessage {
     enum Flags : uint8_t {
         kEnter = 1,      // press Enter after the text
         kBackspace = 2,  // just press Backspace (text ignored)
+        kKeys = 4,       // [text] is keys to press together ("alt+enter", "esc", "f11"), not text to type
     };
     uint32_t session_id = 0;
     uint32_t seq = 0;

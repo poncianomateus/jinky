@@ -4,7 +4,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "log.h"
@@ -82,6 +86,54 @@ void type_text(const std::string& utf8, bool enter, bool backspace) {
         key(VK_RETURN, true);
         key(VK_RETURN, false);
     }
+}
+
+bool press_keys(const std::string& combo) {
+    struct Key { WORD vk; bool extended; };
+    auto lookup = [](std::string name) -> std::optional<Key> {
+        for (auto& c : name) c = char(std::tolower(static_cast<unsigned char>(c)));
+        static const std::pair<const char*, Key> named[] = {
+            {"ctrl", {VK_CONTROL, false}}, {"alt", {VK_MENU, false}}, {"shift", {VK_SHIFT, false}}, {"win", {VK_LWIN, true}},
+            {"enter", {VK_RETURN, false}}, {"esc", {VK_ESCAPE, false}}, {"tab", {VK_TAB, false}}, {"space", {VK_SPACE, false}},
+            {"backspace", {VK_BACK, false}}, {"delete", {VK_DELETE, true}}, {"insert", {VK_INSERT, true}},
+            {"home", {VK_HOME, true}}, {"end", {VK_END, true}}, {"pgup", {VK_PRIOR, true}}, {"pgdn", {VK_NEXT, true}},
+            {"up", {VK_UP, true}}, {"down", {VK_DOWN, true}}, {"left", {VK_LEFT, true}}, {"right", {VK_RIGHT, true}},
+            {"printscreen", {VK_SNAPSHOT, true}},
+        };
+        for (const auto& [n, k] : named)
+            if (name == n) return k;
+        if (name.size() >= 2 && name.size() <= 3 && name[0] == 'f') {
+            const int n = std::atoi(name.c_str() + 1);
+            if (n >= 1 && n <= 12) return Key{WORD(VK_F1 + n - 1), false};
+        }
+        if (name.size() == 1 && std::isalnum(static_cast<unsigned char>(name[0])))
+            return Key{WORD(std::toupper(static_cast<unsigned char>(name[0]))), false};
+        return std::nullopt;
+    };
+    std::vector<Key> keys;
+    size_t start = 0;
+    while (start <= combo.size()) {
+        const size_t plus = combo.find('+', start);
+        const auto part = combo.substr(start, plus == std::string::npos ? std::string::npos : plus - start);
+        if (auto k = lookup(part)) keys.push_back(*k);
+        else if (!part.empty()) return false;  // a name we don't know: press nothing
+        if (plus == std::string::npos) break;
+        start = plus + 1;
+    }
+    if (keys.empty()) return false;
+    std::vector<INPUT> events;
+    auto add = [&](const Key& k, bool down) {
+        INPUT in{};
+        in.type = INPUT_KEYBOARD;
+        in.ki.wVk = k.vk;
+        in.ki.wScan = WORD(MapVirtualKeyW(k.vk, MAPVK_VK_TO_VSC));
+        in.ki.dwFlags = (k.extended ? KEYEVENTF_EXTENDEDKEY : 0) | (down ? 0 : KEYEVENTF_KEYUP);
+        events.push_back(in);
+    };
+    for (const auto& k : keys) add(k, true);
+    for (auto it = keys.rbegin(); it != keys.rend(); ++it) add(*it, false);
+    SendInput(UINT(events.size()), events.data(), sizeof(INPUT));
+    return true;
 }
 
 PadMouse::~PadMouse() { set_active(false); }

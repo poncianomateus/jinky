@@ -13,6 +13,10 @@ public:
     // `display` is the GDI device name of the captured monitor (e.g. \\.\DISPLAY1).
     // `big_picture`: also open Steam Big Picture (not for a game started from the TV's library).
     void enter(const std::wstring& display, bool big_picture = true);
+
+    // A virtual screen (a workplace without a real one, or Jinky's own) goes to the size the TV
+    // asked for ([width] x [height] at 60 Hz) while console mode is on; real monitors keep theirs.
+    void fit_virtual(const std::wstring& display, int width, int height);
     // HDR sessions (the TV asked for HDR): turns Windows HDR on for the display, if it supports it
     // and it was off; leave() (or restore_if_left after a crash) turns it off again.
     void set_hdr(bool on);

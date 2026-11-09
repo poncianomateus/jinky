@@ -147,6 +147,44 @@ void ConsoleMode::set_hdr(bool on) {
     }
 }
 
+namespace {
+
+// [display] (GDI name like \.\DISPLAY3) belongs to a virtual display driver (no real monitor).
+bool is_virtual_display(const std::wstring& display) {
+    DISPLAY_DEVICEW dd{};
+    dd.cb = sizeof dd;
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); ++i, dd = DISPLAY_DEVICEW{}, dd.cb = sizeof dd) {
+        if (display != dd.DeviceName) continue;
+        return wcsstr(dd.DeviceString, L"Virtual Display") || wcsstr(dd.DeviceString, L"IddSample") ||
+               wcsstr(dd.DeviceString, L"Parsec Virtual");
+    }
+    return false;
+}
+
+}  // namespace
+
+void ConsoleMode::fit_virtual(const std::wstring& display, int width, int height) {
+    if (!active_ || !is_virtual_display(display)) return;
+    DEVMODEW current{};
+    current.dmSize = sizeof current;
+    if (!EnumDisplaySettingsW(display.c_str(), ENUM_CURRENT_SETTINGS, &current)) return;
+    if (int(current.dmPelsWidth) == width && int(current.dmPelsHeight) == height && current.dmDisplayFrequency == 60) return;
+    DEVMODEW m{};
+    m.dmSize = sizeof m;
+    for (DWORD i = 0; EnumDisplaySettingsW(display.c_str(), i, &m); ++i) {
+        if (int(m.dmPelsWidth) != width || int(m.dmPelsHeight) != height || m.dmDisplayFrequency != 60) continue;
+        m.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+        // Temporary (not saved): leave() puts the screen back to its usual size.
+        if (ChangeDisplaySettingsExW(display.c_str(), &m, nullptr, 0, nullptr) == DISP_CHANGE_SUCCESSFUL)
+            TCL_INFO("console", "virtual screen {} set to {}x{} for the TV (was {}x{})", narrow(display), width, height,
+                     current.dmPelsWidth, current.dmPelsHeight);
+        else
+            TCL_WARN("console", "could not set the virtual screen {} to {}x{}", narrow(display), width, height);
+        return;
+    }
+    TCL_WARN("console", "the virtual screen {} has no {}x{} at 60 Hz", narrow(display), width, height);
+}
+
 void ConsoleMode::restore_display(const std::wstring& display) {
     // Null mode = go back to the mode saved in the registry (the user's normal refresh rate).
     ChangeDisplaySettingsExW(display.c_str(), nullptr, nullptr, 0, nullptr);

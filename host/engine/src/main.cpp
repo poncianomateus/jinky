@@ -744,6 +744,7 @@ int main(int argc, char** argv) {
                 // the player. Big Picture only for the "Steam Big Picture" session (or by choice).
                 const bool bp = !peer_game || (opt.games_in_bp && !peer_resume);
                 console.enter(capture.display_name(), bp);
+                console.fit_virtual(capture.display_name(), int(opt.enc.width), int(opt.enc.height));
                 console.set_hdr(peer_hdr);
                 if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
@@ -1070,8 +1071,13 @@ int main(int argc, char** argv) {
                 // Menu "Teclado": only from the TV in the session; each text once (it comes thrice).
                 if (auto tm = tclproto::TextMessage::read(packet); tm && peer && from == *peer && tm->seq != last_text_seq) {
                     last_text_seq = tm->seq;
-                    tcl::type_text(tm->text, tm->flags & tclproto::TextMessage::kEnter, tm->flags & tclproto::TextMessage::kBackspace);
-                    TCL_INFO("input", "typed {} characters from the TV's keyboard", tm->text.size());
+                    if (tm->flags & tclproto::TextMessage::kKeys) {
+                        if (tcl::press_keys(tm->text)) TCL_INFO("input", "pressed {} from the TV's keyboard", tm->text);
+                        else TCL_WARN("input", "unknown keys from the TV: {}", tm->text);
+                    } else {
+                        tcl::type_text(tm->text, tm->flags & tclproto::TextMessage::kEnter, tm->flags & tclproto::TextMessage::kBackspace);
+                        TCL_INFO("input", "typed {} characters from the TV's keyboard", tm->text.size());
+                    }
                 }
                 continue;
             }

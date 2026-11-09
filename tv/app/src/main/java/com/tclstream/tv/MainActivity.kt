@@ -324,6 +324,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             keyboard = KeyboardPanel(this@MainActivity,
                 onType = { text, enter -> receiver?.typeText(text, enter) },
                 onBackspace = { receiver?.backspace() },
+                onKeys = { combo -> receiver?.pressKeys(combo) },
                 onClose = { keyboard.close(); updateUiInput() })
             addView(keyboard, FrameLayout.LayoutParams(-1, -1))
             flash = View(this@MainActivity).apply { setBackgroundColor(Color.WHITE); alpha = 0f; visibility = View.GONE }
@@ -504,7 +505,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         searchStartMs = android.os.SystemClock.elapsedRealtime()
         receiver = r
         audio = AudioPlayer(r).also { it.delayMs = settings.audioDelayMs; it.start() }
-        gamepads = GamepadInput(this, r, onMenuCombo = { ui.post { showMenu() } }, onPlayer = { player, name, joined ->
+        // View + Menu held: the game menu; with the keyboard open, it just closes the keyboard (the
+        // menu used to open under it, and the next press could land on "Início").
+        gamepads = GamepadInput(this, r, onMenuCombo = { ui.post { if (keyboard.isOpen) { keyboard.close(); updateUiInput() } else showMenu() } }, onPlayer = { player, name, joined ->
             // Couch co-op: say who came in or left, while playing (each is its own controller on the PC).
             ui.post {
                 if (receiver?.inSession() != true) return@post
@@ -1503,7 +1506,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun showMenu() {
-        if (menu.isOpen) return
+        if (menu.isOpen || keyboard.isOpen) return
         val game = sessionGame
         val host = homeHost
         menu.open(sessionTitle.ifEmpty { "Jinky" }, streamLine(), canClose = !sessionDesktop,

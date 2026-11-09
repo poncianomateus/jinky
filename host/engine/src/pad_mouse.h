@@ -21,6 +21,10 @@ namespace tcl {
 // key events), then Enter if asked. [backspace] presses Backspace once instead.
 void type_text(const std::string& utf8, bool enter, bool backspace);
 
+// Presses keys together, like a person would: "alt+enter", "alt+tab", "esc", "f11", "win+d".
+// Modifiers go down first and up last. Unknown names are ignored (false: nothing pressed).
+bool press_keys(const std::string& combo);
+
 class PadMouse {
 public:
     ~PadMouse();
