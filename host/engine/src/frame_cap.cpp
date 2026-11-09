@@ -177,6 +177,11 @@ void FrameCap::leave() {
     if (!marker.empty() && restore_from(marker)) TCL_INFO("framecap", "NVIDIA settings restored");
 }
 
+bool FrameCap::restore_file(const std::wstring& marker) {
+    if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    return restore_from(marker);
+}
+
 bool FrameCap::restore_if_left() {
     const auto marker = marker_path();
     if (marker.empty() || GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return false;

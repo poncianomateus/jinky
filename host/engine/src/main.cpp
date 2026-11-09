@@ -102,6 +102,7 @@ struct Options {
     bool mute_pc = false;
     bool console = false;  // Big Picture + 60 Hz + mute while a TV is connected
     bool frame_cap = false;  // console sessions also cap games at the stream's rate (NVIDIA driver)
+    std::string restore_frame_cap;  // --restore-frame-cap <marker>: put the NVIDIA settings back and exit
     bool keep_big_picture = false;  // a session ending leaves Big Picture open (closed when the engine stops)
     bool stdin_control = false;
     bool insecure = false;  // accept any TV without pairing (test tools only)
@@ -147,6 +148,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--uninstall-virtual-display") o.vdisplay_admin = "uninstall";
         else if (a == "--lift-display-policy") {}  // read again as Unicode with --install-virtual-display
         else if (a == "--virtual-display-status") o.vdisplay_admin = "status";
+        else if (a == "--restore-frame-cap" && (v = next())) o.restore_frame_cap = v;
         else if (a == "--tv-update" && (v = next())) {
             // "<versionCode>:<port>" — the desktop app serves the TV app on that port.
             const std::string spec = v;
@@ -260,6 +262,12 @@ int main(int argc, char** argv) {
             LocalFree(wargv);
         }
         return tcl::VirtualDisplay::install(folder, lift);
+    }
+    // Put back the NVIDIA settings another run noted (its frame-cap.flag) and stop.
+    if (!opt.restore_frame_cap.empty()) {
+        const bool ok = tcl::FrameCap::restore_file(std::wstring(opt.restore_frame_cap.begin(), opt.restore_frame_cap.end()));
+        std::printf("%s\n", ok ? "frame cap restored" : "nothing restored");
+        return ok ? 0 : 1;
     }
     // A previous run that died on the virtual screen: the PC's monitors come back first (the
     // capture starts on them). Outside sessions the virtual screen is never part of the desktop.
@@ -746,7 +754,11 @@ int main(int argc, char** argv) {
                 console.enter(capture.display_name(), bp);
                 console.fit_virtual(capture.display_name(), int(opt.enc.width), int(opt.enc.height));
                 console.set_hdr(peer_hdr);
-                if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
+                // ASTER: the NVIDIA limit is the whole PC's, so it would cap the games of every
+                // workplace (someone playing at the PC included): not used there.
+                if (opt.frame_cap && tcl::VirtualDisplay::multiseat() && !frame_cap.active())
+                    TCL_INFO("framecap", "ASTER on this PC: games not capped (the NVIDIA limit would cap every workplace)");
+                else if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
                 return;
             }

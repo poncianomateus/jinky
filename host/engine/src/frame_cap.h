@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace tcl {
 
@@ -20,6 +21,9 @@ public:
 
     // Puts back a cap left behind by a host that was killed. Returns true if it did anything.
     static bool restore_if_left();
+    // Puts back the NVIDIA settings noted in [marker] (another Windows user's frame-cap.flag, e.g.
+    // an ASTER workplace's). True when the driver has them again.
+    static bool restore_file(const std::wstring& marker);
 
 private:
     bool active_ = false;
