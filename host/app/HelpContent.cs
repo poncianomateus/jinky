@@ -97,7 +97,7 @@ public static class HelpContent
             new("Como removo uma TV?",
                 "Em TVs, clique em Remover ao lado dela. Para jogar de novo ela vai precisar parear outra vez."),
             new("Como faço um lugar do ASTER só para a TV?",
-                "Assim, alguém usa o PC enquanto outra pessoa joga na TV, sem um atrapalhar o outro. Instale um driver de monitor virtual e, no painel do ASTER, dê esse monitor a um lugar, com login automático de um usuário do Windows. Com o Jinky instalado para todos os usuários, ele abre sozinho nesse lugar. Em TVs › Outros lugares deste PC você muda o nome e o modo console dele, e os pedidos de pareamento das TVs para esse lugar aparecem aqui para você permitir."),
+                "Assim, alguém usa o PC enquanto outra pessoa joga na TV, sem um atrapalhar o outro. Instale um driver de monitor virtual e, no painel do ASTER, dê esse monitor a um lugar, com login automático de um usuário do Windows. Instale o Jinky também na conta desse lugar (cada conta tem o seu), com Iniciar com o Windows ligado, e ele abre sozinho ali. Em TVs › Outros lugares deste PC você muda o nome e o modo console dele, e os pedidos de pareamento das TVs para esse lugar aparecem aqui para você permitir."),
             new("Duas pessoas usam este PC. Funciona?",
                 "Sim. Cada usuário do Windows tem o seu Jinky, e cada um aparece como um PC diferente na TV. Dê um nome para cada em TVs › Nome deste PC na TV."),
             new("Como o Jinky se atualiza?",
