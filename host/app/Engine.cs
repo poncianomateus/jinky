@@ -57,7 +57,17 @@ public sealed class Engine : IDisposable
         }
         Directory.CreateDirectory(Path.Combine(Settings.Folder, "logs"));
         _log?.Dispose();
-        _log = new StreamWriter(Path.Combine(Settings.Folder, "logs", "engine.log"), append: false) { AutoFlush = true };
+        // Shared: another copy of the log open elsewhere (a second session of this account) must
+        // never stop Jinky from starting; if the file can't be had at all, a log per process.
+        try
+        {
+            _log = new StreamWriter(new FileStream(Path.Combine(Settings.Folder, "logs", "engine.log"), FileMode.Create,
+                                                   FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+        }
+        catch (IOException)
+        {
+            _log = new StreamWriter(Path.Combine(Settings.Folder, "logs", $"engine-{Environment.ProcessId}.log"), append: false) { AutoFlush = true };
+        }
 
         var psi = new ProcessStartInfo(exe, _arguments)
         {

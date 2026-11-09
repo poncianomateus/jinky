@@ -13,6 +13,7 @@ public partial class App : Application
 {
     const string InstanceName = "Jinky.SingleInstance";
     Mutex? _instance;
+    Mutex? _accountInstance;
     EventWaitHandle? _showSignal, _quitSignal;
     Forms.NotifyIcon? _tray;
     MainWindow? _window;
@@ -38,6 +39,17 @@ public partial class App : Application
         }
         if (e.Args.Contains("--quit"))
         {
+            Shutdown();
+            return;
+        }
+        // The same Windows account open twice (e.g. an ASTER workplace's account entered from
+        // another workplace too): one Jinky per account, or both fight over its files and ports.
+        _accountInstance = new Mutex(true, @"Global\Jinky.Account." + Environment.UserName, out var firstForAccount);
+        if (!firstForAccount)
+        {
+            MessageBox.Show("O Jinky desta conta já está aberto em outro lugar deste PC (outra sessão do Windows, ou outro lugar do ASTER).\n\n" +
+                            "Cada conta usa um Jinky só. Use o que já está aberto, ou entre com outra conta aqui.",
+                            "Jinky", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;
         }
