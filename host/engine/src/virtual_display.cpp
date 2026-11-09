@@ -199,20 +199,18 @@ bool write_settings(const std::wstring& folder) {
         if (c == '<' || c == '>' || c == '&') c = ' ';
     std::ofstream out(folder + L"\\vdd_settings.xml", std::ios::binary | std::ios::trunc);
     if (!out) return false;
-    // One screen; the sizes a TV can ask for (the PC's 1080p and "720p"), and 4K for later.
+    // One screen with only the sizes a TV asks for (1080p and "720p") at 60 Hz. Nothing bigger:
+    // a game on its own picks the largest size it is offered (4K came out cropped on the TV).
     out << "<?xml version='1.0' encoding='utf-8'?>\n"
            "<vdd_settings>\n"
            "    <monitors><count>1</count></monitors>\n"
            "    <gpu><friendlyname>" << gpu << "</friendlyname></gpu>\n"
            "    <global>\n"
            "        <g_refresh_rate>60</g_refresh_rate>\n"
-           "        <g_refresh_rate>120</g_refresh_rate>\n"
            "    </global>\n"
            "    <resolutions>\n"
            "        <resolution><width>1280</width><height>720</height><refresh_rate>60</refresh_rate></resolution>\n"
            "        <resolution><width>1920</width><height>1080</height><refresh_rate>60</refresh_rate></resolution>\n"
-           "        <resolution><width>2560</width><height>1440</height><refresh_rate>60</refresh_rate></resolution>\n"
-           "        <resolution><width>3840</width><height>2160</height><refresh_rate>60</refresh_rate></resolution>\n"
            "    </resolutions>\n"
            "    <options>\n"
            "        <CustomEdid>false</CustomEdid>\n"
