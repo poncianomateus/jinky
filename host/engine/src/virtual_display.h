@@ -40,6 +40,11 @@ public:
     // session left behind by a host that was killed. Returns true if it changed anything.
     static bool tidy();
 
+    // Puts the virtual screen back in the desktop (next to the monitors that are on) and saves
+    // that as Windows' layout: on an ASTER PC a workplace can only start on a screen that is on.
+    // 0 = it is on (now or already), 2 = no virtual screen to be seen here, 3 = Windows refused.
+    static int attach();
+
     // jinky-engine --install-virtual-display <folder with MttVDD.inf> [--lift-display-policy]
     // (as administrator). With lift_policy, a Windows policy blocking display drivers is set
     // aside for the install and put back right after.

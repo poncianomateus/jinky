@@ -148,6 +148,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--uninstall-virtual-display") o.vdisplay_admin = "uninstall";
         else if (a == "--lift-display-policy") {}  // read again as Unicode with --install-virtual-display
         else if (a == "--virtual-display-status") o.vdisplay_admin = "status";
+        else if (a == "--virtual-display-attach") o.vdisplay_admin = "attach";
         else if (a == "--restore-frame-cap" && (v = next())) o.restore_frame_cap = v;
         else if (a == "--tv-update" && (v = next())) {
             // "<versionCode>:<port>" — the desktop app serves the TV app on that port.
@@ -249,6 +250,7 @@ int main(int argc, char** argv) {
         if (tcl::VirtualDisplay::multiseat()) return tcl::VirtualDisplay::installed() ? 4 : 3;
         return tcl::VirtualDisplay::available() ? 0 : tcl::VirtualDisplay::installed() ? 2 : 1;
     }
+    if (opt.vdisplay_admin == "attach") return tcl::VirtualDisplay::attach();
     if (opt.vdisplay_admin == "uninstall") return tcl::VirtualDisplay::uninstall();
     if (opt.vdisplay_admin == "install") {
         int wargc = 0;

@@ -2,6 +2,8 @@
 
 // clang-format off
 #include <windows.h>
+
+#include <cstdio>
 #include <setupapi.h>
 #include <devguid.h>
 #include <newdev.h>
@@ -333,7 +335,36 @@ void VirtualDisplay::leave() {
     emit_event("virtual_display", "\"on\":false");
 }
 
+int VirtualDisplay::attach() {
+    std::vector<DISPLAYCONFIG_PATH_INFO> active, all;
+    std::vector<DISPLAYCONFIG_MODE_INFO> active_modes, all_modes;
+    if (!query(QDC_ONLY_ACTIVE_PATHS, active, active_modes) || !query(QDC_ALL_PATHS, all, all_modes)) return 3;
+    if (std::any_of(active.begin(), active.end(), is_virtual)) {
+        std::printf("the virtual screen is already on\n");
+        return 0;
+    }
+    const auto it = std::find_if(all.begin(), all.end(),
+                                 [](const DISPLAYCONFIG_PATH_INFO& p) { return p.targetInfo.targetAvailable && is_virtual(p); });
+    if (it == all.end()) {
+        std::printf("no virtual screen to be seen from this Windows session\n");
+        return 2;
+    }
+    // The monitors that are on keep their size and rate; the virtual one joins with Windows' choice.
+    DISPLAYCONFIG_PATH_INFO add = *it;
+    add.flags = DISPLAYCONFIG_PATH_ACTIVE;
+    add.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+    add.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+    active.push_back(add);
+    const LONG r = SetDisplayConfig(UINT32(active.size()), active.data(), UINT32(active_modes.size()), active_modes.data(),
+                                    SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE);
+    std::printf(r == ERROR_SUCCESS ? "virtual screen on again\n" : "Windows refused (error %ld)\n", r);
+    return r == ERROR_SUCCESS ? 0 : 3;
+}
+
 bool VirtualDisplay::tidy() {
+    // ASTER: the virtual screen may be a workplace's own monitor (a "TV" workplace). Taking it out
+    // of the desktop turns it off for good, and ASTER then can't start that workplace.
+    if (multiseat()) return false;
     bool changed = false;
     if (const auto marker = marker_path(); !marker.empty() && GetFileAttributesW(marker.c_str()) != INVALID_FILE_ATTRIBUTES) {
         // A host died during a session: Windows' saved layout has the PC's monitors.
