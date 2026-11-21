@@ -26,7 +26,9 @@ function Step($name, [scriptblock]$body) {
 $cmake = "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 $aapt = Get-ChildItem "$env:LOCALAPPDATA\Android\Sdk\build-tools\*\aapt.exe" | Sort-Object FullName | Select-Object -Last 1
-$env:JAVA_HOME = "${env:ProgramFiles}\Android\Android Studio\jbr"
+# Java for the TV build: Android Studio's own, else a JDK 17+ (e.g. Microsoft OpenJDK 21).
+$env:JAVA_HOME = @("${env:ProgramFiles}\Android\Android Studio\jbr") + @(Get-ChildItem "${env:ProgramFiles}\Microsoft", "${env:ProgramFiles}\Eclipse Adoptium" -Directory -Filter "jdk-*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | ForEach-Object FullName) |
+    Where-Object { Test-Path (Join-Path $_ 'bin/java.exe') } | Select-Object -First 1
 
 Step "Protocol tests" {
     & $cmake -S "$root\proto" -B "$root\build\proto" | Out-Null

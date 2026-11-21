@@ -13,7 +13,9 @@ param([switch]$Build)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"
-$env:JAVA_HOME = "${env:ProgramFiles}\Android\Android Studio\jbr"
+# Java for the TV build: Android Studio's own, else a JDK 17+ (e.g. Microsoft OpenJDK 21).
+$env:JAVA_HOME = @("${env:ProgramFiles}\Android\Android Studio\jbr") + @(Get-ChildItem "${env:ProgramFiles}\Microsoft", "${env:ProgramFiles}\Eclipse Adoptium" -Directory -Filter "jdk-*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | ForEach-Object FullName) |
+    Where-Object { Test-Path (Join-Path $_ 'bin/java.exe') } | Select-Object -First 1
 $env:ANDROID_SDK_ROOT = $sdk
 $avd = 'JinkyTV'
 $image = 'system-images;android-31;google-tv;x86'
