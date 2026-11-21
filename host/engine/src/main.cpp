@@ -756,11 +756,10 @@ int main(int argc, char** argv) {
                 console.enter(capture.display_name(), bp);
                 console.fit_virtual(capture.display_name(), int(opt.enc.width), int(opt.enc.height));
                 console.set_hdr(peer_hdr);
-                // ASTER: the NVIDIA limit is the whole PC's, so it would cap the games of every
-                // workplace (someone playing at the PC included): not used there.
-                if (opt.frame_cap && tcl::VirtualDisplay::multiseat() && !frame_cap.active())
-                    TCL_INFO("framecap", "ASTER on this PC: games not capped (the NVIDIA limit would cap every workplace)");
-                else if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
+                // The NVIDIA limit is the whole PC's (on ASTER, every workplace's games too, while
+                // a TV plays), but without it a heavy game takes the whole GPU and the stream's
+                // encode waits behind it: 3 ms -> 15-25 ms per frame, ~30 fps on the TV.
+                if (opt.frame_cap && !frame_cap.active() && frame_cap.enter(opt.enc.fps))
                     tcl::emit_event("frame_cap", "\"on\":true,\"fps\":" + std::to_string(opt.enc.fps));
                 return;
             }

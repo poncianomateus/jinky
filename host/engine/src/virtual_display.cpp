@@ -339,6 +339,35 @@ int VirtualDisplay::attach() {
     std::vector<DISPLAYCONFIG_PATH_INFO> active, all;
     std::vector<DISPLAYCONFIG_MODE_INFO> active_modes, all_modes;
     if (!query(QDC_ONLY_ACTIVE_PATHS, active, active_modes) || !query(QDC_ALL_PATHS, all, all_modes)) return 3;
+    // What this Windows session sees: each screen once (its device path, connected or not, on or off).
+    {
+        std::vector<std::wstring> seen;
+        for (const auto& p : all) {
+            DISPLAYCONFIG_TARGET_DEVICE_NAME n{};
+            n.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            n.header.size = sizeof n;
+            n.header.adapterId = p.targetInfo.adapterId;
+            n.header.id = p.targetInfo.id;
+            if (DisplayConfigGetDeviceInfo(&n.header) != ERROR_SUCCESS) continue;
+            std::wstring path = n.monitorDevicePath;
+            if (path.empty()) {
+                // An output with no monitor: named by its graphics card and number.
+                DISPLAYCONFIG_ADAPTER_NAME a{};
+                a.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME;
+                a.header.size = sizeof a;
+                a.header.adapterId = p.targetInfo.adapterId;
+                DisplayConfigGetDeviceInfo(&a.header);
+                path = L"(no monitor) " + std::wstring(a.adapterDevicePath).substr(0, 34) + L" #" + std::to_wstring(p.targetInfo.id);
+            }
+            if (std::find(seen.begin(), seen.end(), path) != seen.end()) continue;
+            seen.push_back(path);
+            const bool on = std::any_of(active.begin(), active.end(), [&](const DISPLAYCONFIG_PATH_INFO& a) {
+                return a.targetInfo.id == p.targetInfo.id && a.targetInfo.adapterId.LowPart == p.targetInfo.adapterId.LowPart &&
+                       a.targetInfo.adapterId.HighPart == p.targetInfo.adapterId.HighPart;
+            });
+            std::printf("screen: %ls | connected=%d | on=%d\n", path.substr(0, 60).c_str(), int(p.targetInfo.targetAvailable), int(on));
+        }
+    }
     if (std::any_of(active.begin(), active.end(), is_virtual)) {
         std::printf("the virtual screen is already on\n");
         return 0;
