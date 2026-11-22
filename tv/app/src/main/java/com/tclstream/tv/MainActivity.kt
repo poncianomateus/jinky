@@ -99,6 +99,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vsyncAlign = intent.getBooleanExtra("vsync", true),
             appendAud = intent.getBooleanExtra("aud", false),
             extraFormat = intent.getStringExtra("fmt") ?: "",
+            smooth = intent.getBooleanExtra("smooth", true),
         )
     }
     private val displayHz by lazy { intent.getIntExtra("display_hz", 0) }

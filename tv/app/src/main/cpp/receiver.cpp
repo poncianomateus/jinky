@@ -335,7 +335,11 @@ void Receiver::send_nacks(int64_t now_us) {
     tclproto::FrameAssembler::Timing t;
     const int64_t rtt = clock_synced_ ? rtt_us_.load() : 10'000;
     t.retry_us = std::clamp<int64_t>(rtt * 3 / 2 + 2'000, 6'000, 40'000);
-    t.give_up_us = std::clamp<int64_t>(t.reorder_us + t.retry_us * t.max_tries + rtt, 60'000, 150'000);
+    // Patient on purpose: a frame lost means no picture until a fresh keyframe comes (a few
+    // hundred ms on a busy Wi-Fi), while a frame that comes late only holds the picture a moment.
+    // Retries back off (1, 2, 3... intervals), so 6 of them cover a stall of ~150 ms.
+    t.max_tries = 6;
+    t.give_up_us = std::clamp<int64_t>(t.reorder_us + t.retry_us * 21 + rtt, 160'000, 300'000);
     assembler_.set_timing(t);
     const auto nacks = assembler_.poll(now_us);
     packets_resent_asked_ = assembler_.stats().packets_missing;

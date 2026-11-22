@@ -206,7 +206,9 @@ std::vector<FrameAssembler::Nack> FrameAssembler::poll(int64_t now_us) {
         }
         if (!s.missing_since_us) s.missing_since_us = now_us;
         if (now_us - s.missing_since_us < timing_.reorder_us) continue;
-        if (s.tries >= timing_.max_tries || (s.tries > 0 && now_us - s.last_nack_us < timing_.retry_us)) continue;
+        // Each retry waits a little longer than the one before: a Wi-Fi stall of ~100 ms would
+        // otherwise use up every try inside the stall, and the frame would be lost right after.
+        if (s.tries >= timing_.max_tries || (s.tries > 0 && now_us - s.last_nack_us < timing_.retry_us * s.tries)) continue;
         if (s.tries == 0)
             for (const auto& r : ranges) stats_.packets_missing += r.count == NackMessage::kWholeFrame ? 1 : r.count;
         s.tries++;

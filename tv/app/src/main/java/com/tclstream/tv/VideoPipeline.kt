@@ -45,6 +45,10 @@ class VideoPipeline(
         val appendAud: Boolean = false,
         // Extra integer MediaFormat keys for experiments, "key=value,key2=value2".
         val extraFormat: String = "",
+        // Show each frame a steady time after the PC captured it, instead of the moment it is
+        // decoded: a frame the PC encoded late (a heavy game holding the GPU) or Wi-Fi resent
+        // then still lands on its own refresh, at the cost of a few ms of delay (capped).
+        val smooth: Boolean = true,
     )
 
     enum class Stage { NO_DECODER, WAITING_FOR_VIDEO, DECODING, PRESENTING, STALLED, ERROR }
@@ -184,8 +188,8 @@ class VideoPipeline(
             lastRollMs = now
             latency.roll()?.let { s ->
                 if (!s.totalAvgMs.isNaN()) receiver.reportLatency((s.totalAvgMs * 1000).toInt())
-                Log.i(TAG, "latency total avg=%.1f min=%.1f max=%.1f ms (n=%d) local decode+display=%.1f ms | queued=%d decoded=%d skipped=%d presented=%d"
-                    .format(s.totalAvgMs, s.totalMinMs, s.totalMaxMs, s.samples, s.localAvgMs,
+                Log.i(TAG, "latency total avg=%.1f min=%.1f max=%.1f ms (n=%d) local decode+display=%.1f ms hold=%.1f ms | queued=%d decoded=%d skipped=%d presented=%d"
+                    .format(s.totalAvgMs, s.totalMinMs, s.totalMaxMs, s.samples, s.localAvgMs, holdUs / 1000,
                         framesQueued.get(), framesDecoded.get(), framesSkipped.get(), framesPresented.get()))
             }
         }
@@ -313,7 +317,45 @@ class VideoPipeline(
         }
     }
 
-    /** Releases decoded frames to the display as soon as they are ready. */
+    // --- steady display time (Tuning.smooth) ---
+    // How long after its capture on the PC each frame was ready here, over the last ~1.5 s.
+    private val readyLagUs = LongArray(90)
+    private var readyLagCount = 0
+    private var readyLagNext = 0
+    private val readyLagSorted = LongArray(readyLagUs.size)
+    @Volatile private var holdUs = 0.0  // frames are shown this long after capture (0 = as soon as ready)
+    private val outClock = LongArray(3)
+
+    /**
+     * When the frame with this PTS should be on screen (System.nanoTime), or 0 to show it as soon
+     * as possible. Learns the delay from the frames themselves: most frames are on time, so the
+     * target is the time almost all of them (95%) are ready by, at most [MAX_HOLD_EXTRA_US] above
+     * the quickest ones. A frame later than that is shown at once.
+     */
+    private fun dueNs(ptsUs: Long, nowNs: Long): Long {
+        if (!tuning.smooth) return 0
+        val hostCapture = captureTimeByPts[ptsUs] ?: return 0
+        if (hostCapture == 0L) return 0  // repeated content (heartbeat, keyframe retry)
+        receiver.clock(outClock)
+        if (outClock[0] != 1L) return 0
+        val captureLocalUs = hostCapture - outClock[1]
+        val lag = nowNs / 1000 - captureLocalUs
+        if (lag < 0 || lag > 1_000_000) return 0  // clock not settled yet
+        readyLagUs[readyLagNext] = lag
+        readyLagNext = (readyLagNext + 1) % readyLagUs.size
+        if (readyLagCount < readyLagUs.size) readyLagCount++
+        if (readyLagCount < 30) return 0
+        System.arraycopy(readyLagUs, 0, readyLagSorted, 0, readyLagCount)
+        java.util.Arrays.sort(readyLagSorted, 0, readyLagCount)
+        val quick = readyLagSorted[readyLagCount / 20]
+        val late = readyLagSorted[readyLagCount * 19 / 20]
+        val want = minOf(late, quick + MAX_HOLD_EXTRA_US).toDouble()
+        // Up quickly (late frames are what stutters), down slowly (no back-and-forth).
+        holdUs += (want - holdUs) * (if (want > holdUs) 0.25 else 0.02)
+        return (captureLocalUs + holdUs.toLong()) * 1000
+    }
+
+    /** Releases decoded frames to the display: on their steady time, or as soon as they are ready. */
     private fun outputLoop() {
         val info = MediaCodec.BufferInfo()
         val periodNs = (1_000_000_000.0 / refreshRate).toLong()
@@ -329,31 +371,35 @@ class VideoPipeline(
                     }
                     if (out < 0) return@synchronized
                     framesDecoded.incrementAndGet()
-                    // If newer frames are already decoded, show only the newest: never build a backlog.
-                    while (true) {
+                    var due = dueNs(info.presentationTimeUs, System.nanoTime())
+                    // A frame already past its time is dropped if a newer one is decoded too: never
+                    // build a backlog. One still ahead of its time keeps its own refresh.
+                    while (due <= System.nanoTime()) {
                         val newer = c.dequeueOutputBuffer(info, 0)
                         if (newer < 0) break
                         framesDecoded.incrementAndGet()
                         framesSkipped.incrementAndGet()
                         c.releaseOutputBuffer(out, false)
                         out = newer
+                        due = dueNs(info.presentationTimeUs, System.nanoTime())
                     }
                     val now = System.nanoTime()
+                    val base = maxOf(now, due)
                     var target = now
                     val vsync = lastVsyncNs
                     if (tuning.vsyncAlign && vsync != 0L && now - vsync < 4 * periodNs) {
-                        // Earliest refresh we can still make, then one refresh per frame.
-                        val ahead = (now - vsync + periodNs - 1) / periodNs
+                        // Earliest refresh at or after the frame's time, then one refresh per frame.
+                        val ahead = (base - vsync + periodNs - 1) / periodNs
                         var slot = vsync + ahead * periodNs
                         if (slot < lastTargetNs + periodNs / 2) slot = lastTargetNs + periodNs
-                        if (slot - now > 2 * periodNs) slot = vsync + ahead * periodNs  // don't build latency
+                        if (slot - base > 2 * periodNs) slot = vsync + ahead * periodNs  // don't build latency
                         lastTargetNs = slot
                         // Ask for "half a refresh before that vsync": unambiguous which refresh it is.
                         target = maxOf(now, slot - periodNs / 2)
                     } else if (tuning.pacing) {
                         // One frame per refresh; if pacing would push us >1 refresh behind, reset to now.
-                        target = maxOf(now, lastTargetNs + periodNs)
-                        if (target - now > periodNs) target = now
+                        target = maxOf(base, lastTargetNs + periodNs)
+                        if (target - base > periodNs) target = base
                         lastTargetNs = target
                     }
                     c.releaseOutputBuffer(out, target)
@@ -382,6 +428,8 @@ class VideoPipeline(
         private const val FLAG_HDR = 4L  // HDR10 (HEVC Main10, BT.2020, PQ)
         private const val MAX_FRAME_BYTES = 4 * 1024 * 1024
         private const val STALL_MS = 3000L
+        // The most a frame is held back for an even picture: two refreshes at 60 Hz.
+        private const val MAX_HOLD_EXTRA_US = 34_000L
         private const val MAX_RECOVERIES_PER_MINUTE = 3
     }
 }

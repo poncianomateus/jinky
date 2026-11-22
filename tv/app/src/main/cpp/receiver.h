@@ -147,7 +147,9 @@ private:
     void send_net_report();
     void on_time_response(const tclproto::TimeSync& t);
 
-    static constexpr size_t kMaxQueuedFrames = 4;
+    // Room for the burst that follows a resent frame (everything held behind it comes at once,
+    // ~10 frames after a 150 ms wait): only a decoder that really falls behind fills this.
+    static constexpr size_t kMaxQueuedFrames = 14;
 
     tclproto::UdpSocket sock_;
     std::atomic<uint16_t> host_port_{0};  // the session PC's port (several Jinkys may share an IP)
